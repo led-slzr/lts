@@ -1,0 +1,14 @@
+# Configuration (user-specific)
+lts.conf
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# LTS runtime directories (these live in the parent directory, not the repo)
+*-lts/
