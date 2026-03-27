@@ -12,3 +12,6 @@ Thumbs.db
 
 # LTS runtime directories (these live in the parent directory, not the repo)
 *-lts/
+
+# Go binary
+/lts
