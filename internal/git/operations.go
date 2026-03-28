@@ -595,6 +595,9 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 	var folders []string
 	for _, pair := range repoWTPairs {
 		parts := strings.SplitN(pair, ":", 2)
+		if len(parts) < 2 {
+			continue
+		}
 		repo, wt := parts[0], parts[1]
 		folders = append(folders, fmt.Sprintf(`    { "name": "%s - %s", "path": "%s" }`, repo, suffix, wt))
 	}

@@ -342,9 +342,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.modal.Active || m.settings.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
 		return m, nil
 	}
-	// Close context menu on any click outside it
-	if m.contextMenu.Active && msg.Action == tea.MouseActionPress {
-		m.contextMenu.Active = false
+	// Context menu: close on click, block all other mouse events
+	if m.contextMenu.Active {
+		if msg.Action == tea.MouseActionPress {
+			m.contextMenu.Active = false
+		}
 		return m, nil
 	}
 
