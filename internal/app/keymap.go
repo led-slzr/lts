@@ -48,11 +48,29 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "r":
 		if !m.loading {
+			m.loading = true
+			m.statusMsg = "Refreshing all repos..."
 			return m, refreshAllCmd(&m.config)
 		}
 
+	case "c":
+		if !m.loading {
+			m.loading = true
+			m.statusMsg = "Cleaning up merged..."
+			return m, cleanupCmd(&m.config)
+		}
+
+	case "s":
+		var repoNames []string
+		for _, r := range m.repos {
+			if !r.IsMonorepo {
+				repoNames = append(repoNames, r.Name)
+			}
+		}
+		m.settings = ui.NewSettings(&m.config, repoNames)
+		return m, nil
+
 	case "esc":
-		// Clear any selection
 		m.focusedCard = -1
 		m.focusedWT = -1
 		return m, nil

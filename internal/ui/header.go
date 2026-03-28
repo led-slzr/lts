@@ -99,5 +99,8 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
 		}
 	}
 
+	tabHint := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("  ← Tab")
+	parts = append(parts, tabHint)
+
 	return strings.Join(parts, "")
 }
