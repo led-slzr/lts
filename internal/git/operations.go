@@ -635,21 +635,27 @@ func RefreshRepo(repoPath, basisBranch string) error {
 }
 
 // RefreshAllRepos refreshes all repos in the script directory.
-func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver) (int, error) {
+// Returns (refreshed count, failed repo names, error).
+func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver) (int, []string, error) {
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	refreshed := 0
+	var failed []string
 	var lastErr error
 	for _, r := range repos {
+		if r.IsMonorepo {
+			continue
+		}
 		if err := RefreshRepo(r.Path, getBasisBranch(r.Name)); err != nil {
+			failed = append(failed, r.Name)
 			lastErr = err
 		} else {
 			refreshed++
 		}
 	}
 	if lastErr != nil && refreshed == 0 {
-		return 0, lastErr
+		return 0, failed, lastErr
 	}
-	return refreshed, nil
+	return refreshed, failed, nil
 }
 
 // DeleteWorktree removes a worktree and optionally its branch.

@@ -184,13 +184,19 @@ func handleOpenPromptKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		m.openPromptActive = false
-		// Open all created workspace files
+		var openErr error
 		for _, r := range m.openPromptResults {
 			if r.WorkspaceFile != "" {
-				opener.OpenWorktree(r.WorkspaceFile, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				if err := opener.OpenWorktree(r.WorkspaceFile, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal); err != nil {
+					openErr = err
+				}
 			}
 		}
-		m.statusMsg = "Opened workspace(s)"
+		if openErr != nil {
+			m.statusMsg = "Failed to open: " + openErr.Error()
+		} else {
+			m.statusMsg = "Opened workspace(s)"
+		}
 		return m, clearStatusCmd()
 	case "n", "N", "esc":
 		m.openPromptActive = false
@@ -215,6 +221,15 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 				return m, clearStatusCmd()
 			}
 			repo := m.repos[m.renameRepoIdx]
+			// Validate branch exists in the repo (local or remote)
+			if repo.Path != "" {
+				_, localErr := git.RunGit(repo.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+value)
+				_, remoteErr := git.RunGit(repo.Path, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+value)
+				if localErr != nil && remoteErr != nil {
+					m.statusMsg = "Branch '" + value + "' not found in " + repo.Name
+					return m, clearStatusCmd()
+				}
+			}
 			m.config.SetRepoBasisBranch(repo.Name, value)
 			m.statusMsg = "Basis branch for " + repo.Name + " set to " + value
 			return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
