@@ -521,55 +521,113 @@ func (m Model) View() string {
 		sections = append(sections, ui.RenderStatusBar(m.statusMsg, m.width))
 	}
 
-	// Rename input
-	if m.renameActive {
-		renameView := lipgloss.NewStyle().
-			Margin(0, ui.MarginH).
-			Background(ui.ColorBlack).
-			Render(
-				ui.BranchDimStyle.Render("New branch name: ") + m.renameInput.View(),
-			)
-		sections = append(sections, renameView)
-	}
-
-	// Open workspace prompt
-	if m.openPromptActive {
-		promptStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorGreen).
-			Background(ui.ColorBlack).
-			Bold(true).
-			Margin(0, ui.MarginH)
-		dimStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorDim).
-			Background(ui.ColorBlack)
-		sections = append(sections, promptStyle.Render("Open workspace in IDE? ")+dimStyle.Render("[Y]es / [N]o"))
-	}
-
 	// Footer
 	sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
 
 	content := strings.Join(sections, "\n")
 
-	// Context menu overlay
+	// --- Overlay dialogs (rendered on top of content) ---
+
+	// Context menu
 	if m.contextMenu.Active {
-		menuView := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
-		// Overlay menu on top of content
-		return paintBlack(content+"\n"+menuView, m.width, m.height)
+		dialog := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
-	// Settings overlay
+	// Rename dialog
+	if m.renameActive {
+		dialog := m.renderRenameDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Open workspace prompt
+	if m.openPromptActive {
+		dialog := m.renderOpenPromptDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Delete confirmation
+	if m.deleteConfirmActive {
+		dialog := m.renderDeleteConfirmDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Settings
 	if m.settings.Active {
-		settingsView := m.settings.View(m.width, m.height)
-		return paintBlack(settingsView, m.width, m.height)
+		dialog := m.settings.View(m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
-	// Modal overlay
+	// Create worktree modal
 	if m.modal.Active {
-		modalView := m.modal.View(m.width, m.height)
-		return paintBlack(modalView, m.width, m.height)
+		dialog := m.modal.View(m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
 	return paintBlack(content, m.width, m.height)
+}
+
+func (m Model) renderRenameDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+
+	title := "Rename Branch"
+	context := ""
+	if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+		title = "Change Basis Branch"
+		context = "Repository: " + m.repos[m.renameRepoIdx].Name
+	} else if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) && m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
+		wt := m.repos[m.renameRepoIdx].Worktrees[m.renameWTIdx]
+		context = "Current: " + wt.Branch
+	}
+
+	content := titleStyle.Render(title) + "\n\n"
+	if context != "" {
+		content += dimStyle.Render(context) + "\n\n"
+	}
+	content += m.renameInput.View() + "\n\n"
+	content += dimStyle.Render("enter confirm • esc cancel")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderOpenPromptDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	content := titleStyle.Render("Worktree Created") + "\n\n"
+	for _, r := range m.openPromptResults {
+		content += whiteStyle.Render("  "+r.RepoName) + dimStyle.Render(" → "+r.Branch) + "\n"
+	}
+	content += "\n" + dimStyle.Render("Open workspace in IDE?") + "\n\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderDeleteConfirmDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	branchName := "unknown"
+	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+		repo := m.repos[m.deleteRepoIdx]
+		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+			branchName = repo.Worktrees[m.deleteWTIdx].Branch
+		}
+	}
+
+	content := titleStyle.Render("Delete Worktree") + "\n\n"
+	content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
+	content += whiteStyle.Render("  "+branchName) + "\n\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 // getCardScreenX computes the screen X position of a card by its repo index.
