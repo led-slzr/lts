@@ -40,11 +40,14 @@ type SettingsModel struct {
 	SaveError  string // shown if save fails
 	SaveStatus string // shown on successful save
 	ViewHeight int    // last known terminal height for scroll calc
+	saveGen    int    // generation counter for save status clear timer
 }
 
 // Messages
 type SettingsSavedMsg struct{}
-type SettingsSaveClearMsg struct{}
+type SettingsSaveClearMsg struct {
+	Gen int // only clear if this matches current generation
+}
 
 func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	ti := textinput.New()
@@ -135,7 +138,9 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		}
 		return s, nil
 	case SettingsSaveClearMsg:
-		s.SaveStatus = ""
+		if msg.Gen == s.saveGen {
+			s.SaveStatus = ""
+		}
 		return s, nil
 	}
 	if s.Editing {
@@ -327,9 +332,11 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 		return nil
 	}
 	s.SaveStatus = "Saved!"
+	s.saveGen++
+	gen := s.saveGen
 	return tea.Batch(
 		func() tea.Msg { return SettingsSavedMsg{} },
-		tea.Tick(2*time.Second, func(time.Time) tea.Msg { return SettingsSaveClearMsg{} }),
+		tea.Tick(2*time.Second, func(time.Time) tea.Msg { return SettingsSaveClearMsg{Gen: gen} }),
 	)
 }
 

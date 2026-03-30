@@ -155,6 +155,16 @@ func (m *Model) clampScroll() {
 	}
 }
 
+// syncSettingsConfig copies config changes from the settings model's config pointer
+// back into the model's config. Required because Model uses value receivers, so
+// the settings pointer becomes detached from m.config after each Update copy.
+func (m *Model) syncSettingsConfig() {
+	if m.settings.Config != nil {
+		m.config.Global = m.settings.Config.Global
+		m.config.Local = m.settings.Config.Local
+	}
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		loadReposCmd(&m.config),
@@ -177,6 +187,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.settings.Active {
 			var cmd tea.Cmd
 			m.settings, cmd = m.settings.Update(msg)
+			// Sync config changes from settings back to model
+			m.syncSettingsConfig()
 			if !m.settings.Active {
 				// Settings closed — reload repos in case basis branch changed
 				m.recomputeLayout()
@@ -397,6 +409,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.settings.Active {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(msg)
+		m.syncSettingsConfig()
 		return m, cmd
 	}
 	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
