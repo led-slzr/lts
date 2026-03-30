@@ -168,6 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.settings.ViewHeight = msg.Height
 		m.recomputeLayout()
 		return m, nil
 
@@ -200,6 +201,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resultModel := result.(Model)
 		resultModel.recomputeLayout()
 		return resultModel, cmd
+
+	case ui.SettingsSavedMsg:
+		// Setting changed — reload repos to reflect new config immediately
+		m.recomputeLayout()
+		return m, loadReposCmd(&m.config)
+
+	case ui.SettingsSaveClearMsg:
+		// Forward clear to settings model
+		if m.settings.Active {
+			var cmd tea.Cmd
+			m.settings, cmd = m.settings.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 
 	case ReposLoadedMsg:
 		m.repos = msg.Repos
@@ -379,7 +394,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.modal.Active || m.settings.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
+	if m.settings.Active {
+		var cmd tea.Cmd
+		m.settings, cmd = m.settings.Update(msg)
+		return m, cmd
+	}
+	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
 		return m, nil
 	}
 	// Context menu: close on click, block all other mouse events
@@ -507,6 +527,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.settings = ui.NewSettings(&m.config, repoNames)
+			m.settings.ViewHeight = m.height
 			return m, nil
 		}
 		if m.hoveredBtn == ui.BtnExit {
