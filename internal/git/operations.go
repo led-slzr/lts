@@ -887,7 +887,7 @@ func RenameWorktreeBranch(wtPath, newBranch string) error {
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.
 // Also cleans up workspace files and empty directories.
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, logFn ...LogFunc) (int, error) {
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -923,7 +923,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 					continue
 				}
 				log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
-				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, false, log)
+				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, deleteRemote, log)
 				if err == nil {
 					cleaned++
 				} else {

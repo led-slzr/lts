@@ -21,6 +21,11 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleContextMenuKey(m, msg)
 	}
 
+	// If cleanup confirmation is active
+	if m.cleanupConfirmActive {
+		return handleCleanupConfirmKey(m, msg)
+	}
+
 	// If delete confirmation is active
 	if m.deleteConfirmActive {
 		return handleDeleteConfirmKey(m, msg)
@@ -54,8 +59,10 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "c":
 		if !m.loading {
-			logFn, startCmd := m.beginLoading("Cleaning up merged...")
-			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
+			m.cleanupConfirmActive = true
+			m.cleanupRemoteBranch = false
+			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
+			return m, nil
 		}
 
 	case "n":
@@ -220,6 +227,24 @@ func cancelDelete(m Model) (Model, tea.Cmd) {
 	m.deleteDangerous = false
 	m.deleteRemoteBranch = false
 	m.statusMsg = ""
+	return m, nil
+}
+
+func handleCleanupConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "n", "N":
+		m.cleanupConfirmActive = false
+		m.cleanupRemoteBranch = false
+		m.statusMsg = ""
+		return m, nil
+	case "d", "D":
+		m.cleanupRemoteBranch = !m.cleanupRemoteBranch
+		return m, nil
+	case "y", "Y":
+		m.cleanupConfirmActive = false
+		logFn, startCmd := m.beginLoading("Cleaning up merged...")
+		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, m.cleanupRemoteBranch))
+	}
 	return m, nil
 }
 

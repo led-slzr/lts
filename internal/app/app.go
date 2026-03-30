@@ -65,6 +65,10 @@ type Model struct {
 	deleteDangerous     bool            // true = requires typing DELETE
 	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
 
+	// Cleanup confirmation
+	cleanupConfirmActive bool
+	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
@@ -429,7 +433,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.syncSettingsConfig()
 		return m, cmd
 	}
-	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
+	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive || m.cleanupConfirmActive {
 		return m, nil
 	}
 	// Context menu: close on click, block all other mouse events
@@ -550,8 +554,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 		if m.hoveredBtn == ui.BtnCleanupMerged {
-			logFn, startCmd := m.beginLoading("Cleaning up merged...")
-			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
+			m.cleanupConfirmActive = true
+			m.cleanupRemoteBranch = false
+			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
+			return m, nil
 		}
 		if m.hoveredBtn == ui.BtnSettings {
 			var repoNames []string
@@ -729,6 +735,12 @@ func (m Model) View() string {
 		return paintBlack(dialog, m.width, m.height)
 	}
 
+	// Cleanup confirmation
+	if m.cleanupConfirmActive {
+		dialog := m.renderCleanupConfirmDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
 	// Delete confirmation
 	if m.deleteConfirmActive {
 		dialog := m.renderDeleteConfirmDialog()
@@ -885,6 +897,28 @@ func (m Model) renderDeleteConfirmDialog() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
+func (m Model) renderCleanupConfirmDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	content := titleStyle.Render("Cleanup Merged Worktrees") + "\n\n"
+	content += dimStyle.Render("This will remove all merged worktrees and their local branches.") + "\n"
+
+	content += "\n"
+	if m.cleanupRemoteBranch {
+		content += whiteStyle.Render("  [d] ✓ Also delete remote branches") + "\n"
+	} else {
+		content += dimStyle.Render("  [d] Also delete remote branches") + "\n"
+	}
+
+	content += "\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(56).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
 // getCardScreenX computes the screen X position of a card by its repo index.
 func (m Model) getCardScreenX(repoIdx int) int {
 	cols := m.gridResult.Cols
@@ -1026,9 +1060,9 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg
 	}
 }
 
-func cleanupCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
+func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cmd {
 	return func() tea.Msg {
-		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), logFn)
+		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), deleteRemote, logFn)
 		return CleanupMergedDoneMsg{Cleaned: cleaned, Err: err}
 	}
 }
