@@ -57,6 +57,8 @@ lts --version          # Print version
 |-----|--------|
 | `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
 | `r` | Refresh all repos |
+| `c` | Cleanup merged worktrees |
+| `s` | Open settings |
 | `q` / `Ctrl+C` | Quit |
 | `Esc` | Close modal / clear selection |
 

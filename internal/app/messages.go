@@ -10,8 +10,9 @@ type ReposLoadedMsg struct {
 
 // RefreshDoneMsg is sent when refresh completes.
 type RefreshDoneMsg struct {
-	Count int
-	Err   error
+	Count  int
+	Failed []string // repo names that failed
+	Err    error
 }
 
 // SingleRefreshDoneMsg is sent when a single repo refresh completes.

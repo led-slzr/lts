@@ -44,18 +44,16 @@ func WorktreeContextItems() []ContextMenuItem {
 	}
 }
 
-// RenderContextMenu renders the floating context menu.
+// RenderContextMenu renders the context menu as a centered dialog.
 func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) string {
 	if !menu.Active {
 		return ""
 	}
 
-	menuStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorGray).
-		BorderBackground(ColorBlack).
-		Background(ColorBlack).
-		Padding(0, 1)
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorGreen).
+		Background(ColorBlack)
 
 	cursorStyle := lipgloss.NewStyle().
 		Foreground(ColorWhite).
@@ -73,7 +71,14 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 		Background(ColorBlack).
 		Padding(0, 1)
 
+	dimStyle := lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack)
+
 	var lines []string
+	lines = append(lines, titleStyle.Render("Actions"))
+	lines = append(lines, "")
+
 	for i, item := range menu.Items {
 		if i == menu.CursorIdx {
 			lines = append(lines, cursorStyle.Render("▸ "+item.Label))
@@ -84,32 +89,15 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 		}
 	}
 
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("↑/↓ navigate • enter select • esc close"))
+
 	content := strings.Join(lines, "\n")
-	rendered := menuStyle.Render(content)
-
-	// Position the menu near the click point
-	menuW := lipgloss.Width(rendered)
-	menuH := lipgloss.Height(rendered)
-
-	posX := menu.X
-	posY := menu.Y + 1 // below the clicked line
-
-	// Keep within screen bounds
-	if posX+menuW > screenWidth {
-		posX = screenWidth - menuW - 1
-	}
-	if posX < 0 {
-		posX = 0
-	}
-	if posY+menuH > screenHeight {
-		posY = menu.Y - menuH // above instead
-	}
+	rendered := ModalStyle.Width(40).Render(content)
 
 	return lipgloss.Place(
 		screenWidth, screenHeight,
-		lipgloss.Left, lipgloss.Top,
+		lipgloss.Center, lipgloss.Center,
 		rendered,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")),
 	)
 }

@@ -36,7 +36,8 @@ type SettingsModel struct {
 	Editing   bool
 	EditInput textinput.Model
 	Config    *config.Config
-	Scroll    int // scroll offset for long lists
+	Scroll    int    // scroll offset for long lists
+	SaveError string // shown if save fails
 }
 
 // Messages
@@ -201,6 +202,7 @@ func (s SettingsModel) handleEditKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 }
 
 func (s *SettingsModel) applyChange(item SettingsItem) {
+	s.SaveError = ""
 	if item.RepoName == "" {
 		// Global setting
 		switch item.Key {
@@ -215,12 +217,17 @@ func (s *SettingsModel) applyChange(item SettingsItem) {
 		case "TERMINAL":
 			s.Config.Global.Terminal = item.Value
 		}
-		s.Config.SaveGlobal()
+		if err := s.Config.SaveGlobal(); err != nil {
+			s.SaveError = "Failed to save: " + err.Error()
+		}
 	} else {
 		// Local setting
 		switch item.Key {
 		case "BASIS_BRANCH":
 			s.Config.SetRepoBasisBranch(item.RepoName, item.Value)
+		}
+		if err := s.Config.SaveLocal(); err != nil {
+			s.SaveError = "Failed to save: " + err.Error()
 		}
 	}
 }
@@ -298,6 +305,10 @@ func (s SettingsModel) View(width, height int) string {
 	}
 
 	lines = append(lines, "")
+	if s.SaveError != "" {
+		errorStyle := lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
+		lines = append(lines, errorStyle.Render(s.SaveError))
+	}
 	lines = append(lines, dimStyle.Render("↑/↓ navigate • enter edit/cycle • esc close"))
 
 	content := strings.Join(lines, "\n")

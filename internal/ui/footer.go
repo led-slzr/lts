@@ -16,10 +16,13 @@ type FooterButtonInfo struct {
 
 // RenderFooter renders footer and returns button positions for hit testing.
 func RenderFooter(width int, hoveredBtn HoverButton) string {
-	refreshBtn := renderFooterBtn("Refresh All Overviews", hoveredBtn == BtnRefreshAll)
-	cleanupBtn := renderFooterBtn("Cleanup Merged Cleanables", hoveredBtn == BtnCleanupMerged)
-	settingsBtn := renderFooterBtn("Settings", hoveredBtn == BtnSettings)
-	exitBtn := renderFooterBtn("Exit", hoveredBtn == BtnExit)
+	keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBtnBg)
+	keyHoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBtnHoverBg).Bold(true)
+
+	refreshBtn := renderFooterBtnWithKey("r", "Refresh All", hoveredBtn == BtnRefreshAll, keyStyle, keyHoverStyle)
+	cleanupBtn := renderFooterBtnWithKey("c", "Cleanup Merged", hoveredBtn == BtnCleanupMerged, keyStyle, keyHoverStyle)
+	settingsBtn := renderFooterBtnWithKey("s", "Settings", hoveredBtn == BtnSettings, keyStyle, keyHoverStyle)
+	exitBtn := renderFooterBtnWithKey("q", "Exit", hoveredBtn == BtnExit, keyStyle, keyHoverStyle)
 
 	left := refreshBtn + "  " + cleanupBtn
 	right := settingsBtn + "  " + exitBtn
@@ -41,13 +44,11 @@ func RenderFooter(width int, hoveredBtn HoverButton) string {
 
 // GetFooterButtonAtX returns which button is at the given X coordinate.
 func GetFooterButtonAtX(x, width int) HoverButton {
-	// Approximate button positions based on rendered widths
-	// Left side: [Refresh All Overviews]  [Cleanup Merged Cleanables]
-	// Right side: [Settings]  [Exit]
-	refreshW := 23 // "Refresh All Overviews" + padding
-	cleanupW := 27 // "Cleanup Merged Cleanables" + padding
-	settingsW := 10 // "Settings" + padding
-	exitW := 6     // "Exit" + padding
+	// Button widths: "[key] Label" + padding(2)
+	refreshW := 17 // "[r] Refresh All" + padding
+	cleanupW := 20 // "[c] Cleanup Merged" + padding
+	settingsW := 14 // "[s] Settings" + padding
+	exitW := 10    // "[q] Exit" + padding
 
 	// Left buttons
 	x1 := MarginH
@@ -78,6 +79,13 @@ func renderFooterBtn(label string, hovered bool) string {
 		return ButtonHoverStyle.Render(label)
 	}
 	return ButtonStyle.Render(label)
+}
+
+func renderFooterBtnWithKey(key, label string, hovered bool, keyNormal, keyHover lipgloss.Style) string {
+	if hovered {
+		return ButtonHoverStyle.Render(key + " " + label)
+	}
+	return keyNormal.Render(key) + ButtonStyle.Render(" " + label)
 }
 
 func RenderCreateButton(width int, hovered bool) string {

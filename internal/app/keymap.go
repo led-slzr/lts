@@ -48,11 +48,29 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "r":
 		if !m.loading {
+			m.loading = true
+			m.statusMsg = "Refreshing all repos..."
 			return m, refreshAllCmd(&m.config)
 		}
 
+	case "c":
+		if !m.loading {
+			m.loading = true
+			m.statusMsg = "Cleaning up merged..."
+			return m, cleanupCmd(&m.config)
+		}
+
+	case "s":
+		var repoNames []string
+		for _, r := range m.repos {
+			if !r.IsMonorepo {
+				repoNames = append(repoNames, r.Name)
+			}
+		}
+		m.settings = ui.NewSettings(&m.config, repoNames)
+		return m, nil
+
 	case "esc":
-		// Clear any selection
 		m.focusedCard = -1
 		m.focusedWT = -1
 		return m, nil
@@ -78,8 +96,10 @@ func handleContextMenuKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		m.contextMenu.Active = false
-		item := m.contextMenu.Items[m.contextMenu.CursorIdx]
-		return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+		if m.contextMenu.CursorIdx >= 0 && m.contextMenu.CursorIdx < len(m.contextMenu.Items) {
+			item := m.contextMenu.Items[m.contextMenu.CursorIdx]
+			return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+		}
 	}
 	return m, nil
 }
@@ -92,6 +112,10 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 
 	switch action {
 	case ui.BtnRefresh:
+		if repo.Path == "" {
+			m.statusMsg = "Refresh individual repos instead"
+			return m, clearStatusCmd()
+		}
 		m.loading = true
 		m.statusMsg = "Refreshing " + repo.Name + "..."
 		return m, singleRefreshCmd(repo.Path, m.config.GetRepoBasisBranch(repo.Name), repoIdx)
@@ -166,13 +190,19 @@ func handleOpenPromptKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
 		m.openPromptActive = false
-		// Open all created workspace files
+		var openErr error
 		for _, r := range m.openPromptResults {
 			if r.WorkspaceFile != "" {
-				opener.OpenWorktree(r.WorkspaceFile, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				if err := opener.OpenWorktree(r.WorkspaceFile, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal); err != nil {
+					openErr = err
+				}
 			}
 		}
-		m.statusMsg = "Opened workspace(s)"
+		if openErr != nil {
+			m.statusMsg = "Failed to open: " + openErr.Error()
+		} else {
+			m.statusMsg = "Opened workspace(s)"
+		}
 		return m, clearStatusCmd()
 	case "n", "N", "esc":
 		m.openPromptActive = false
@@ -197,6 +227,15 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 				return m, clearStatusCmd()
 			}
 			repo := m.repos[m.renameRepoIdx]
+			// Validate branch exists in the repo (local or remote)
+			if repo.Path != "" {
+				_, localErr := git.RunGit(repo.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+value)
+				_, remoteErr := git.RunGit(repo.Path, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+value)
+				if localErr != nil && remoteErr != nil {
+					m.statusMsg = "Branch '" + value + "' not found in " + repo.Name
+					return m, clearStatusCmd()
+				}
+			}
 			m.config.SetRepoBasisBranch(repo.Name, value)
 			m.statusMsg = "Basis branch for " + repo.Name + " set to " + value
 			return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
@@ -207,7 +246,8 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.statusMsg = "Invalid branch: " + err.Error()
 			return m, clearStatusCmd()
 		}
-		if m.renameRepoIdx >= 0 && m.renameWTIdx >= 0 {
+		if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) &&
+			m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
 			repo := m.repos[m.renameRepoIdx]
 			wt := repo.Worktrees[m.renameWTIdx]
 			repoIdx := m.renameRepoIdx

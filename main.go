@@ -22,6 +22,17 @@ func main() {
 
 	workDir := getWorkDir()
 
+	// Validate workDir exists and is a directory
+	info, err := os.Stat(workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: directory does not exist: %s\n", workDir)
+		os.Exit(1)
+	}
+	if !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "Error: not a directory: %s\n", workDir)
+		os.Exit(1)
+	}
+
 	cfg := config.Load(workDir)
 
 	model := app.NewModel(cfg)

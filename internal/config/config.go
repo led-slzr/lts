@@ -17,7 +17,6 @@ type GlobalConfig struct {
 	PackageManager string // pnpm, npm, yarn, bun
 	AutoRefresh    string // 30M, 1H, 24H, etc.
 	Terminal       string // ghostty, iterm, terminal, wezterm, alacritty
-	ToolsChecked   string // true, false
 }
 
 // RepoLocalConfig holds per-repo settings.
@@ -40,7 +39,6 @@ func DefaultGlobal() GlobalConfig {
 		PackageManager: "pnpm",
 		AutoRefresh:    "24H",
 		Terminal:       "ghostty",
-		ToolsChecked:   "false",
 	}
 }
 
@@ -185,7 +183,6 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("PACKAGE_MANAGER=\"%s\"", c.Global.PackageManager),
 		fmt.Sprintf("AUTO_REFRESH=\"%s\"", c.Global.AutoRefresh),
 		fmt.Sprintf("TERMINAL=\"%s\"", c.Global.Terminal),
-		fmt.Sprintf("TOOLS_CHECKED=\"%s\"", c.Global.ToolsChecked),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
@@ -232,9 +229,6 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["TERMINAL"]; ok {
 		g.Terminal = v
-	}
-	if v, ok := kv["TOOLS_CHECKED"]; ok {
-		g.ToolsChecked = v
 	}
 }
 

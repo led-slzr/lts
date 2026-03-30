@@ -195,10 +195,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Refresh error: " + msg.Err.Error()
 		} else {
-			m.statusMsg = fmt.Sprintf("Refreshed %d repos", msg.Count)
-			// Update last refresh for all repos
+			if len(msg.Failed) > 0 {
+				m.statusMsg = fmt.Sprintf("Refreshed %d repos (failed: %s)", msg.Count, strings.Join(msg.Failed, ", "))
+			} else {
+				m.statusMsg = fmt.Sprintf("Refreshed %d repos", msg.Count)
+			}
+			// Update last refresh for successful repos only
 			for _, r := range m.repos {
-				if !r.IsMonorepo {
+				if r.IsMonorepo {
+					continue
+				}
+				isFailed := false
+				for _, f := range msg.Failed {
+					if f == r.Name {
+						isFailed = true
+						break
+					}
+				}
+				if !isFailed {
 					m.config.SetRepoLastRefresh(r.Name, time.Now().Unix())
 				}
 			}
@@ -328,9 +342,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.modal.Active || m.settings.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
 		return m, nil
 	}
-	// Close context menu on any click outside it
-	if m.contextMenu.Active && msg.Action == tea.MouseActionPress {
-		m.contextMenu.Active = false
+	// Context menu: close on click, block all other mouse events
+	if m.contextMenu.Active {
+		if msg.Action == tea.MouseActionPress {
+			m.contextMenu.Active = false
+		}
 		return m, nil
 	}
 
@@ -470,8 +486,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT < len(repo.Worktrees) {
 				wt := repo.Worktrees[m.focusedWT]
-				opener.OpenWorktree(wt.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
-				m.statusMsg = fmt.Sprintf("Opened %s in %s", wt.Branch, m.clickUsage)
+				err := opener.OpenWorktree(wt.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
+				} else {
+					m.statusMsg = fmt.Sprintf("Opened %s in %s", wt.Branch, m.clickUsage)
+				}
 				return m, clearStatusCmd()
 			}
 		}
@@ -521,55 +541,113 @@ func (m Model) View() string {
 		sections = append(sections, ui.RenderStatusBar(m.statusMsg, m.width))
 	}
 
-	// Rename input
-	if m.renameActive {
-		renameView := lipgloss.NewStyle().
-			Margin(0, ui.MarginH).
-			Background(ui.ColorBlack).
-			Render(
-				ui.BranchDimStyle.Render("New branch name: ") + m.renameInput.View(),
-			)
-		sections = append(sections, renameView)
-	}
-
-	// Open workspace prompt
-	if m.openPromptActive {
-		promptStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorGreen).
-			Background(ui.ColorBlack).
-			Bold(true).
-			Margin(0, ui.MarginH)
-		dimStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorDim).
-			Background(ui.ColorBlack)
-		sections = append(sections, promptStyle.Render("Open workspace in IDE? ")+dimStyle.Render("[Y]es / [N]o"))
-	}
-
 	// Footer
 	sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
 
 	content := strings.Join(sections, "\n")
 
-	// Context menu overlay
+	// --- Overlay dialogs (rendered on top of content) ---
+
+	// Context menu
 	if m.contextMenu.Active {
-		menuView := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
-		// Overlay menu on top of content
-		return paintBlack(content+"\n"+menuView, m.width, m.height)
+		dialog := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
-	// Settings overlay
+	// Rename dialog
+	if m.renameActive {
+		dialog := m.renderRenameDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Open workspace prompt
+	if m.openPromptActive {
+		dialog := m.renderOpenPromptDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Delete confirmation
+	if m.deleteConfirmActive {
+		dialog := m.renderDeleteConfirmDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Settings
 	if m.settings.Active {
-		settingsView := m.settings.View(m.width, m.height)
-		return paintBlack(settingsView, m.width, m.height)
+		dialog := m.settings.View(m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
-	// Modal overlay
+	// Create worktree modal
 	if m.modal.Active {
-		modalView := m.modal.View(m.width, m.height)
-		return paintBlack(modalView, m.width, m.height)
+		dialog := m.modal.View(m.width, m.height)
+		return paintBlack(dialog, m.width, m.height)
 	}
 
 	return paintBlack(content, m.width, m.height)
+}
+
+func (m Model) renderRenameDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+
+	title := "Rename Branch"
+	context := ""
+	if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+		title = "Change Basis Branch"
+		context = "Repository: " + m.repos[m.renameRepoIdx].Name
+	} else if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) && m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
+		wt := m.repos[m.renameRepoIdx].Worktrees[m.renameWTIdx]
+		context = "Current: " + wt.Branch
+	}
+
+	content := titleStyle.Render(title) + "\n\n"
+	if context != "" {
+		content += dimStyle.Render(context) + "\n\n"
+	}
+	content += m.renameInput.View() + "\n\n"
+	content += dimStyle.Render("enter confirm • esc cancel")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderOpenPromptDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	content := titleStyle.Render("Worktree Created") + "\n\n"
+	for _, r := range m.openPromptResults {
+		content += whiteStyle.Render("  "+r.RepoName) + dimStyle.Render(" → "+r.Branch) + "\n"
+	}
+	content += "\n" + dimStyle.Render("Open workspace in IDE?") + "\n\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func (m Model) renderDeleteConfirmDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	branchName := "unknown"
+	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+		repo := m.repos[m.deleteRepoIdx]
+		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+			branchName = repo.Worktrees[m.deleteWTIdx].Branch
+		}
+	}
+
+	content := titleStyle.Render("Delete Worktree") + "\n\n"
+	content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
+	content += whiteStyle.Render("  "+branchName) + "\n\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(50).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
 // getCardScreenX computes the screen X position of a card by its repo index.
@@ -632,8 +710,8 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 
 func refreshAllCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		count, err := git.RefreshAllRepos(cfg.WorkDir, basisResolver(cfg))
-		return RefreshDoneMsg{Count: count, Err: err}
+		count, failed, err := git.RefreshAllRepos(cfg.WorkDir, basisResolver(cfg))
+		return RefreshDoneMsg{Count: count, Failed: failed, Err: err}
 	}
 }
 
