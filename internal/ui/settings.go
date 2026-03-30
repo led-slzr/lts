@@ -78,7 +78,7 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			Options: []string{"15M", "30M", "1H", "6H", "12H", "24H"}},
 		SettingsItem{Section: "Global", Label: "Terminal", Key: "TERMINAL",
 			Value: s.Config.Global.Terminal, Kind: SettingEnum,
-			Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty"}},
+			Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
 	)
 
 	// Local settings per repo
@@ -127,7 +127,11 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				s.Scroll--
 			}
 		} else if msg.Button == tea.MouseButtonWheelDown {
-			s.Scroll++
+			// Clamp to total content lines
+			maxScroll := len(s.Items) + len(s.Items)/2 // rough upper bound including headers
+			if s.Scroll < maxScroll {
+				s.Scroll++
+			}
 		}
 		return s, nil
 	case SettingsSaveClearMsg:
@@ -162,7 +166,7 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 					return s, s.applyChange(*item)
 				}
 			}
-			// Not found, set to first
+			// Current value not in options (custom) — cycle to first option
 			if len(item.Options) > 0 {
 				item.Value = item.Options[0]
 				return s, s.applyChange(*item)
@@ -201,7 +205,8 @@ func (s *SettingsModel) moveCursor(delta int) {
 
 // ensureCursorVisible adjusts scroll so the cursor item is in the visible area.
 func (s *SettingsModel) ensureCursorVisible() {
-	maxVisible := s.ViewHeight - 10
+	// Match View's formula: border(2) + padding(2) + title(2) + indicators(2) + blank(1) + footer(2 worst case)
+	maxVisible := s.ViewHeight - 11
 	if maxVisible < 5 {
 		maxVisible = 5
 	}
@@ -286,8 +291,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	s.SaveError = ""
 	s.SaveStatus = ""
 
-	// Validate text inputs
-	if item.Kind == SettingText && item.Value == "" {
+	// Validate text inputs (AI CLI Command may be empty = disabled)
+	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" {
 		s.SaveError = item.Label + " cannot be empty"
 		// Restore previous value
 		s.Items[s.CursorIdx].Value = s.previousValue(item)
@@ -366,12 +371,18 @@ func (s SettingsModel) View(width, height int) string {
 		case SettingEnum:
 			// Show all options with active highlighted
 			var opts []string
+			found := false
 			for _, opt := range item.Options {
 				if opt == value {
 					opts = append(opts, cyanStyle.Render("["+opt+"]"))
+					found = true
 				} else {
 					opts = append(opts, dimStyle.Render(opt))
 				}
+			}
+			// Show custom value if not in predefined options
+			if !found && value != "" {
+				opts = append([]string{cyanStyle.Render("[" + value + "]")}, opts...)
 			}
 			valueFmt = strings.Join(opts, " ")
 		case SettingText:
@@ -411,8 +422,9 @@ func (s SettingsModel) View(width, height int) string {
 	}
 	footerLines = append(footerLines, dimStyle.Render("↑/↓ navigate • enter edit/cycle • esc close"))
 
-	// Apply scroll: reserve space for title (2 lines) and footer
-	maxVisible := height - 8 - len(footerLines) // modal padding + title + footer
+	// Apply scroll: reserve space for modal chrome, title, scroll indicators, and footer
+	// Modal border (2) + padding (2) + title (2) + scroll indicators (2) + blank (1) = 9
+	maxVisible := height - 9 - len(footerLines)
 	if maxVisible < 5 {
 		maxVisible = 5
 	}

@@ -66,6 +66,12 @@ func LocalConfigPath(workDir string) string {
 	return filepath.Join(workDir, ".lts.conf")
 }
 
+// IsFirstRun returns true if no global config file exists yet (fresh install).
+func IsFirstRun() bool {
+	_, err := os.Stat(GlobalConfigPath())
+	return os.IsNotExist(err)
+}
+
 // Load reads global and local configs, merging them into a Config.
 // Also migrates old lts.conf if found.
 func Load(workDir string) Config {
