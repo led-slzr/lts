@@ -1030,13 +1030,16 @@ func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 
 func checkMigrationCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		return MigrationCheckMsg{Needed: git.NeedsMigration(cfg.WorkDir)}
+		needed := git.NeedsMigration(cfg.WorkDir) || git.NeedsWorkspaceRepair(cfg.WorkDir)
+		return MigrationCheckMsg{Needed: needed}
 	}
 }
 
 func doMigrationCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		count := git.MigrateDirectoryStructure(cfg.WorkDir)
+		// Also repair workspace file contents that may have been left stale
+		count += git.RepairWorkspaceContents(cfg.WorkDir)
 		return MigrationDoneMsg{Count: count}
 	}
 }

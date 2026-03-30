@@ -642,6 +642,18 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 	os.WriteFile(wsPath, []byte(content), 0644)
 }
 
+// updateWorkspaceContents replaces occurrences of oldName with newName inside a workspace file.
+func updateWorkspaceContents(wsPath, oldName, newName string) {
+	data, err := os.ReadFile(wsPath)
+	if err != nil {
+		return
+	}
+	updated := strings.ReplaceAll(string(data), oldName, newName)
+	if updated != string(data) {
+		os.WriteFile(wsPath, []byte(updated), 0644)
+	}
+}
+
 // RefreshRepo fetches latest and updates the main branch ref.
 func RefreshRepo(repoPath, basisBranch string, logFn ...LogFunc) error {
 	log := noopLog
@@ -1540,11 +1552,12 @@ func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
 			RunGit(repoPath, "worktree", "repair")
 		}
 
-		// Rename workspace file
+		// Rename workspace file and update its contents
 		oldWs := filepath.Join(ltsPath, e.Name()+".code-workspace")
 		newWs := filepath.Join(ltsPath, expectedName+".code-workspace")
 		if _, err := os.Stat(oldWs); err == nil {
 			os.Rename(oldWs, newWs)
+			updateWorkspaceContents(newWs, e.Name(), expectedName)
 		}
 
 		migrated++
@@ -1590,6 +1603,8 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 		branchDirName := expectedSubdir
 
 		// Rename worktree dirs inside the branch subdir
+		type wtRename struct{ oldName, newName string }
+		var wtRenames []wtRename
 		allWorktreesMigrated := true
 		for _, se := range subEntries {
 			if !se.IsDir() {
@@ -1631,13 +1646,15 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 				RunGit(repoPath, "worktree", "repair")
 			}
 
-			// Rename individual workspace
+			// Rename individual workspace and update its contents
 			oldWs := filepath.Join(branchSubdirPath, se.Name()+".code-workspace")
 			newWs := filepath.Join(branchSubdirPath, expectedWtName+".code-workspace")
 			if _, err := os.Stat(oldWs); err == nil {
 				os.Rename(oldWs, newWs)
+				updateWorkspaceContents(newWs, se.Name(), expectedWtName)
 			}
 
+			wtRenames = append(wtRenames, wtRename{oldName: se.Name(), newName: expectedWtName})
 			migrated++
 		}
 
@@ -1659,7 +1676,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 			}
 		}
 
-		// Rename monorepo workspace if suffix changed
+		// Rename monorepo workspace if suffix changed, and update its contents
 		oldSuffix := ExtractSuffix(branch)
 		oldSafeSuffix := SanitizeForFilename(oldSuffix)
 		oldMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+oldSafeSuffix+".code-workspace")
@@ -1669,6 +1686,327 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 				os.Rename(oldMonoWs, newMonoWs)
 			}
 		}
+		// Update folder paths and names inside the monorepo workspace
+		monoWsPath := newMonoWs
+		if _, err := os.Stat(monoWsPath); err != nil {
+			monoWsPath = oldMonoWs // file wasn't renamed (same name)
+		}
+		if _, err := os.Stat(monoWsPath); err == nil {
+			for _, r := range wtRenames {
+				updateWorkspaceContents(monoWsPath, r.oldName, r.newName)
+			}
+			// Also update the suffix in display names (e.g. "core - feat-login" → "core - feat-login")
+			if oldSafeSuffix != branchDirName {
+				updateWorkspaceContents(monoWsPath, oldSafeSuffix, branchDirName)
+			}
+		}
 	}
 	return migrated
+}
+
+// NeedsWorkspaceRepair quickly checks if any .code-workspace files have stale paths.
+func NeedsWorkspaceRepair(scriptDir string) bool {
+	entries, err := os.ReadDir(scriptDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
+			continue
+		}
+		ltsPath := filepath.Join(scriptDir, e.Name())
+		ltsType := getLTSType(scriptDir, e.Name())
+
+		if ltsType == "single" {
+			if hasStaleWorkspaces(ltsPath) {
+				return true
+			}
+		} else {
+			if hasStaleMonorepoWorkspaces(ltsPath) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasStaleWorkspaces checks if any single-repo workspace file has a mismatched path.
+func hasStaleWorkspaces(ltsPath string) bool {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".code-workspace") {
+			continue
+		}
+		expectedDir := strings.TrimSuffix(e.Name(), ".code-workspace")
+		dirPath := filepath.Join(ltsPath, expectedDir)
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(ltsPath, e.Name()))
+		if err != nil {
+			continue
+		}
+		if !strings.Contains(string(data), `"path": "`+expectedDir+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasStaleMonorepoWorkspaces checks if any monorepo workspace file has mismatched paths.
+func hasStaleMonorepoWorkspaces(ltsPath string) bool {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		branchSubdirPath := filepath.Join(ltsPath, e.Name())
+		subEntries, err := os.ReadDir(branchSubdirPath)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if se.IsDir() || !strings.HasSuffix(se.Name(), ".code-workspace") || strings.HasPrefix(se.Name(), "monorepo-") {
+				continue
+			}
+			expectedDir := strings.TrimSuffix(se.Name(), ".code-workspace")
+			dirPath := filepath.Join(branchSubdirPath, expectedDir)
+			if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(branchSubdirPath, se.Name()))
+			if err != nil {
+				continue
+			}
+			if !strings.Contains(string(data), `"path": "`+expectedDir+`"`) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RepairWorkspaceContents fixes .code-workspace files whose internal paths
+// don't match the current directory names. This repairs workspaces left stale
+// by a previous migration that renamed directories without updating file contents.
+// Returns the number of workspace files repaired.
+func RepairWorkspaceContents(scriptDir string) int {
+	entries, err := os.ReadDir(scriptDir)
+	if err != nil {
+		return 0
+	}
+
+	repaired := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
+			continue
+		}
+		ltsPath := filepath.Join(scriptDir, e.Name())
+		ltsType := getLTSType(scriptDir, e.Name())
+
+		if ltsType == "single" {
+			repaired += repairSingleWorkspaces(ltsPath)
+		} else {
+			repaired += repairMonorepoWorkspaces(ltsPath)
+		}
+	}
+	return repaired
+}
+
+// repairSingleWorkspaces fixes workspace files in a single-repo LTS directory.
+func repairSingleWorkspaces(ltsPath string) int {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return 0
+	}
+
+	repaired := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".code-workspace") {
+			continue
+		}
+		wsPath := filepath.Join(ltsPath, e.Name())
+		expectedDir := strings.TrimSuffix(e.Name(), ".code-workspace")
+
+		// Check the directory this workspace should point to exists
+		dirPath := filepath.Join(ltsPath, expectedDir)
+		if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+			continue
+		}
+
+		data, err := os.ReadFile(wsPath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+
+		// If the path already matches, nothing to repair
+		if strings.Contains(content, `"path": "`+expectedDir+`"`) {
+			continue
+		}
+
+		// Replace the stale path value with the correct one
+		updated := replaceJSONPath(content, expectedDir)
+		if updated != content {
+			os.WriteFile(wsPath, []byte(updated), 0644)
+			repaired++
+		}
+	}
+	return repaired
+}
+
+// repairMonorepoWorkspaces fixes workspace files in a monorepo LTS directory.
+func repairMonorepoWorkspaces(ltsPath string) int {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return 0
+	}
+
+	repaired := 0
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		branchSubdirPath := filepath.Join(ltsPath, e.Name())
+		subEntries, err := os.ReadDir(branchSubdirPath)
+		if err != nil {
+			continue
+		}
+
+		// Repair individual worktree workspace files
+		for _, se := range subEntries {
+			if se.IsDir() || !strings.HasSuffix(se.Name(), ".code-workspace") || strings.HasPrefix(se.Name(), "monorepo-") {
+				continue
+			}
+
+			wsPath := filepath.Join(branchSubdirPath, se.Name())
+			expectedDir := strings.TrimSuffix(se.Name(), ".code-workspace")
+
+			dirPath := filepath.Join(branchSubdirPath, expectedDir)
+			if _, err := os.Stat(dirPath); os.IsNotExist(err) {
+				continue
+			}
+
+			data, err := os.ReadFile(wsPath)
+			if err != nil {
+				continue
+			}
+			content := string(data)
+			if strings.Contains(content, `"path": "`+expectedDir+`"`) {
+				continue
+			}
+			updated := replaceJSONPath(content, expectedDir)
+			if updated != content {
+				os.WriteFile(wsPath, []byte(updated), 0644)
+				repaired++
+			}
+		}
+
+		// Repair monorepo aggregate workspace — match each "path" to actual dirs
+		for _, se := range subEntries {
+			if se.IsDir() || !strings.HasPrefix(se.Name(), "monorepo-") || !strings.HasSuffix(se.Name(), ".code-workspace") {
+				continue
+			}
+			wsPath := filepath.Join(branchSubdirPath, se.Name())
+			data, err := os.ReadFile(wsPath)
+			if err != nil {
+				continue
+			}
+			content := string(data)
+			updated := content
+
+			// Build a map of actual worktree dirs in this branch subdir
+			for _, de := range subEntries {
+				if !de.IsDir() || !isWorktreeDir(filepath.Join(branchSubdirPath, de.Name())) {
+					continue
+				}
+				if strings.Contains(updated, `"path": "`+de.Name()+`"`) {
+					continue
+				}
+				// Find stale path entries that share a repo prefix with this dir
+				// and replace them with the current directory name
+				for _, stalePath := range extractWSPaths(updated) {
+					if stalePath == de.Name() {
+						continue
+					}
+					// Match by shared repo prefix (longest common prefix up to a dash)
+					staleRepo := longestRepoPrefix(stalePath)
+					currentRepo := longestRepoPrefix(de.Name())
+					if staleRepo != "" && staleRepo == currentRepo {
+						updated = strings.ReplaceAll(updated, stalePath, de.Name())
+					}
+				}
+			}
+			if updated != content {
+				os.WriteFile(wsPath, []byte(updated), 0644)
+				repaired++
+			}
+		}
+	}
+	return repaired
+}
+
+// replaceJSONPath replaces the first "path": "..." value in workspace JSON with newPath.
+func replaceJSONPath(content, newPath string) string {
+	const prefix = `"path": "`
+	idx := strings.Index(content, prefix)
+	if idx < 0 {
+		return content
+	}
+	start := idx + len(prefix)
+	end := strings.Index(content[start:], `"`)
+	if end < 0 {
+		return content
+	}
+	return content[:start] + newPath + content[start+end:]
+}
+
+// extractWSPaths returns all "path" values from a workspace JSON string.
+func extractWSPaths(content string) []string {
+	var paths []string
+	remaining := content
+	for {
+		idx := strings.Index(remaining, `"path": "`)
+		if idx < 0 {
+			break
+		}
+		start := idx + len(`"path": "`)
+		remaining = remaining[start:]
+		end := strings.Index(remaining, `"`)
+		if end < 0 {
+			break
+		}
+		paths = append(paths, remaining[:end])
+		remaining = remaining[end:]
+	}
+	return paths
+}
+
+// longestRepoPrefix extracts the repo name prefix from a worktree dir name.
+// e.g. "core-feat-login" → "core", "erp-ui-feat-login" → "erp-ui"
+// It finds the prefix before the branch portion by looking for known branch prefixes.
+func longestRepoPrefix(name string) string {
+	// Common branch prefixes that indicate where the repo name ends
+	branchPrefixes := []string{"-feat-", "-fix-", "-hotfix-", "-release-", "-chore-", "-refactor-", "-docs-", "-test-", "-ci-", "-build-", "-perf-", "-style-"}
+	bestIdx := -1
+	for _, bp := range branchPrefixes {
+		idx := strings.Index(name, bp)
+		if idx > 0 && (bestIdx < 0 || idx > bestIdx) {
+			bestIdx = idx
+		}
+	}
+	if bestIdx > 0 {
+		return name[:bestIdx]
+	}
+	// Fallback: take everything before the last dash
+	if idx := strings.LastIndex(name, "-"); idx > 0 {
+		return name[:idx]
+	}
+	return ""
 }
