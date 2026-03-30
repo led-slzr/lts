@@ -661,34 +661,81 @@ func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver) (int,
 	return refreshed, failed, nil
 }
 
-// DeleteWorktree removes a worktree and optionally its branch.
+// DeleteWorktree removes a worktree, its workspace file, and optionally its branch.
 func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool) error {
 	// Safety: validate wtPath is inside an -lts directory
 	if !strings.Contains(wtPath, "-lts") {
 		return fmt.Errorf("refusing to delete path outside LTS directory: %s", wtPath)
 	}
+
+	// Remove individual workspace file (sibling of worktree dir)
+	wtName := filepath.Base(wtPath)
+	wsFile := filepath.Join(filepath.Dir(wtPath), wtName+".code-workspace")
+	os.Remove(wsFile) // best-effort
+
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
-		return fmt.Errorf("worktree path does not exist: %s", wtPath)
-	}
-
-	_, err := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
-	if err != nil {
-		// Fallback: manual removal only if it's a valid worktree dir
-		if isWorktreeDir(wtPath) {
-			os.RemoveAll(wtPath)
-		}
+		// Missing worktree — just prune git refs
 		RunGit(repoPath, "worktree", "prune")
+	} else {
+		_, err := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
+		if err != nil {
+			// Fallback: manual removal only if it's a valid worktree dir
+			if isWorktreeDir(wtPath) {
+				os.RemoveAll(wtPath)
+			}
+			RunGit(repoPath, "worktree", "prune")
+		}
 	}
 
-	if branch != "" && !isProtectedBranch(branch) {
+	if branch != "" && !IsProtectedBranch(branch) {
 		RunGit(repoPath, "branch", "-D", branch)
 	}
 
-	if deleteRemote && branch != "" && !isProtectedBranch(branch) {
+	if deleteRemote && branch != "" && !IsProtectedBranch(branch) {
 		RunGit(repoPath, "push", "origin", "--delete", branch)
 	}
 
+	// Clean up empty parent directories inside -lts structure
+	cleanEmptyLTSDirs(filepath.Dir(wtPath))
+
 	return nil
+}
+
+// cleanEmptyLTSDirs removes empty directories up to (but not including) the -lts root.
+func cleanEmptyLTSDirs(dir string) {
+	for {
+		base := filepath.Base(dir)
+		if strings.HasSuffix(base, "-lts") {
+			// Check if the LTS dir itself is now empty (ignoring metadata files)
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return
+			}
+			hasContent := false
+			for _, e := range entries {
+				name := e.Name()
+				if name == ".lts-type" || name == ".lts-repos" {
+					continue
+				}
+				if strings.HasSuffix(name, ".code-workspace") {
+					continue
+				}
+				hasContent = true
+				break
+			}
+			if !hasContent {
+				os.RemoveAll(dir)
+			}
+			return
+		}
+		// Not the -lts root — remove if empty
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) > 0 {
+			return
+		}
+		os.Remove(dir)
+		dir = filepath.Dir(dir)
+	}
 }
 
 // RebaseWorktree rebases a worktree onto its main branch.
@@ -739,6 +786,7 @@ func RenameWorktreeBranch(wtPath, newBranch string) error {
 }
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.
+// Also cleans up workspace files and empty directories.
 func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver) (int, error) {
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	cleaned := 0
@@ -746,7 +794,15 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	for _, repo := range repos {
 		for _, wt := range repo.Worktrees {
 			if wt.Status == StatusMergedCleanable {
-				err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, false)
+				repoPath := repo.Path
+				// For monorepo cards, resolve the actual repo path
+				if repo.IsMonorepo && len(repo.RepoNames) > 0 {
+					repoPath = filepath.Join(scriptDir, repo.RepoNames[0])
+				}
+				if repoPath == "" {
+					continue
+				}
+				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, false)
 				if err == nil {
 					cleaned++
 				}
@@ -757,7 +813,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	return cleaned, nil
 }
 
-func isProtectedBranch(branch string) bool {
+func IsProtectedBranch(branch string) bool {
 	protected := []string{"main", "master", "develop", "development", "staging", "production"}
 	for _, p := range protected {
 		if branch == p {

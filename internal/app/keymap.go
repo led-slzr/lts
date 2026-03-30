@@ -60,6 +60,12 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, cleanupCmd(&m.config)
 		}
 
+	case "n":
+		if !m.loading {
+			m.modal = ui.NewModal(m.repos)
+			return m, textinput.Blink
+		}
+
 	case "s":
 		var repoNames []string
 		for _, r := range m.repos {
@@ -151,9 +157,23 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 	case ui.BtnDelete:
 		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[wtIdx]
+			// Block protected branches
+			if git.IsProtectedBranch(wt.Branch) {
+				m.statusMsg = "Cannot delete protected branch: " + wt.Branch
+				return m, clearStatusCmd()
+			}
+			_, dangerous := deleteWarning(wt.Status)
 			m.deleteConfirmActive = true
 			m.deleteRepoIdx = repoIdx
 			m.deleteWTIdx = wtIdx
+			m.deleteDangerous = dangerous
+			m.deleteRemoteBranch = false
+			if dangerous {
+				m.deleteTypedInput.SetValue("")
+				m.deleteTypedInput.Focus()
+				m.statusMsg = "Delete " + wt.Branch + "? Type DELETE to confirm"
+				return m, textinput.Blink
+			}
 			m.statusMsg = "Delete " + wt.Branch + "? [Y]es / [N]o"
 			return m, nil
 		}
@@ -162,26 +182,81 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 	return m, nil
 }
 
+func confirmDelete(m Model) (Model, tea.Cmd) {
+	m.deleteConfirmActive = false
+	m.deleteDangerous = false
+	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+		repo := m.repos[m.deleteRepoIdx]
+		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+			wt := repo.Worktrees[m.deleteWTIdx]
+			m.loading = true
+			m.statusMsg = "Deleting " + wt.Branch + "..."
+			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
+			return m, deleteCmd(repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi)
+		}
+	}
+	m.statusMsg = ""
+	return m, nil
+}
+
+func cancelDelete(m Model) (Model, tea.Cmd) {
+	m.deleteConfirmActive = false
+	m.deleteDangerous = false
+	m.deleteRemoteBranch = false
+	m.statusMsg = ""
+	return m, nil
+}
+
 func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
-	switch msg.String() {
-	case "y", "Y":
-		m.deleteConfirmActive = false
+	// Esc always cancels
+	if msg.String() == "esc" {
+		return cancelDelete(m)
+	}
+
+	// Ctrl+d toggles remote branch deletion when remote exists
+	if msg.String() == "ctrl+d" {
 		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
 			repo := m.repos[m.deleteRepoIdx]
 			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-				wt := repo.Worktrees[m.deleteWTIdx]
-				m.loading = true
-				m.statusMsg = "Deleting " + wt.Branch + "..."
-				ri, wi := m.deleteRepoIdx, m.deleteWTIdx
-				return m, deleteCmd(repo.Path, wt.Path, wt.Branch, ri, wi)
+				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+					m.deleteRemoteBranch = !m.deleteRemoteBranch
+					return m, nil
+				}
 			}
 		}
-		m.statusMsg = ""
-		return m, nil
-	case "n", "N", "esc":
-		m.deleteConfirmActive = false
-		m.statusMsg = ""
-		return m, nil
+	}
+
+	if m.deleteDangerous {
+		// "Type DELETE" mode
+		switch msg.String() {
+		case "enter":
+			if strings.ToUpper(strings.TrimSpace(m.deleteTypedInput.Value())) == "DELETE" {
+				return confirmDelete(m)
+			}
+			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.deleteTypedInput, cmd = m.deleteTypedInput.Update(msg)
+			return m, cmd
+		}
+	}
+
+	// Simple Y/N mode — d toggles remote deletion
+	switch msg.String() {
+	case "d", "D":
+		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+			repo := m.repos[m.deleteRepoIdx]
+			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+					m.deleteRemoteBranch = !m.deleteRemoteBranch
+					return m, nil
+				}
+			}
+		}
+	case "y", "Y":
+		return confirmDelete(m)
+	case "n", "N":
+		return cancelDelete(m)
 	}
 	return m, nil
 }
@@ -218,7 +293,6 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		value := strings.TrimSpace(m.renameInput.Value())
-		m.renameActive = false
 
 		// Basis branch change (wtIdx == -2)
 		if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
@@ -236,24 +310,27 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 					return m, clearStatusCmd()
 				}
 			}
+			m.renameActive = false
 			m.config.SetRepoBasisBranch(repo.Name, value)
 			m.statusMsg = "Basis branch for " + repo.Name + " set to " + value
 			return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
 		}
 
-		// Branch rename
+		// Branch rename — validate before closing dialog
 		if err := git.ValidateBranchName(value); err != nil {
-			m.statusMsg = "Invalid branch: " + err.Error()
+			m.statusMsg = "Invalid: " + err.Error()
 			return m, clearStatusCmd()
 		}
 		if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) &&
 			m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
+			m.renameActive = false
 			repo := m.repos[m.renameRepoIdx]
 			wt := repo.Worktrees[m.renameWTIdx]
 			repoIdx := m.renameRepoIdx
 			wtIdx := m.renameWTIdx
 			return m, renameCmd(wt.Path, value, repoIdx, wtIdx)
 		}
+		m.renameActive = false
 		return m, nil
 	default:
 		var cmd tea.Cmd

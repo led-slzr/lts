@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v2.0.0](https://img.shields.io/badge/version-2.0.0-green)
+![LTS v2.1.0](https://img.shields.io/badge/version-2.1.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -56,6 +56,7 @@ lts --version          # Print version
 | Key | Action |
 |-----|--------|
 | `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
+| `n` | Create new worktree |
 | `r` | Refresh all repos |
 | `c` | Cleanup merged worktrees |
 | `s` | Open settings |

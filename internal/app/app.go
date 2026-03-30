@@ -58,6 +58,9 @@ type Model struct {
 	deleteConfirmActive bool
 	deleteRepoIdx       int
 	deleteWTIdx         int
+	deleteTypedInput    textinput.Model // for "type DELETE" confirmation
+	deleteDangerous     bool            // true = requires typing DELETE
+	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
 }
 
 func NewModel(cfg config.Config) Model {
@@ -66,13 +69,19 @@ func NewModel(cfg config.Config) Model {
 	ti.CharLimit = 100
 	ti.Width = 40
 
+	di := textinput.New()
+	di.Placeholder = "DELETE"
+	di.CharLimit = 6
+	di.Width = 10
+
 	return Model{
-		config:      cfg,
-		focusedCard: -1,
-		focusedWT:   -1,
-		hoveredBtn:  ui.BtnNone,
-		renameInput: ti,
-		initialLoad: true,
+		config:           cfg,
+		focusedCard:      -1,
+		focusedWT:        -1,
+		hoveredBtn:       ui.BtnNone,
+		renameInput:      ti,
+		deleteTypedInput: di,
+		initialLoad:      true,
 	}
 }
 
@@ -628,25 +637,97 @@ func (m Model) renderOpenPromptDialog() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
+// deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
+func deleteWarning(status git.WTStatus) (warning string, dangerous bool) {
+	switch status {
+	case git.StatusChanged:
+		return "Uncommitted changes will be LOST", true
+	case git.StatusDiverged:
+		return "CRITICAL: Unpushed commits will be permanently lost", true
+	case git.StatusToPush:
+		return "Unpushed commits will be LOST", true
+	case git.StatusNoRemote:
+		return "Branch was never pushed — ALL work will be LOST", true
+	case git.StatusMergedDirty:
+		return "Uncommitted changes will be LOST (branch is merged)", true
+	case git.StatusNewDirty:
+		return "Uncommitted changes will be LOST (new branch)", true
+	case git.StatusMissing:
+		return "Worktree directory is missing — will clean up git references", false
+	default:
+		return "", false
+	}
+}
+
+// deleteHasRemote returns true if the worktree status implies a remote branch exists.
+func deleteHasRemote(status git.WTStatus) bool {
+	switch status {
+	case git.StatusNew, git.StatusNewDirty, git.StatusNoRemote:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m Model) renderDeleteConfirmDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorYellow).Background(ui.ColorBlack)
+	critStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 
 	branchName := "unknown"
+	var wt git.Worktree
+	hasWT := false
 	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
 		repo := m.repos[m.deleteRepoIdx]
 		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-			branchName = repo.Worktrees[m.deleteWTIdx].Branch
+			wt = repo.Worktrees[m.deleteWTIdx]
+			branchName = wt.Branch
+			hasWT = true
 		}
 	}
 
 	content := titleStyle.Render("Delete Worktree") + "\n\n"
 	content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
-	content += whiteStyle.Render("  "+branchName) + "\n\n"
-	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+	content += whiteStyle.Render("  "+branchName) + "\n"
 
-	modal := ui.ModalStyle.Width(50).Render(content)
+	if hasWT {
+		warning, dangerous := deleteWarning(wt.Status)
+		if warning != "" {
+			content += "\n"
+			if dangerous {
+				content += critStyle.Render("  ⚠ "+warning) + "\n"
+			} else {
+				content += warnStyle.Render("  ⚠ "+warning) + "\n"
+			}
+		}
+
+		// Offer remote branch deletion toggle when remote exists
+		if deleteHasRemote(wt.Status) {
+			toggleKey := "d"
+			if m.deleteDangerous {
+				toggleKey = "ctrl+d"
+			}
+			content += "\n"
+			if m.deleteRemoteBranch {
+				content += whiteStyle.Render("  ["+toggleKey+"] ✓ Also delete remote branch") + "\n"
+			} else {
+				content += dimStyle.Render("  ["+toggleKey+"] Also delete remote branch") + "\n"
+			}
+		}
+	}
+
+	content += "\n"
+	if m.deleteDangerous {
+		content += warnStyle.Render("  Type DELETE to confirm:") + "\n\n"
+		content += "  " + m.deleteTypedInput.View() + "\n\n"
+		content += dimStyle.Render("  enter confirm • esc cancel")
+	} else {
+		content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+	}
+
+	modal := ui.ModalStyle.Width(56).Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
@@ -729,9 +810,9 @@ func rebaseCmd(wtPath, mainBranch string, repoIdx, wtIdx int) tea.Cmd {
 	}
 }
 
-func deleteCmd(repoPath, wtPath, branch string, repoIdx, wtIdx int) tea.Cmd {
+func deleteCmd(repoPath, wtPath, branch string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.DeleteWorktree(repoPath, wtPath, branch, false)
+		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteRemote)
 		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
