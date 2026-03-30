@@ -936,6 +936,189 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	return cleaned, nil
 }
 
+// MigrateToWorktree migrates existing work from the main repo directory into
+// an LTS worktree. This handles the case where a user has been working directly
+// in the repo (non-main branch, uncommitted changes, unpushed commits) before
+// installing LTS.
+//
+// Steps:
+// 1. Stash any uncommitted changes (including untracked, preserving staged state)
+// 2. Switch main repo to the main branch (required: git forbids a branch in two worktrees)
+// 3. Create an LTS worktree for the feature branch
+// 4. Pop the stash into the new worktree (tries --index to preserve staging)
+// 5. Copy .env files, install deps, generate workspace
+//
+// Every failure path restores the original state or tells the user exactly
+// where their data is (commits on the branch, uncommitted work in git stash list).
+func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliCommand string, logFn LogFunc) (*CreateResult, error) {
+	repoName := filepath.Base(repoPath)
+	ctx := repoName
+
+	// Get current branch
+	currentBranch, err := RunGit(repoPath, "branch", "--show-current")
+	if err != nil || currentBranch == "" {
+		return nil, fmt.Errorf("could not detect current branch in %s", repoName)
+	}
+	logFn(ctx, "Current branch: "+currentBranch, false)
+
+	mainBranch := detectMainBranch(repoPath, basisBranch)
+	if currentBranch == mainBranch {
+		return nil, fmt.Errorf("%s is already on %s — nothing to migrate", repoName, mainBranch)
+	}
+
+	// Check for ongoing operations
+	if err := CheckOngoingOperations(repoPath); err != nil {
+		return nil, err
+	}
+
+	// Check for uncommitted changes (staged + unstaged + untracked) and stash them
+	hasChanges := false
+	hasStagedChanges := false
+	porcelain, _ := RunGit(repoPath, "status", "--porcelain")
+	if strings.TrimSpace(porcelain) != "" {
+		hasChanges = true
+		// Detect if there are staged changes (lines starting with A/M/D/R/C in first column)
+		for _, line := range strings.Split(strings.TrimSpace(porcelain), "\n") {
+			if len(line) >= 2 && line[0] != ' ' && line[0] != '?' {
+				hasStagedChanges = true
+				break
+			}
+		}
+		logFn(ctx, "Stashing uncommitted changes (including untracked files)", false)
+		msg := fmt.Sprintf("LTS migration stash %s", time.Now().Format("2006-01-02 15:04:05"))
+		_, err := RunGit(repoPath, "stash", "push", "--include-untracked", "-m", msg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to stash changes: %w", err)
+		}
+	}
+
+	// Helper to safely restore stash — only pops if still on the correct branch.
+	// Returns true if stash was restored, false if it remains in the stash list.
+	restoreStash := func(targetBranch string) bool {
+		if !hasChanges {
+			return true
+		}
+		current, _ := RunGit(repoPath, "branch", "--show-current")
+		if current != targetBranch {
+			logFn(ctx, "Cannot auto-restore stash: repo is on '"+current+"', expected '"+targetBranch+"'. Your changes are safely saved — run 'git stash pop' on "+targetBranch+" to recover", true)
+			return false
+		}
+		_, popErr := RunGit(repoPath, "stash", "pop")
+		if popErr != nil {
+			logFn(ctx, "Could not auto-restore stash. Your changes are safely saved — run 'git stash pop' to recover", true)
+			return false
+		}
+		return true
+	}
+
+	// CRITICAL: Switch to main branch BEFORE creating worktree.
+	// Git refuses to have a branch checked out in two places simultaneously,
+	// so we must release the feature branch from the main repo first.
+	logFn(ctx, "Switching "+repoName+" to "+mainBranch, false)
+	_, err = RunGit(repoPath, "checkout", mainBranch)
+	if err != nil {
+		// Checkout failed — we're still on currentBranch, safe to pop stash
+		logFn(ctx, "Restoring stashed changes after checkout failure", true)
+		restoreStash(currentBranch)
+		return nil, fmt.Errorf("failed to switch to %s: %w — is there an ongoing merge/rebase?", mainBranch, err)
+	}
+
+	// Setup LTS directory
+	ltsDir := repoName + "-lts"
+	ltsPath := filepath.Join(scriptDir, ltsDir)
+	if err := os.MkdirAll(ltsPath, 0755); err != nil {
+		// Try to restore the original state: switch back then pop
+		_, coErr := RunGit(repoPath, "checkout", currentBranch)
+		if coErr != nil {
+			logFn(ctx, "Could not switch back to "+currentBranch+". Your changes are safely saved in 'git stash list'", true)
+		} else {
+			restoreStash(currentBranch)
+		}
+		return nil, fmt.Errorf("failed to create LTS directory: %w", err)
+	}
+
+	// Prune orphaned worktree entries
+	RunGit(repoPath, "worktree", "prune")
+
+	// Generate worktree name
+	suffix := ExtractSuffix(currentBranch)
+	wtName := GenerateUniqueWorktreeName(repoName, suffix, ltsPath)
+	wtPath := filepath.Join(ltsPath, wtName)
+
+	// Create the worktree for the feature branch (now safe — branch is no longer checked out)
+	logFn(ctx, "Creating worktree for "+currentBranch, false)
+	_, err = RunGit(repoPath, "worktree", "add", wtPath, currentBranch)
+	if err != nil {
+		// Restore: try to switch back to feature branch, then pop stash
+		logFn(ctx, "Worktree creation failed — restoring original state", true)
+		_, coErr := RunGit(repoPath, "checkout", currentBranch)
+		if coErr != nil {
+			// Can't switch back — do NOT pop stash onto wrong branch
+			if hasChanges {
+				logFn(ctx, "Could not switch back to "+currentBranch+". Your commits are safe on the branch. Uncommitted changes are safely saved in 'git stash list'", true)
+			}
+		} else {
+			restoreStash(currentBranch)
+		}
+		return nil, fmt.Errorf("failed to create worktree: %w", err)
+	}
+
+	// Pop stash into the new worktree (stashes are shared across worktrees).
+	// Try --index first to preserve staging state, fall back to plain pop.
+	if hasChanges {
+		logFn(ctx, "Moving uncommitted changes to worktree", false)
+		stashRestored := false
+		if hasStagedChanges {
+			// Try to preserve staged state
+			_, err := RunGit(wtPath, "stash", "pop", "--index")
+			if err == nil {
+				stashRestored = true
+			} else {
+				// --index can fail two ways:
+				// 1. Can't recreate index (no changes to working tree — safe to retry plain pop)
+				// 2. Working tree conflict (partial changes applied — do NOT retry)
+				// Check if working tree is still clean to distinguish.
+				dirtyCheck, _ := RunGit(wtPath, "status", "--porcelain")
+				if strings.TrimSpace(dirtyCheck) != "" {
+					// Working tree has changes — conflict case, don't retry
+					logFn(ctx, "Warning: stash applied with conflicts. Resolve conflicts in the worktree, then run 'git stash drop' if satisfied", true)
+					stashRestored = true // prevent retry
+				}
+				// else: working tree is clean, --index just couldn't recreate index. Fall through.
+			}
+		}
+		if !stashRestored {
+			_, err := RunGit(wtPath, "stash", "pop")
+			if err != nil {
+				logFn(ctx, "Warning: stash could not be cleanly applied (possible conflicts). Your changes are safely preserved — run 'git stash pop' in the worktree to resolve manually", true)
+			} else if hasStagedChanges {
+				logFn(ctx, "Note: staged changes were restored as unstaged (staging state could not be preserved)", false)
+			}
+		}
+	}
+
+	// Copy .env files
+	logFn(ctx, "Copying .env files", false)
+	copyEnvFilesRecursive(repoPath, wtPath)
+
+	// Install dependencies
+	runPackageInstall(wtPath, pkgManager, &CreateLog{Stream: logFn, Context: ctx})
+
+	// Generate workspace file
+	logFn(ctx, "Generating workspace file", false)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand)
+
+	logFn(ctx, "Migration complete — "+currentBranch+" is now an LTS worktree", false)
+
+	return &CreateResult{
+		WorktreePath:  wtPath,
+		WorktreeName:  wtName,
+		WorkspaceFile: wsFile,
+		RepoName:      repoName,
+		Branch:        currentBranch,
+	}, nil
+}
+
 func IsProtectedBranch(branch string) bool {
 	protected := []string{"main", "master", "develop", "development", "staging", "production"}
 	for _, p := range protected {

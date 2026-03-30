@@ -40,6 +40,23 @@ var (
 				Background(ColorBlack).
 				Padding(0, 1)
 
+	CardBorderMigration = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(ColorYellow).
+				BorderBackground(ColorBlack).
+				Background(ColorBlack).
+				Padding(0, 1)
+
+	MigrateBtnStyle = lipgloss.NewStyle().
+				Foreground(ColorYellow).
+				Background(ColorBlack).
+				Bold(true)
+
+	MigrateBtnHoverStyle = lipgloss.NewStyle().
+				Foreground(ColorBlack).
+				Background(ColorYellow).
+				Bold(true)
+
 	// Repo name in card
 	RepoNameStyle = lipgloss.NewStyle().
 			Bold(true).
