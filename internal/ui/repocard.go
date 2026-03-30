@@ -38,6 +38,8 @@ const (
 	BtnCreateWT
 	// Settings button
 	BtnSettings
+	// Migrate button
+	BtnMigrate
 )
 
 // innerWidth returns the usable content width inside a card.
@@ -89,6 +91,12 @@ func statusStyle(status git.WTStatus) lipgloss.Style {
 // focusedWT: index of hovered worktree (-1 = none, -2 = repo header hovered)
 func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton) string {
 	iw := innerWidth(cardWidth)
+
+	// Migration card: yellow border with centered message and migrate button
+	if repo.NeedsMigration {
+		return renderMigrationCard(repo, cardWidth, iw, focused, focusedWT, hoveredBtn)
+	}
+
 	var lines []string
 
 	// Header line
@@ -157,6 +165,90 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		style = CardBorderNormal.Width(cardWidth - 2)
 	}
 
+	return style.Render(content)
+}
+
+// renderMigrationCard renders a card for a repo that needs migration to LTS.
+// Shows yellow border, centered message, branch name, and migrate button.
+// If the repo already has LTS worktrees, they are shown below the migration notice.
+func renderMigrationCard(repo git.Repo, cardWidth, iw int, focused bool, focusedWT int, hoveredBtn HoverButton) string {
+	yellowText := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
+	dimText := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	branchStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack).Bold(true)
+	centerStyle := lipgloss.NewStyle().Width(iw).Align(lipgloss.Center).Background(ColorBlack)
+
+	var lines []string
+
+	// Header with repo name
+	header := RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
+	lines = append(lines, truncate(header, iw))
+
+	// Empty line
+	lines = append(lines, "")
+
+	// Branch name (truncated for narrow cards)
+	lines = append(lines, centerStyle.Render(truncate(branchStyle.Render(repo.MigrationBranch), iw)))
+
+	// Warning message
+	lines = append(lines, centerStyle.Render(yellowText.Render("Existing work detected")))
+
+	// Reason (truncated for narrow cards)
+	lines = append(lines, centerStyle.Render(truncate(dimText.Render(repo.MigrationReason), iw)))
+
+	// Empty line
+	lines = append(lines, "")
+
+	// Migrate button
+	var btn string
+	if focused && hoveredBtn == BtnMigrate {
+		btn = MigrateBtnHoverStyle.Render(" Migrate to LTS ")
+	} else {
+		btn = MigrateBtnStyle.Render(" Migrate to LTS ")
+	}
+	lines = append(lines, centerStyle.Render(btn))
+
+	// Show existing worktrees if any (below the migration notice)
+	if len(repo.Worktrees) > 0 {
+		lines = append(lines, "") // separator
+		for i, wt := range repo.Worktrees {
+			isLast := i == len(repo.Worktrees)-1
+			treeChar := "├"
+			if isLast {
+				treeChar = "└"
+			}
+
+			isHovered := focused && focusedWT == i
+
+			branchDisplay := wt.Branch
+			if branchDisplay == "" {
+				branchDisplay = wt.Name
+			}
+			changedBadge := extractChangedCount(wt.StatusText)
+
+			var line string
+			if isHovered {
+				hoverDisplay := branchDisplay
+				if changedBadge != "" {
+					hoverDisplay += " " + changedBadge
+				}
+				line = TreeCharStyle.Render(treeChar) + WTHighlightStyle.Render(hoverDisplay)
+			} else {
+				branchStyled := statusStyle(wt.Status).Render(branchDisplay)
+				if changedBadge != "" {
+					branchStyled += " " + statusStyle(wt.Status).Render(changedBadge)
+				}
+				line = TreeCharStyle.Render(treeChar) + branchStyled
+			}
+			lines = append(lines, truncate(line, iw))
+		}
+	} else {
+		// Empty line for padding when no worktrees
+		lines = append(lines, "")
+	}
+
+	content := strings.Join(lines, "\n")
+
+	style := CardBorderMigration.Width(cardWidth - 2)
 	return style.Render(content)
 }
 

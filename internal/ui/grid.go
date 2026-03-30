@@ -25,6 +25,7 @@ const (
 	ZoneWTBtn
 	ZoneCreateBtn
 	ZoneFooterBtn
+	ZoneMigrateBtn
 )
 
 // HitZone represents a clickable/hoverable region on screen.
@@ -165,15 +166,49 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 				WTIdx:   -2,
 			})
 
-			// Worktree hit zones: each worktree line is after the header
-			for wtI := range repos[repoIdx].Worktrees {
-				wtY := headerY + 1 + wtI
+			// Migration card: add migrate button + worktree hit zones
+			if repos[repoIdx].NeedsMigration {
+				// Migration card layout (inside border):
+				// line 0: header
+				// line 1: empty
+				// line 2: branch name
+				// line 3: warning text
+				// line 4: reason
+				// line 5: empty
+				// line 6: migrate button
+				// line 7: empty (or separator if worktrees exist)
+				// line 8+: worktree lines (if any)
+				migrateBtnY := headerY + 6
 				hitZones = append(hitZones, HitZone{
-					X: screenCardX, Y: wtY, W: cardWidth, H: 1,
-					Type:    ZoneWorktree,
+					X: screenCardX, Y: migrateBtnY, W: cardWidth, H: 1,
+					Type:    ZoneMigrateBtn,
 					RepoIdx: repoIdx,
-					WTIdx:   wtI,
+					WTIdx:   -1,
+					Button:  BtnMigrate,
 				})
+				// Worktree hit zones inside migration card (after button + separator)
+				for wtI := range repos[repoIdx].Worktrees {
+					wtY := headerY + 8 + wtI // 8 = button(6) + separator(1) + worktree start(1)
+					hitZones = append(hitZones, HitZone{
+						X: screenCardX, Y: wtY, W: cardWidth, H: 1,
+						Type:    ZoneWorktree,
+						RepoIdx: repoIdx,
+						WTIdx:   wtI,
+					})
+				}
+			}
+
+			// Worktree hit zones: each worktree line is after the header (normal cards only)
+			if !repos[repoIdx].NeedsMigration {
+				for wtI := range repos[repoIdx].Worktrees {
+					wtY := headerY + 1 + wtI
+					hitZones = append(hitZones, HitZone{
+						X: screenCardX, Y: wtY, W: cardWidth, H: 1,
+						Type:    ZoneWorktree,
+						RepoIdx: repoIdx,
+						WTIdx:   wtI,
+					})
+				}
 			}
 
 			contentX += cardWidth + CardGap
@@ -237,7 +272,16 @@ func HitTest(zones []HitZone, x, y int) (repoIdx int, wtIdx int, btn HoverButton
 	wtIdx = -1
 	btn = BtnNone
 
-	// Check worktrees first (most specific content zones)
+	// Check migrate button first (most specific)
+	for _, z := range zones {
+		if z.Type == ZoneMigrateBtn {
+			if x >= z.X && x < z.X+z.W && y >= z.Y && y < z.Y+z.H {
+				return z.RepoIdx, z.WTIdx, BtnMigrate
+			}
+		}
+	}
+
+	// Check worktrees (most specific content zones)
 	for _, z := range zones {
 		if z.Type == ZoneWorktree {
 			if x >= z.X && x < z.X+z.W && y >= z.Y && y < z.Y+z.H {

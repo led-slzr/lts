@@ -6,6 +6,7 @@ import (
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -367,6 +368,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			clearStatusCmd(),
 		)
 
+	case MigrateDoneMsg:
+		m.loading = false
+		if msg.Err != nil {
+			m.statusMsg = "Migration error: " + msg.Err.Error()
+			m.recomputeLayout()
+			return m, tea.Batch(
+				loadReposCmd(&m.config),
+				clearStatusCmd(),
+			)
+		}
+		m.statusMsg = fmt.Sprintf("Migrated %s to LTS worktree", msg.Result.Branch)
+		m.openPromptActive = true
+		m.openPromptResults = []*git.CreateResult{msg.Result}
+		m.recomputeLayout()
+		return m, loadReposCmd(&m.config)
+
 	case LogEntryMsg:
 		m.logPanel.Add(msg.Context, msg.Message, msg.IsError)
 		m.recomputeLayout()
@@ -476,7 +493,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Detect inline buttons when hovering repo header or worktree (suppress during loading)
-		if !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		// Skip for migration cards — they don't have inline context buttons
+		isMigrationCard := repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].NeedsMigration
+		if !isMigrationCard && !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -500,7 +519,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Detect inline buttons on click (suppress during loading)
-		if !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		// Skip for migration cards — they don't have inline context buttons
+		isMigrationCard := repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].NeedsMigration
+		if !isMigrationCard && !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -553,8 +574,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, textinput.Blink
 		}
 
-		// Context menu trigger [▸] — open context menu
-		if m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 {
+		// Migrate button
+		if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
+			repo := m.repos[m.focusedCard]
+			if repo.NeedsMigration && repo.Path != "" {
+				logFn, startCmd := m.beginLoading("Migrating "+repo.Name+"...")
+				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config))
+			}
+		}
+
+		// Context menu trigger [▸] — open context menu (not for migration cards)
+		if m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && !isMigrationCard {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
 				// Repo header context menu
@@ -1013,6 +1043,21 @@ func renameCmd(logFn git.LogFunc, wtPath, newBranch string, repoIdx, wtIdx int) 
 			logFn(newBranch, "Branch renamed", false)
 		}
 		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+	}
+}
+
+func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		repoName := filepath.Base(repoPath)
+		basis := cfg.GetRepoBasisBranch(repoName)
+		result, err := git.MigrateToWorktree(repoPath, cfg.WorkDir, basis,
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+		if err != nil {
+			logFn("migrate", "Failed: "+err.Error(), true)
+		} else {
+			logFn("migrate", "Migration complete", false)
+		}
+		return MigrateDoneMsg{Result: result, Err: err}
 	}
 }
 

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,6 +42,11 @@ type Repo struct {
 	IsMonorepo bool   // true for multi-repo LTS cards
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
+
+	// Migration state: true when the main repo dir has work on a non-main branch
+	NeedsMigration  bool
+	MigrationBranch string // current branch name (e.g. "fix/hotfix")
+	MigrationReason string // human-readable reason (e.g. "3 unpushed commits, 2 uncommitted files")
 }
 
 // DiscoverRepos finds all git repositories and monorepo LTS groups in scriptDir.
@@ -102,6 +108,12 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 			wts := listWorktrees(scriptDir, ltsDir, name, repoBasis)
 			repo.Worktrees = append(repo.Worktrees, wts...)
 		}
+
+		// Check if main repo needs migration to LTS worktree
+		needsMigration, migBranch, migReason := checkMigrationNeeded(dirPath, mainBranch)
+		repo.NeedsMigration = needsMigration
+		repo.MigrationBranch = migBranch
+		repo.MigrationReason = migReason
 
 		repos = append(repos, repo)
 	}
@@ -208,6 +220,76 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 	}
 
 	return wts
+}
+
+// checkMigrationNeeded checks if the main repo directory has work on a non-main
+// branch that should be migrated to an LTS worktree.
+func checkMigrationNeeded(repoPath, mainBranch string) (needsMigration bool, branch, reason string) {
+	currentBranch, err := RunGit(repoPath, "branch", "--show-current")
+	if err != nil || currentBranch == "" {
+		return false, "", ""
+	}
+
+	// If on the main branch, no migration needed
+	if currentBranch == mainBranch {
+		return false, "", ""
+	}
+
+	var reasons []string
+
+	// Check uncommitted changes
+	porcelain, _ := RunGit(repoPath, "status", "--porcelain")
+	porcelain = strings.TrimSpace(porcelain)
+	if porcelain != "" {
+		count := len(strings.Split(porcelain, "\n"))
+		if count == 1 {
+			reasons = append(reasons, "1 uncommitted file")
+		} else {
+			reasons = append(reasons, fmt.Sprintf("%d uncommitted files", count))
+		}
+	}
+
+	// Check unpushed commits
+	// Try upstream first, then origin/<branch>
+	remoteRef := ""
+	if _, err := RunGit(repoPath, "rev-parse", "--verify", "@{upstream}"); err == nil {
+		remoteRef = "@{upstream}"
+	} else if _, err := RunGit(repoPath, "rev-parse", "--verify", "origin/"+currentBranch); err == nil {
+		remoteRef = "origin/" + currentBranch
+	}
+
+	if remoteRef != "" {
+		aheadStr, _ := RunGit(repoPath, "rev-list", "--count", remoteRef+"..HEAD")
+		ahead := 0
+		fmt.Sscanf(aheadStr, "%d", &ahead)
+		if ahead > 0 {
+			if ahead == 1 {
+				reasons = append(reasons, "1 unpushed commit")
+			} else {
+				reasons = append(reasons, fmt.Sprintf("%d unpushed commits", ahead))
+			}
+		}
+	} else {
+		// No remote tracking — count commits ahead of main
+		aheadStr, _ := RunGit(repoPath, "rev-list", "--count", mainBranch+"..HEAD")
+		ahead := 0
+		fmt.Sscanf(aheadStr, "%d", &ahead)
+		if ahead > 0 {
+			if ahead == 1 {
+				reasons = append(reasons, "1 unpushed commit")
+			} else {
+				reasons = append(reasons, fmt.Sprintf("%d unpushed commits", ahead))
+			}
+		}
+	}
+
+	// Only flag for migration if there are actual uncommitted or unpushed changes.
+	// Being on a non-main branch with everything clean and pushed doesn't need migration.
+	if len(reasons) == 0 {
+		return false, "", ""
+	}
+
+	return true, currentBranch, strings.Join(reasons, ", ")
 }
 
 func detectMainBranch(repoPath, basisBranch string) string {

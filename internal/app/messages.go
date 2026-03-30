@@ -68,3 +68,9 @@ type RenameDoneMsg struct {
 	WTIdx   int
 	Err     error
 }
+
+// MigrateDoneMsg is sent when a migration to LTS worktree completes.
+type MigrateDoneMsg struct {
+	Result *git.CreateResult
+	Err    error
+}
