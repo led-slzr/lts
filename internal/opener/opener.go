@@ -83,7 +83,7 @@ func openIDE(wtPath, ideCommand string) error {
 
 func openAICli(path, aiCliCommand string) error {
 	if aiCliCommand == "" {
-		aiCliCommand = "claude"
+		return fmt.Errorf("no AI CLI configured — set one in Settings")
 	}
 	// Split command and flags: "claude --dangerously-skip-permissions" → ["claude", "--dangerously-skip-permissions"]
 	parts := strings.Fields(aiCliCommand)
@@ -136,6 +136,10 @@ func openTerminal(path, terminal string) error {
 
 	case "alacritty":
 		cmd := exec.Command("alacritty", "--working-directory", path)
+		return cmd.Start()
+
+	case "kitty":
+		cmd := exec.Command("kitty", "--directory", path)
 		return cmd.Start()
 
 	case "terminal":

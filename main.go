@@ -6,6 +6,7 @@ import (
 
 	"lts-revamp/internal/app"
 	"lts-revamp/internal/config"
+	"lts-revamp/internal/ui"
 	"lts-revamp/internal/version"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,6 +32,19 @@ func main() {
 	if !info.IsDir() {
 		fmt.Fprintf(os.Stderr, "Error: not a directory: %s\n", workDir)
 		os.Exit(1)
+	}
+
+	// First-run setup wizard
+	if config.IsFirstRun() {
+		setupModel := ui.NewSetup()
+		p := tea.NewProgram(
+			setupModel,
+			tea.WithAltScreen(),
+		)
+		if _, err := p.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	cfg := config.Load(workDir)

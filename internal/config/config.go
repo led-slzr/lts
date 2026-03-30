@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -63,6 +64,12 @@ func GlobalConfigPath() string {
 // LocalConfigPath returns {workDir}/.lts.conf
 func LocalConfigPath(workDir string) string {
 	return filepath.Join(workDir, ".lts.conf")
+}
+
+// IsFirstRun returns true if no global config file exists yet (fresh install).
+func IsFirstRun() bool {
+	_, err := os.Stat(GlobalConfigPath())
+	return os.IsNotExist(err)
 }
 
 // Load reads global and local configs, merging them into a Config.
@@ -131,7 +138,7 @@ func (c *Config) GetRepoLastRefresh(repoName string) int64 {
 }
 
 // SetRepoLastRefresh updates the last refresh timestamp for a repo and saves.
-func (c *Config) SetRepoLastRefresh(repoName string, ts int64) {
+func (c *Config) SetRepoLastRefresh(repoName string, ts int64) error {
 	key := strings.ToUpper(repoName)
 	rc := c.Local[key]
 	rc.LastRefresh = ts
@@ -139,16 +146,16 @@ func (c *Config) SetRepoLastRefresh(repoName string, ts int64) {
 		rc.BasisBranch = "main"
 	}
 	c.Local[key] = rc
-	c.SaveLocal()
+	return c.SaveLocal()
 }
 
 // SetRepoBasisBranch updates the basis branch for a repo and saves.
-func (c *Config) SetRepoBasisBranch(repoName, branch string) {
+func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
 	key := strings.ToUpper(repoName)
 	rc := c.Local[key]
 	rc.BasisBranch = branch
 	c.Local[key] = rc
-	c.SaveLocal()
+	return c.SaveLocal()
 }
 
 // AICliLabel returns a display label derived from the AI CLI command.
@@ -189,8 +196,16 @@ func (c *Config) SaveGlobal() error {
 
 // SaveLocal writes the local config to {workDir}/.lts.conf
 func (c *Config) SaveLocal() error {
+	// Sort keys for deterministic output
+	keys := make([]string, 0, len(c.Local))
+	for key := range c.Local {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	var lines []string
-	for key, rc := range c.Local {
+	for _, key := range keys {
+		rc := c.Local[key]
 		lines = append(lines, fmt.Sprintf("%s_BASIS_BRANCH=\"%s\"", key, rc.BasisBranch))
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
