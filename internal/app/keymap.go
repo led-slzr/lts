@@ -48,16 +48,14 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "r":
 		if !m.loading {
-			m.loading = true
-			m.statusMsg = "Refreshing all repos..."
-			return m, refreshAllCmd(&m.config)
+			logFn, startCmd := m.beginLoading("Refreshing all repos...")
+			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 
 	case "c":
 		if !m.loading {
-			m.loading = true
-			m.statusMsg = "Cleaning up merged..."
-			return m, cleanupCmd(&m.config)
+			logFn, startCmd := m.beginLoading("Cleaning up merged...")
+			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
 		}
 
 	case "n":
@@ -74,6 +72,26 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			}
 		}
 		m.settings = ui.NewSettings(&m.config, repoNames)
+		return m, nil
+
+	case "l":
+		if m.logPanel.Visible {
+			m.logPanel.Clear()
+		}
+		return m, nil
+
+	case "up", "k":
+		if m.scrollY > 0 {
+			m.scrollY -= 2
+			if m.scrollY < 0 {
+				m.scrollY = 0
+			}
+		}
+		return m, nil
+
+	case "down", "j":
+		m.scrollY += 2
+		m.clampScroll()
 		return m, nil
 
 	case "esc":
@@ -122,9 +140,8 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 			m.statusMsg = "Refresh individual repos instead"
 			return m, clearStatusCmd()
 		}
-		m.loading = true
-		m.statusMsg = "Refreshing " + repo.Name + "..."
-		return m, singleRefreshCmd(repo.Path, m.config.GetRepoBasisBranch(repo.Name), repoIdx)
+		logFn, startCmd := m.beginLoading("Refreshing " + repo.Name + "...")
+		return m, tea.Batch(startCmd, singleRefreshCmd(logFn, repo.Path, m.config.GetRepoBasisBranch(repo.Name), repoIdx))
 
 	case ui.BtnBasis:
 		// Open rename-style input for basis branch
@@ -139,9 +156,8 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 	case ui.BtnRebase:
 		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[wtIdx]
-			m.loading = true
-			m.statusMsg = "Rebasing " + wt.Branch + "..."
-			return m, rebaseCmd(wt.Path, repo.MainBranch, repoIdx, wtIdx)
+			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, repoIdx, wtIdx))
 		}
 
 	case ui.BtnRename:
@@ -189,10 +205,9 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 		repo := m.repos[m.deleteRepoIdx]
 		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[m.deleteWTIdx]
-			m.loading = true
-			m.statusMsg = "Deleting " + wt.Branch + "..."
+			logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
 			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
-			return m, deleteCmd(repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi)
+			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi))
 		}
 	}
 	m.statusMsg = ""
@@ -328,7 +343,8 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			wt := repo.Worktrees[m.renameWTIdx]
 			repoIdx := m.renameRepoIdx
 			wtIdx := m.renameWTIdx
-			return m, renameCmd(wt.Path, value, repoIdx, wtIdx)
+			logFn, startCmd := m.beginLoading("Renaming branch...")
+			return m, tea.Batch(startCmd, renameCmd(logFn, wt.Path, value, repoIdx, wtIdx))
 		}
 		m.renameActive = false
 		return m, nil

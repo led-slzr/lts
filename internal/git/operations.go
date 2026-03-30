@@ -20,13 +20,36 @@ type CreateResult struct {
 	IsExisting    bool // true if checked out an existing branch
 }
 
+// LogFunc is a callback for streaming log messages to the UI.
+// ctx is the repo/operation context shown as [ctx] in the log panel.
+type LogFunc func(ctx, msg string, isError bool)
+
+// WithContext returns a LogFunc that always prefixes the given context.
+func WithContext(logFn LogFunc, ctx string) LogFunc {
+	return func(_ string, msg string, isError bool) {
+		logFn(ctx, msg, isError)
+	}
+}
+
 // CreateLog collects status messages during creation for UI display.
 type CreateLog struct {
-	Steps []string
+	Steps   []string
+	Stream  LogFunc // optional real-time callback
+	Context string  // repo context for streaming
 }
 
 func (l *CreateLog) Add(msg string) {
 	l.Steps = append(l.Steps, msg)
+	if l.Stream != nil {
+		l.Stream(l.Context, msg, false)
+	}
+}
+
+func (l *CreateLog) AddError(msg string) {
+	l.Steps = append(l.Steps, msg)
+	if l.Stream != nil {
+		l.Stream(l.Context, msg, true)
+	}
 }
 
 // ValidateBranchName checks if a branch name is valid.
@@ -137,8 +160,10 @@ func EnsureCleanMain(repoPath, basisBranch string, log *CreateLog) error {
 	_, diffErr := RunGit(repoPath, "diff", "--quiet", "HEAD")
 	_, cachedErr := RunGit(repoPath, "diff", "--cached", "--quiet")
 
+	log.Context = repoName
+
 	if diffErr != nil || cachedErr != nil {
-		log.Add(fmt.Sprintf("Stashing uncommitted changes in %s", repoName))
+		log.Add("Stashing uncommitted changes")
 		msg := fmt.Sprintf("LTS auto-stash %s", time.Now().Format("2006-01-02 15:04:05"))
 		RunGit(repoPath, "stash", "push", "-m", msg)
 	}
@@ -146,7 +171,7 @@ func EnsureCleanMain(repoPath, basisBranch string, log *CreateLog) error {
 	// Switch to main branch
 	currentBranch, _ := RunGit(repoPath, "rev-parse", "--abbrev-ref", "HEAD")
 	if currentBranch != mainBranch {
-		log.Add(fmt.Sprintf("Switching %s to %s", repoName, mainBranch))
+		log.Add("Switching to " + mainBranch)
 		_, err := RunGit(repoPath, "checkout", mainBranch)
 		if err != nil {
 			return fmt.Errorf("failed to checkout %s in %s", mainBranch, repoName)
@@ -154,10 +179,10 @@ func EnsureCleanMain(repoPath, basisBranch string, log *CreateLog) error {
 	}
 
 	// Pull latest (best-effort)
-	log.Add(fmt.Sprintf("Pulling latest for %s", repoName))
+	log.Add("Pulling latest")
 	_, pullErr := RunGit(repoPath, "pull", "origin", mainBranch, "--ff-only")
 	if pullErr != nil {
-		log.Add(fmt.Sprintf("Pull skipped for %s (continuing with local state)", repoName))
+		log.AddError("Pull skipped (continuing with local state)")
 	}
 
 	return nil
@@ -220,7 +245,8 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 	}
 
 	// Fetch remote
-	log.Add(fmt.Sprintf("Fetching remote for %s", repoName))
+	log.Context = repoName
+	log.Add("Fetching remote")
 	RunGit(repoPath, "fetch", "origin")
 
 	// Detect main branch
@@ -306,11 +332,12 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	for _, repoName := range sorted {
 		repoPath := filepath.Join(scriptDir, repoName)
 
-		log.Add(fmt.Sprintf("Processing %s", repoName))
+		log.Context = repoName
+		log.Add("Processing")
 
 		// Check for ongoing operations
 		if err := CheckOngoingOperations(repoPath); err != nil {
-			log.Add(fmt.Sprintf("Skipping %s: %s", repoName, err.Error()))
+			log.AddError("Skipping: " + err.Error())
 			continue
 		}
 
@@ -318,7 +345,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 		RunGit(repoPath, "worktree", "prune")
 
 		if err := EnsureCleanMain(repoPath, basisBranch, log); err != nil {
-			log.Add(fmt.Sprintf("Skipping %s: %s", repoName, err.Error()))
+			log.AddError("Skipping: " + err.Error())
 			continue
 		}
 
@@ -333,7 +360,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 		// Check if worktree already exists
 		if _, err := os.Stat(wtPath); err == nil {
 			if isWorktreeDir(wtPath) {
-				log.Add(fmt.Sprintf("Worktree already exists: %s", wtName))
+				log.Add("Worktree already exists: " + wtName)
 				results = append(results, &CreateResult{
 					WorktreePath: wtPath,
 					WorktreeName: wtName,
@@ -348,7 +375,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 		err := createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch, log)
 		if err != nil {
-			log.Add(fmt.Sprintf("Failed to create worktree for %s: %s", repoName, err.Error()))
+			log.AddError("Failed to create worktree: " + err.Error())
 			continue
 		}
 
@@ -397,7 +424,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 // 2. Branch exists on remote only
 // 3. Brand new branch
 func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch string, log *CreateLog) error {
-	repoName := filepath.Base(repoPath)
+	log.Context = filepath.Base(repoPath)
 
 	// Check if branch exists locally
 	_, localErr := RunGit(repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
@@ -407,7 +434,7 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 		if strings.Contains(wtList, "["+branch+"]") {
 			return fmt.Errorf("branch %s is already checked out in another worktree", branch)
 		}
-		log.Add(fmt.Sprintf("Checking out existing local branch %s for %s", branch, repoName))
+		log.Add("Checking out existing local branch " + branch)
 		_, err := RunGit(repoPath, "worktree", "add", wtPath, branch)
 		return err
 	}
@@ -415,7 +442,7 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 	// Check if branch exists on remote
 	_, remoteErr := RunGit(repoPath, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
 	if remoteErr == nil {
-		log.Add(fmt.Sprintf("Checking out remote branch %s for %s", branch, repoName))
+		log.Add("Checking out remote branch " + branch)
 		_, err := RunGit(repoPath, "worktree", "add", "--track", "-b", branch, wtPath, "origin/"+branch)
 		if err != nil {
 			// Fallback: maybe local branch was created between check and add
@@ -425,7 +452,7 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 	}
 
 	// New branch from main
-	log.Add(fmt.Sprintf("Creating new branch %s for %s from %s", branch, repoName, mainBranch))
+	log.Add("Creating new branch " + branch + " from " + mainBranch)
 	_, err := RunGit(repoPath, "worktree", "add", "-b", branch, wtPath, mainBranch)
 	return err
 }
@@ -494,7 +521,7 @@ func runPackageInstall(wtPath, pkgManager string, log *CreateLog) {
 	}
 	// Check if package manager is available
 	if _, err := exec.LookPath(pkgManager); err != nil {
-		log.Add(fmt.Sprintf("Package manager '%s' not found, skipping install", pkgManager))
+		log.AddError("Package manager '" + pkgManager + "' not found, skipping install")
 		return
 	}
 	// Check for package.json
@@ -502,7 +529,7 @@ func runPackageInstall(wtPath, pkgManager string, log *CreateLog) {
 		return
 	}
 
-	log.Add(fmt.Sprintf("Installing dependencies with %s", pkgManager))
+	log.Add("Installing dependencies with " + pkgManager)
 
 	var args []string
 	switch pkgManager {
@@ -522,7 +549,7 @@ func runPackageInstall(wtPath, pkgManager string, log *CreateLog) {
 	cmd.Dir = wtPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Add(fmt.Sprintf("%s install completed with warnings", pkgManager))
+		log.AddError(pkgManager + " install completed with warnings")
 		_ = out
 	} else {
 		log.Add("Dependencies installed")
@@ -616,7 +643,14 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 }
 
 // RefreshRepo fetches latest and updates the main branch ref.
-func RefreshRepo(repoPath, basisBranch string) error {
+func RefreshRepo(repoPath, basisBranch string, logFn ...LogFunc) error {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+	repoName := filepath.Base(repoPath)
+
+	log(repoName, "Fetching from origin...", false)
 	_, err := RunGit(repoPath, "fetch", "origin")
 	if err != nil {
 		return fmt.Errorf("fetch failed: %w", err)
@@ -629,28 +663,50 @@ func RefreshRepo(repoPath, basisBranch string) error {
 
 	currentBranch, _ := RunGit(repoPath, "branch", "--show-current")
 	if currentBranch == mainBranch {
+		log(repoName, "Pulling "+mainBranch+" (ff-only)...", false)
 		RunGit(repoPath, "pull", "origin", mainBranch, "--ff-only")
 	} else {
+		log(repoName, "Updating "+mainBranch+" ref...", false)
 		RunGit(repoPath, "fetch", "origin", mainBranch+":"+mainBranch)
 	}
 
+	log(repoName, "Refresh complete", false)
 	return nil
 }
 
+// noopLog is a no-op LogFunc for when no logger is provided.
+func noopLog(_, _ string, _ bool) {}
+
 // RefreshAllRepos refreshes all repos in the script directory.
 // Returns (refreshed count, failed repo names, error).
-func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver) (int, []string, error) {
+func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn ...LogFunc) (int, []string, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	refreshed := 0
 	var failed []string
 	var lastErr error
+	total := 0
+	for _, r := range repos {
+		if !r.IsMonorepo {
+			total++
+		}
+	}
+
+	idx := 0
 	for _, r := range repos {
 		if r.IsMonorepo {
 			continue
 		}
-		if err := RefreshRepo(r.Path, getBasisBranch(r.Name)); err != nil {
+		idx++
+		log(r.Name, fmt.Sprintf("Refreshing repo %d/%d", idx, total), false)
+		if err := RefreshRepo(r.Path, getBasisBranch(r.Name), log); err != nil {
 			failed = append(failed, r.Name)
 			lastErr = err
+			log(r.Name, "Failed: "+err.Error(), true)
 		} else {
 			refreshed++
 		}
@@ -662,24 +718,47 @@ func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver) (int,
 }
 
 // DeleteWorktree removes a worktree, its workspace file, and optionally its branch.
-func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool) error {
-	// Safety: validate wtPath is inside an -lts directory
-	if !strings.Contains(wtPath, "-lts") {
+func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool, logFn ...LogFunc) error {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	// Safety: validate wtPath is inside an -lts directory by checking ancestors
+	cleanPath := filepath.Clean(wtPath)
+	inLTS := false
+	for dir := filepath.Dir(cleanPath); dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if strings.HasSuffix(filepath.Base(dir), "-lts") {
+			inLTS = true
+			break
+		}
+	}
+	if !inLTS {
 		return fmt.Errorf("refusing to delete path outside LTS directory: %s", wtPath)
+	}
+
+	// Use branch as context identifier
+	ctx := branch
+	if ctx == "" {
+		ctx = filepath.Base(wtPath)
 	}
 
 	// Remove individual workspace file (sibling of worktree dir)
 	wtName := filepath.Base(wtPath)
 	wsFile := filepath.Join(filepath.Dir(wtPath), wtName+".code-workspace")
-	os.Remove(wsFile) // best-effort
+	if _, err := os.Stat(wsFile); err == nil {
+		log(ctx, "Removing workspace file", false)
+		os.Remove(wsFile)
+	}
 
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
-		// Missing worktree — just prune git refs
+		log(ctx, "Worktree directory missing — pruning git refs", false)
 		RunGit(repoPath, "worktree", "prune")
 	} else {
+		log(ctx, "Removing worktree directory", false)
 		_, err := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
 		if err != nil {
-			// Fallback: manual removal only if it's a valid worktree dir
+			log(ctx, "Force remove failed, falling back to manual cleanup", true)
 			if isWorktreeDir(wtPath) {
 				os.RemoveAll(wtPath)
 			}
@@ -688,22 +767,28 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool) error {
 	}
 
 	if branch != "" && !IsProtectedBranch(branch) {
+		log(ctx, "Deleting local branch", false)
 		RunGit(repoPath, "branch", "-D", branch)
 	}
 
 	if deleteRemote && branch != "" && !IsProtectedBranch(branch) {
+		log(ctx, "Deleting remote branch", false)
 		RunGit(repoPath, "push", "origin", "--delete", branch)
 	}
 
 	// Clean up empty parent directories inside -lts structure
+	log(ctx, "Cleaning up empty directories", false)
 	cleanEmptyLTSDirs(filepath.Dir(wtPath))
 
 	return nil
 }
 
-// cleanEmptyLTSDirs removes empty directories up to (but not including) the -lts root.
+// cleanEmptyLTSDirs removes empty directories up to and including the -lts root.
 func cleanEmptyLTSDirs(dir string) {
 	for {
+		if _, err := os.Stat(dir); err != nil {
+			return // directory already gone
+		}
 		base := filepath.Base(dir)
 		if strings.HasSuffix(base, "-lts") {
 			// Check if the LTS dir itself is now empty (ignoring metadata files)
@@ -739,24 +824,37 @@ func cleanEmptyLTSDirs(dir string) {
 }
 
 // RebaseWorktree rebases a worktree onto its main branch.
-func RebaseWorktree(wtPath, mainBranch string) error {
+func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	ctx, _ := RunGit(wtPath, "branch", "--show-current")
+	if ctx == "" {
+		ctx = filepath.Base(wtPath)
+	}
+
+	log(ctx, "Checking for uncommitted changes...", false)
 	status, _ := RunGit(wtPath, "status", "--porcelain")
 	hasChanges := status != ""
 
 	if hasChanges {
+		log(ctx, "Stashing uncommitted changes", false)
 		_, err := RunGit(wtPath, "stash", "push", "-m", "lts-rebase-auto-stash")
 		if err != nil {
 			return fmt.Errorf("failed to stash changes: %w", err)
 		}
 	}
 
+	log(ctx, "Rebasing onto "+mainBranch+"...", false)
 	_, err := RunGit(wtPath, "rebase", mainBranch)
 	if err != nil {
-		// Abort the failed rebase
+		log(ctx, "Rebase conflict detected — aborting", true)
 		_, abortErr := RunGit(wtPath, "rebase", "--abort")
 
 		if hasChanges {
-			// Restore stashed changes
+			log(ctx, "Restoring stashed changes", false)
 			_, popErr := RunGit(wtPath, "stash", "pop")
 			if popErr != nil {
 				return fmt.Errorf("rebase conflict — aborted, but failed to restore stashed changes (run 'git stash pop' manually)")
@@ -770,12 +868,14 @@ func RebaseWorktree(wtPath, mainBranch string) error {
 	}
 
 	if hasChanges {
+		log(ctx, "Restoring stashed changes", false)
 		_, popErr := RunGit(wtPath, "stash", "pop")
 		if popErr != nil {
 			return fmt.Errorf("rebase succeeded but failed to restore stashed changes (run 'git stash pop' manually)")
 		}
 	}
 
+	log(ctx, "Rebase complete", false)
 	return nil
 }
 
@@ -787,24 +887,47 @@ func RenameWorktreeBranch(wtPath, newBranch string) error {
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.
 // Also cleans up workspace files and empty directories.
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver) (int, error) {
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, logFn ...LogFunc) (int, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	log("cleanup", "Discovering repos and scanning worktree statuses...", false)
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	cleaned := 0
+
+	// Count candidates first
+	candidates := 0
+	for _, repo := range repos {
+		for _, wt := range repo.Worktrees {
+			if wt.Status == StatusMergedCleanable {
+				candidates++
+			}
+		}
+	}
+	if candidates == 0 {
+		log("cleanup", "No merged cleanable worktrees found", false)
+		return 0, nil
+	}
+	log("cleanup", fmt.Sprintf("Found %d merged cleanable worktrees", candidates), false)
 
 	for _, repo := range repos {
 		for _, wt := range repo.Worktrees {
 			if wt.Status == StatusMergedCleanable {
 				repoPath := repo.Path
-				// For monorepo cards, resolve the actual repo path
 				if repo.IsMonorepo && len(repo.RepoNames) > 0 {
 					repoPath = filepath.Join(scriptDir, repo.RepoNames[0])
 				}
 				if repoPath == "" {
 					continue
 				}
-				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, false)
+				log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
+				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, false, log)
 				if err == nil {
 					cleaned++
+				} else {
+					log(wt.Branch, "Failed: "+err.Error(), true)
 				}
 			}
 		}

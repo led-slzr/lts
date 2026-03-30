@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v2.1.0](https://img.shields.io/badge/version-2.1.0-green)
+![LTS v2.2.0](https://img.shields.io/badge/version-2.2.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -59,6 +59,7 @@ lts --version          # Print version
 | `n` | Create new worktree |
 | `r` | Refresh all repos |
 | `c` | Cleanup merged worktrees |
+| `l` | Clear log panel |
 | `s` | Open settings |
 | `q` / `Ctrl+C` | Quit |
 | `Esc` | Close modal / clear selection |
@@ -72,6 +73,7 @@ lts --version          # Print version
 | Click `[▸]` | Context menu (Rebase / Rename / Delete) |
 | Click worktree | Opens in active click usage mode |
 | Click footer buttons | Refresh All, Cleanup Merged, Settings, Exit |
+| Scroll wheel (log area) | Scroll through log history |
 
 ## Config
 

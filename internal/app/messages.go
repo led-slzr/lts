@@ -49,6 +49,13 @@ type CleanupMergedDoneMsg struct {
 	Err     error
 }
 
+// LogEntryMsg is sent when an async operation produces a log line.
+type LogEntryMsg struct {
+	Context string // repo/operation context
+	Message string
+	IsError bool
+}
+
 // StatusClearMsg clears the status bar.
 type StatusClearMsg struct{}
 
