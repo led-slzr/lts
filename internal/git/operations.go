@@ -879,10 +879,251 @@ func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
 	return nil
 }
 
-// RenameWorktreeBranch renames the branch in a worktree.
-func RenameWorktreeBranch(wtPath, newBranch string) error {
-	_, err := RunGit(wtPath, "branch", "-m", newBranch)
-	return err
+// RenameResult holds the outcome of a worktree rename operation.
+type RenameResult struct {
+	NewPath string // new worktree directory path
+}
+
+// RenameWorktree fully renames a worktree: branch, directory, workspace file, and optionally remote.
+// repoPath is the bare/main repo, wtPath is the current worktree directory.
+func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd string, logFn ...LogFunc) (*RenameResult, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	ctx := newBranch
+
+	// 1. Rename the local git branch
+	log(ctx, "Renaming branch to "+newBranch, false)
+	if _, err := RunGit(wtPath, "branch", "-m", newBranch); err != nil {
+		return nil, fmt.Errorf("git branch -m failed: %w", err)
+	}
+
+	// 2. Compute new directory name and move the worktree
+	ltsDir := filepath.Dir(wtPath)
+	oldWtName := filepath.Base(wtPath)
+	repoName := filepath.Base(repoPath)
+	newSuffix := ExtractSuffix(newBranch)
+	safeSuffix := SanitizeForFilename(newSuffix)
+	idealName := repoName + "-" + safeSuffix
+
+	// If the ideal name matches the current directory, no move needed.
+	// Otherwise, generate a unique name (which avoids collisions with OTHER dirs).
+	var newWtName string
+	if idealName == oldWtName {
+		newWtName = oldWtName
+	} else {
+		newWtName = GenerateUniqueWorktreeName(repoName, newSuffix, ltsDir)
+	}
+	newWtPath := filepath.Join(ltsDir, newWtName)
+
+	if newWtPath != wtPath {
+		log(ctx, "Moving worktree directory", false)
+		// Use --force to allow moving dirty/locked worktrees
+		if _, err := RunGit(repoPath, "worktree", "move", "--force", wtPath, newWtPath); err != nil {
+			// If git worktree move fails (e.g. old git version), fall back to OS rename
+			log(ctx, "git worktree move not available, using fallback", false)
+			if err2 := os.Rename(wtPath, newWtPath); err2 != nil {
+				// Revert branch name on failure (dir is still at wtPath)
+				RunGit(wtPath, "branch", "-m", oldBranch)
+				return nil, fmt.Errorf("move worktree directory failed: %w", err2)
+			}
+			RunGit(repoPath, "worktree", "repair")
+		}
+	}
+
+	// 3. Rename the workspace file and regenerate its contents
+	oldWsFile := filepath.Join(ltsDir, oldWtName+".code-workspace")
+	if _, err := os.Stat(oldWsFile); err == nil {
+		log(ctx, "Removing old workspace file", false)
+		os.Remove(oldWsFile)
+	}
+	log(ctx, "Generating new workspace file", false)
+	generateIndividualWorkspace(ltsDir, newWtName, pkgMgr, aiCliCmd)
+
+	// 4. Handle remote branch if requested
+	if renameRemote && oldBranch != "" && !IsProtectedBranch(oldBranch) {
+		// Unset stale upstream first — the old tracking (origin/oldBranch) is now wrong
+		// regardless of whether the push succeeds. This prevents accidental pushes
+		// to the old remote branch on partial failure.
+		RunGit(newWtPath, "branch", "--unset-upstream")
+
+		log(ctx, "Pushing new remote branch", false)
+		if _, err := RunGit(newWtPath, "push", "origin", newBranch); err != nil {
+			log(ctx, "Push new branch failed: "+err.Error(), true)
+		} else {
+			// Set upstream tracking to the new remote branch
+			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
+
+			log(ctx, "Deleting old remote branch", false)
+			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
+				log(ctx, "Delete old remote branch failed: "+err.Error(), true)
+			}
+		}
+	}
+
+	log(ctx, "Rename complete", false)
+	return &RenameResult{NewPath: newWtPath}, nil
+}
+
+// RenameMonorepoWorktrees renames all worktrees in a monorepo branch group atomically.
+// branchSubdirPath is the branch subdirectory containing all repo worktrees (e.g. .../core-erp-ui-lts/core-erp-ui-feat-login/).
+// scriptDir is the root working directory where repos live.
+// repoNames are the constituent repo names (e.g. ["core", "erp-ui"]).
+func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd string, logFn ...LogFunc) (*RenameResult, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	ctx := newBranch
+	ltsPath := filepath.Dir(branchSubdirPath)
+	newSuffix := ExtractSuffix(newBranch)
+	newSafeSuffix := SanitizeForFilename(newSuffix)
+
+	// Discover all worktree directories inside the branch subdir
+	entries, err := os.ReadDir(branchSubdirPath)
+	if err != nil {
+		return nil, fmt.Errorf("read branch subdir: %w", err)
+	}
+
+	type wtInfo struct {
+		path     string
+		repoName string
+		repoPath string
+	}
+	var worktrees []wtInfo
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(branchSubdirPath, e.Name())
+		if !isWorktreeDir(dirPath) {
+			continue
+		}
+		// Match directory to repo name by prefix (e.g. "core-feat-login" → repo "core")
+		// Try longest repo names first to avoid "core" matching "core-api-feat-login"
+		bestMatch := ""
+		for _, rn := range repoNames {
+			if strings.HasPrefix(e.Name(), rn+"-") && len(rn) > len(bestMatch) {
+				bestMatch = rn
+			}
+		}
+		if bestMatch != "" {
+			worktrees = append(worktrees, wtInfo{
+				path:     dirPath,
+				repoName: bestMatch,
+				repoPath: filepath.Join(scriptDir, bestMatch),
+			})
+		}
+	}
+
+	if len(worktrees) == 0 {
+		return nil, fmt.Errorf("no worktrees found in branch subdir")
+	}
+
+	// 1. Rename git branch in each worktree
+	for _, wt := range worktrees {
+		log(ctx, "Renaming branch in "+wt.repoName, false)
+		if _, err := RunGit(wt.path, "branch", "-m", newBranch); err != nil {
+			return nil, fmt.Errorf("git branch -m failed in %s: %w", wt.repoName, err)
+		}
+	}
+
+	// 2. Move each worktree directory and regenerate individual workspace files
+	var repoWTPairs []string
+	for i, wt := range worktrees {
+		oldWtName := filepath.Base(wt.path)
+		idealName := wt.repoName + "-" + newSafeSuffix
+		var newWtName string
+		if idealName == oldWtName {
+			newWtName = oldWtName
+		} else {
+			newWtName = GenerateUniqueWorktreeName(wt.repoName, newSuffix, branchSubdirPath)
+		}
+		newWtPath := filepath.Join(branchSubdirPath, newWtName)
+
+		if newWtPath != wt.path {
+			log(ctx, "Moving "+wt.repoName+" worktree directory", false)
+			if _, err := RunGit(wt.repoPath, "worktree", "move", "--force", wt.path, newWtPath); err != nil {
+				log(ctx, "git worktree move not available for "+wt.repoName+", using fallback", false)
+				if err2 := os.Rename(wt.path, newWtPath); err2 != nil {
+					log(ctx, "Move failed for "+wt.repoName+": "+err2.Error(), true)
+					continue
+				}
+				RunGit(wt.repoPath, "worktree", "repair")
+			}
+			worktrees[i].path = newWtPath
+		}
+
+		// Remove old individual workspace file
+		oldWsFile := filepath.Join(branchSubdirPath, oldWtName+".code-workspace")
+		if _, err := os.Stat(oldWsFile); err == nil {
+			os.Remove(oldWsFile)
+		}
+		// Generate new individual workspace
+		generateIndividualWorkspace(branchSubdirPath, newWtName, pkgMgr, aiCliCmd)
+
+		repoWTPairs = append(repoWTPairs, wt.repoName+":"+newWtName)
+	}
+
+	// 3. Remove old monorepo workspace file and generate new one
+	oldSuffix := ExtractSuffix(oldBranch)
+	oldSafeSuffix := SanitizeForFilename(oldSuffix)
+	oldMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+oldSafeSuffix+".code-workspace")
+	if _, err := os.Stat(oldMonoWs); err == nil {
+		log(ctx, "Removing old monorepo workspace", false)
+		os.Remove(oldMonoWs)
+	}
+	if len(repoWTPairs) >= 2 {
+		log(ctx, "Generating new monorepo workspace", false)
+		generateMonorepoWorkspace(branchSubdirPath, newSafeSuffix, repoWTPairs)
+	}
+
+	// 4. Rename the branch subdirectory itself
+	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
+	newBranchSubdir := ltsPrefix + "-" + newSafeSuffix
+	newBranchSubdirPath := filepath.Join(ltsPath, newBranchSubdir)
+
+	if newBranchSubdirPath != branchSubdirPath {
+		log(ctx, "Renaming branch subdirectory", false)
+		if err := os.Rename(branchSubdirPath, newBranchSubdirPath); err != nil {
+			log(ctx, "Branch subdir rename failed: "+err.Error(), true)
+			// Non-fatal — worktrees still work at old subdir path
+			newBranchSubdirPath = branchSubdirPath
+		}
+		// Repair all worktrees after moving the parent directory
+		for _, wt := range worktrees {
+			RunGit(wt.repoPath, "worktree", "repair")
+		}
+	}
+
+	// 5. Handle remote branches if requested
+	if renameRemote && oldBranch != "" && !IsProtectedBranch(oldBranch) {
+		for _, wt := range worktrees {
+			// Re-compute path after potential subdir rename
+			newWtPath := filepath.Join(newBranchSubdirPath, filepath.Base(wt.path))
+
+			RunGit(newWtPath, "branch", "--unset-upstream")
+
+			log(ctx, "Pushing new remote branch for "+wt.repoName, false)
+			if _, err := RunGit(newWtPath, "push", "origin", newBranch); err != nil {
+				log(ctx, "Push failed for "+wt.repoName+": "+err.Error(), true)
+				continue
+			}
+			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
+
+			log(ctx, "Deleting old remote branch for "+wt.repoName, false)
+			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
+				log(ctx, "Delete old remote failed for "+wt.repoName+": "+err.Error(), true)
+			}
+		}
+	}
+
+	log(ctx, "Rename complete for all repos", false)
+	return &RenameResult{NewPath: newBranchSubdirPath}, nil
 }
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.

@@ -43,10 +43,11 @@ type Model struct {
 	settings ui.SettingsModel
 
 	// Rename input
-	renameActive  bool
-	renameInput   textinput.Model
-	renameRepoIdx int
-	renameWTIdx   int
+	renameActive       bool
+	renameInput        textinput.Model
+	renameRepoIdx      int
+	renameWTIdx        int
+	renameRemoteBranch bool // true = also rename remote branch (push new, delete old)
 
 	// Loading animation
 	initialLoad bool // true until first ReposLoadedMsg
@@ -792,22 +793,40 @@ func (m Model) View() string {
 func (m Model) renderRenameDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
 
 	title := "Rename Branch"
 	context := ""
-	if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+	isBasisChange := m.renameWTIdx == -2
+	if isBasisChange && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
 		title = "Change Basis Branch"
 		context = "Repository: " + m.repos[m.renameRepoIdx].Name
 	} else if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) && m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
-		wt := m.repos[m.renameRepoIdx].Worktrees[m.renameWTIdx]
+		repo := m.repos[m.renameRepoIdx]
+		wt := repo.Worktrees[m.renameWTIdx]
 		context = "Current: " + wt.Branch
+		if repo.IsMonorepo {
+			title = "Rename Branch (all " + fmt.Sprintf("%d", len(repo.RepoNames)) + " repos)"
+		}
 	}
 
 	content := titleStyle.Render(title) + "\n\n"
 	if context != "" {
 		content += dimStyle.Render(context) + "\n\n"
 	}
-	content += m.renameInput.View() + "\n\n"
+	content += m.renameInput.View() + "\n"
+
+	// Show remote branch toggle for actual renames (not basis branch changes)
+	if !isBasisChange && renameHasRemote(m) {
+		content += "\n"
+		if m.renameRemoteBranch {
+			content += whiteStyle.Render("  [ctrl+d] ✓ Rename remote branch") + "\n"
+		} else {
+			content += dimStyle.Render("  [ctrl+d] Rename remote branch") + "\n"
+		}
+	}
+
+	content += "\n"
 	content += dimStyle.Render("enter confirm • esc cancel")
 
 	modal := ui.ModalStyle.Width(50).Render(content)
@@ -1094,14 +1113,23 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cm
 	}
 }
 
-func renameCmd(logFn git.LogFunc, wtPath, newBranch string, repoIdx, wtIdx int) tea.Cmd {
+func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		logFn(newBranch, "Renaming branch", false)
-		err := git.RenameWorktreeBranch(wtPath, newBranch)
+		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
-		} else {
-			logFn(newBranch, "Branch renamed", false)
+		}
+		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+	}
+}
+
+func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
+	return func() tea.Msg {
+		_, err := git.RenameMonorepoWorktrees(cfg.WorkDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+		if err != nil {
+			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
 		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
