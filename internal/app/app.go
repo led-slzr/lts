@@ -27,11 +27,13 @@ type Model struct {
 	statusMsg   string
 
 	// Pre-computed layout (computed in Update, used in View)
-	gridResult ui.GridResult
-	headerView string
-	headerH    int
-	footerY    int
-	createBtnY int
+	gridResult    ui.GridResult
+	headerView    string
+	headerH       int
+	footerY       int
+	createBtnY    int
+	scrollY       int // vertical scroll offset for main content area (lines)
+	contentHeight int // total height of scrollable content (grid + legend + create btn)
 
 	// Modal
 	modal    ui.ModalModel
@@ -58,6 +60,13 @@ type Model struct {
 	deleteConfirmActive bool
 	deleteRepoIdx       int
 	deleteWTIdx         int
+	deleteTypedInput    textinput.Model // for "type DELETE" confirmation
+	deleteDangerous     bool            // true = requires typing DELETE
+	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
+
+	// Log panel
+	logPanel ui.LogPanelModel
+	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
 }
 
 func NewModel(cfg config.Config) Model {
@@ -66,13 +75,20 @@ func NewModel(cfg config.Config) Model {
 	ti.CharLimit = 100
 	ti.Width = 40
 
+	di := textinput.New()
+	di.Placeholder = "DELETE"
+	di.CharLimit = 6
+	di.Width = 10
+
 	return Model{
-		config:      cfg,
-		focusedCard: -1,
-		focusedWT:   -1,
-		hoveredBtn:  ui.BtnNone,
-		renameInput: ti,
-		initialLoad: true,
+		config:           cfg,
+		focusedCard:      -1,
+		focusedWT:        -1,
+		hoveredBtn:       ui.BtnNone,
+		renameInput:      ti,
+		deleteTypedInput: di,
+		initialLoad:      true,
+		logPanel:         ui.NewLogPanel(),
 	}
 }
 
@@ -85,23 +101,20 @@ func (m *Model) recomputeLayout() {
 
 	yPos := 0
 
-	// Header
-	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel())
+	// Header (includes status line) — fixed, not scrollable
+	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel(), ui.HeaderOpts{
+		Loading:   m.loading,
+		Frame:     m.loaderFrame,
+		StatusMsg: m.statusMsg,
+	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
 
-	// Loading indicator
-	if m.loading {
-		loadingStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorYellow).
-			Margin(0, ui.MarginH)
-		loadingLine := loadingStyle.Render("⏳ " + m.statusMsg)
-		yPos += lipgloss.Height(loadingLine)
-	}
-
-	// Grid
+	// Grid — pass virtual yPos (header + scroll offset applied later)
+	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
 	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn)
-	yPos += lipgloss.Height(m.gridResult.View)
+	gridH := lipgloss.Height(m.gridResult.View)
+	yPos += gridH
 
 	// Status legend
 	legend := ui.RenderStatusLegend(m.width)
@@ -112,19 +125,34 @@ func (m *Model) recomputeLayout() {
 	createBtn := ui.RenderCreateButton(m.width, false)
 	yPos += lipgloss.Height(createBtn)
 
-	// Status bar
-	if !m.loading && m.statusMsg != "" {
-		statusBar := ui.RenderStatusBar(m.statusMsg, m.width)
-		yPos += lipgloss.Height(statusBar)
-	}
+	// Total scrollable content height (everything between header and footer)
+	m.contentHeight = yPos - m.headerH
 
-	// Rename input
-	if m.renameActive {
-		yPos += 1
-	}
-
-	// Footer
+	// Footer — fixed at bottom
+	// footerY is where the footer renders on screen (after visible content)
 	m.footerY = yPos
+
+	// Clamp scroll
+	m.clampScroll()
+}
+
+// clampScroll ensures scrollY stays within valid bounds.
+func (m *Model) clampScroll() {
+	// Available viewport height = terminal height - header - footer(~1 line) - 1
+	viewportH := m.height - m.headerH - 2
+	if viewportH < 1 {
+		viewportH = 1
+	}
+	maxScroll := m.contentHeight - viewportH
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.scrollY > maxScroll {
+		m.scrollY = maxScroll
+	}
+	if m.scrollY < 0 {
+		m.scrollY = 0
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -160,8 +188,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 
 	case LoaderTickMsg:
-		if m.initialLoad {
+		if m.initialLoad || m.loading {
 			m.loaderFrame++
+			m.recomputeLayout()
 			return m, loaderTickCmd()
 		}
 		return m, nil
@@ -311,16 +340,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			clearStatusCmd(),
 		)
 
-	case StatusClearMsg:
-		m.statusMsg = ""
+	case LogEntryMsg:
+		m.logPanel.Add(msg.Context, msg.Message, msg.IsError)
 		m.recomputeLayout()
+		// Re-subscribe to get the next log entry
+		if m.logChan != nil {
+			return m, listenForLogs(m.logChan)
+		}
+		return m, nil
+
+	case StatusClearMsg:
+		// Don't clear status while an operation is running
+		if !m.loading {
+			m.statusMsg = ""
+			m.recomputeLayout()
+		}
 		return m, nil
 
 	case ui.ModalCreateMsg:
 		if len(msg.RepoNames) > 0 {
-			m.loading = true
-			m.statusMsg = "Creating worktree..."
-			return m, createWorktreeCmd(msg.RepoNames, msg.Branch, &m.config)
+			logFn, startCmd := m.beginLoading("Creating worktree...")
+			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, &m.config))
 		}
 		return m, nil
 
@@ -350,38 +390,60 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Mouse wheel: scroll grid area or log panel
+	if msg.Action == tea.MouseActionPress {
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			// Determine which area the cursor is in
+			screenFooterY := m.headerH + m.contentHeight - m.scrollY
+			inLogArea := m.logPanel.Visible && msg.Y > screenFooterY+1
+
+			if inLogArea {
+				if msg.Button == tea.MouseButtonWheelUp {
+					m.logPanel.ScrollUp(1)
+				} else {
+					m.logPanel.ScrollDown(1)
+				}
+			} else {
+				// Scroll main content
+				if msg.Button == tea.MouseButtonWheelUp {
+					m.scrollY -= 2
+				} else {
+					m.scrollY += 2
+				}
+				m.clampScroll()
+				m.recomputeLayout()
+			}
+			return m, nil
+		}
+	}
+
 	x, y := msg.X, msg.Y
+	// Translate screen Y to virtual Y for hit testing (account for scroll)
+	virtualY := y + m.scrollY
 
 	switch msg.Action {
 	case tea.MouseActionMotion:
 		m.hoveredBtn = ui.BtnNone
 
-		// Check footer buttons
-		if y >= m.footerY && m.footerY > 0 {
+		// Check footer buttons (footer is at fixed screen position)
+		screenFooterY := m.headerH + m.contentHeight - m.scrollY
+		if y >= screenFooterY && screenFooterY > 0 {
 			m.focusedCard = -1
 			m.focusedWT = -1
 			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
 			return m, nil
 		}
 
-		// Check create button
-		if y >= m.createBtnY && y < m.createBtnY+3 && m.createBtnY > 0 {
-			m.focusedCard = -1
-			m.focusedWT = -1
-			m.hoveredBtn = ui.BtnCreateWT
-			return m, nil
-		}
-
-		// Hit test grid
-		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, y)
+		// Hit test grid (using virtual Y)
+		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
 		if btn != ui.BtnNone {
 			m.hoveredBtn = btn
 		}
 
-		// Detect inline buttons when hovering repo header or worktree
-		if repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		// Detect inline buttons when hovering repo header or worktree (suppress during loading)
+		if !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -396,16 +458,16 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Hit-test at click position
-		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, y)
+		// Hit-test at click position (using virtual Y)
+		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
 		if btn != ui.BtnNone {
 			m.hoveredBtn = btn
 		}
 
-		// Detect inline buttons on click
-		if repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		// Detect inline buttons on click (suppress during loading)
+		if !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -413,11 +475,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check footer/create at click position
-		if y >= m.footerY && m.footerY > 0 {
+		// Check footer at click position (fixed screen position)
+		screenFooterY := m.headerH + m.contentHeight - m.scrollY
+		if y >= screenFooterY && screenFooterY > 0 {
 			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
 		}
-		if y >= m.createBtnY && y < m.createBtnY+3 && m.createBtnY > 0 {
+
+		// Check create button (virtual Y)
+		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			m.hoveredBtn = ui.BtnCreateWT
 		}
 
@@ -427,14 +492,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 		// Footer buttons
 		if m.hoveredBtn == ui.BtnRefreshAll {
-			m.loading = true
-			m.statusMsg = "Refreshing all repos..."
-			return m, refreshAllCmd(&m.config)
+			logFn, startCmd := m.beginLoading("Refreshing all repos...")
+			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 		if m.hoveredBtn == ui.BtnCleanupMerged {
-			m.loading = true
-			m.statusMsg = "Cleaning up merged..."
-			return m, cleanupCmd(&m.config)
+			logFn, startCmd := m.beginLoading("Cleaning up merged...")
+			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
 		}
 		if m.hoveredBtn == ui.BtnSettings {
 			var repoNames []string
@@ -505,6 +568,13 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	// Minimum terminal size check
+	minWidth, minHeight := 60, 20
+	if m.width < minWidth || m.height < minHeight {
+		msg := ui.RenderResizePrompt(m.width, m.height, minWidth, minHeight)
+		return paintBlack(msg, m.width, m.height)
+	}
+
 	// Show tree growth animation during initial load
 	if m.initialLoad {
 		header := ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel())
@@ -515,34 +585,63 @@ func (m Model) View() string {
 
 	var sections []string
 
-	// Header (pre-computed)
+	// Header (pre-computed, includes status line) — fixed at top
 	sections = append(sections, m.headerView)
 
-	// Loading indicator
-	if m.loading {
-		loadingStyle := lipgloss.NewStyle().
-			Foreground(ui.ColorYellow).
-			Background(ui.ColorBlack).
-			Margin(0, ui.MarginH)
-		sections = append(sections, loadingStyle.Render("⏳ "+m.statusMsg))
+	// --- Scrollable content area ---
+	var scrollable []string
+	scrollable = append(scrollable, m.gridResult.View)
+	scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
+	scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+	scrollContent := strings.Join(scrollable, "\n")
+
+	// Apply vertical scroll: slice visible lines from the scrollable content
+	scrollLines := strings.Split(scrollContent, "\n")
+	viewportH := m.height - m.headerH - 2 // reserve: footer(1) + buffer(1)
+	if viewportH < 1 {
+		viewportH = 1
 	}
 
-	// Grid (pre-computed)
-	sections = append(sections, m.gridResult.View)
-
-	// Status color legend
-	sections = append(sections, ui.RenderStatusLegend(m.width))
-
-	// Create button
-	sections = append(sections, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
-
-	// Status bar
-	if !m.loading && m.statusMsg != "" {
-		sections = append(sections, ui.RenderStatusBar(m.statusMsg, m.width))
+	// Check if scroll indicator will be needed (reserve 1 line for it)
+	needsIndicator := len(scrollLines) > viewportH
+	if needsIndicator && viewportH > 2 {
+		viewportH-- // reserve line for scroll indicator
 	}
 
-	// Footer
+	startLine := m.scrollY
+	if startLine > len(scrollLines) {
+		startLine = len(scrollLines)
+	}
+	endLine := startLine + viewportH
+	if endLine > len(scrollLines) {
+		endLine = len(scrollLines)
+	}
+	visibleLines := scrollLines[startLine:endLine]
+
+	// Scroll indicator
+	canScrollUp := m.scrollY > 0
+	canScrollDown := endLine < len(scrollLines)
+	if canScrollUp || canScrollDown {
+		indicator := ui.RenderScrollIndicator(m.width, canScrollUp, canScrollDown)
+		visibleLines = append(visibleLines, indicator)
+	}
+
+	sections = append(sections, strings.Join(visibleLines, "\n"))
+
+	// Footer — fixed at bottom
 	sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+
+	// Log panel (fills remaining space below footer)
+	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
+		footerScreenY := m.headerH + len(visibleLines) + 1
+		availHeight := m.height - footerScreenY - 2
+		if availHeight > 3 {
+			logView := ui.RenderLogPanel(m.logPanel, m.width, availHeight)
+			if logView != "" {
+				sections = append(sections, logView)
+			}
+		}
+	}
 
 	content := strings.Join(sections, "\n")
 
@@ -628,25 +727,97 @@ func (m Model) renderOpenPromptDialog() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
+// deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
+func deleteWarning(status git.WTStatus) (warning string, dangerous bool) {
+	switch status {
+	case git.StatusChanged:
+		return "Uncommitted changes will be LOST", true
+	case git.StatusDiverged:
+		return "CRITICAL: Unpushed commits will be permanently lost", true
+	case git.StatusToPush:
+		return "Unpushed commits will be LOST", true
+	case git.StatusNoRemote:
+		return "Branch was never pushed — ALL work will be LOST", true
+	case git.StatusMergedDirty:
+		return "Uncommitted changes will be LOST (branch is merged)", true
+	case git.StatusNewDirty:
+		return "Uncommitted changes will be LOST (new branch)", true
+	case git.StatusMissing:
+		return "Worktree directory is missing — will clean up git references", false
+	default:
+		return "", false
+	}
+}
+
+// deleteHasRemote returns true if the worktree status implies a remote branch exists.
+func deleteHasRemote(status git.WTStatus) bool {
+	switch status {
+	case git.StatusNew, git.StatusNewDirty, git.StatusNoRemote:
+		return false
+	default:
+		return true
+	}
+}
+
 func (m Model) renderDeleteConfirmDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+	warnStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorYellow).Background(ui.ColorBlack)
+	critStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 
 	branchName := "unknown"
+	var wt git.Worktree
+	hasWT := false
 	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
 		repo := m.repos[m.deleteRepoIdx]
 		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-			branchName = repo.Worktrees[m.deleteWTIdx].Branch
+			wt = repo.Worktrees[m.deleteWTIdx]
+			branchName = wt.Branch
+			hasWT = true
 		}
 	}
 
 	content := titleStyle.Render("Delete Worktree") + "\n\n"
 	content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
-	content += whiteStyle.Render("  "+branchName) + "\n\n"
-	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+	content += whiteStyle.Render("  "+branchName) + "\n"
 
-	modal := ui.ModalStyle.Width(50).Render(content)
+	if hasWT {
+		warning, dangerous := deleteWarning(wt.Status)
+		if warning != "" {
+			content += "\n"
+			if dangerous {
+				content += critStyle.Render("  ⚠ "+warning) + "\n"
+			} else {
+				content += warnStyle.Render("  ⚠ "+warning) + "\n"
+			}
+		}
+
+		// Offer remote branch deletion toggle when remote exists
+		if deleteHasRemote(wt.Status) {
+			toggleKey := "d"
+			if m.deleteDangerous {
+				toggleKey = "ctrl+d"
+			}
+			content += "\n"
+			if m.deleteRemoteBranch {
+				content += whiteStyle.Render("  ["+toggleKey+"] ✓ Also delete remote branch") + "\n"
+			} else {
+				content += dimStyle.Render("  ["+toggleKey+"] Also delete remote branch") + "\n"
+			}
+		}
+	}
+
+	content += "\n"
+	if m.deleteDangerous {
+		content += warnStyle.Render("  Type DELETE to confirm:") + "\n\n"
+		content += "  " + m.deleteTypedInput.View() + "\n\n"
+		content += dimStyle.Render("  enter confirm • esc cancel")
+	} else {
+		content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+	}
+
+	modal := ui.ModalStyle.Width(56).Render(content)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
@@ -708,57 +879,105 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	}
 }
 
-func refreshAllCmd(cfg *config.Config) tea.Cmd {
+// newLogChan creates a log channel and a LogFunc that writes to it.
+func newLogChan() (git.LogFunc, chan LogEntryMsg) {
+	ch := make(chan LogEntryMsg, 32)
+	fn := func(ctx, msg string, isError bool) {
+		ch <- LogEntryMsg{Context: ctx, Message: msg, IsError: isError}
+	}
+	return fn, ch
+}
+
+// listenForLogs returns a tea.Cmd that reads one LogEntryMsg from the channel.
+// The Update handler re-subscribes after each message.
+func listenForLogs(ch <-chan LogEntryMsg) tea.Cmd {
 	return func() tea.Msg {
-		count, failed, err := git.RefreshAllRepos(cfg.WorkDir, basisResolver(cfg))
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
+}
+
+// beginLoading sets loading state and starts the spinner tick + log stream.
+// Returns (logFn, batchCmd) where batchCmd includes the listen + tick commands.
+func (m *Model) beginLoading(statusMsg string) (git.LogFunc, tea.Cmd) {
+	m.loading = true
+	m.statusMsg = statusMsg
+	logFn, listenCmd := m.startLogStream()
+	return logFn, tea.Batch(listenCmd, loaderTickCmd())
+}
+
+// startLogStream sets up log streaming on the model and returns the initial listener command.
+func (m *Model) startLogStream() (git.LogFunc, tea.Cmd) {
+	logFn, ch := newLogChan()
+	m.logChan = ch
+	return logFn, listenForLogs(ch)
+}
+
+func refreshAllCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		count, failed, err := git.RefreshAllRepos(cfg.WorkDir, basisResolver(cfg), logFn)
 		return RefreshDoneMsg{Count: count, Failed: failed, Err: err}
 	}
 }
 
-func singleRefreshCmd(repoPath, basisBranch string, repoIdx int) tea.Cmd {
+func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch string, repoIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.RefreshRepo(repoPath, basisBranch)
+		err := git.RefreshRepo(repoPath, basisBranch, logFn)
 		return SingleRefreshDoneMsg{RepoIdx: repoIdx, Err: err}
 	}
 }
 
-func rebaseCmd(wtPath, mainBranch string, repoIdx, wtIdx int) tea.Cmd {
+func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch string, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.RebaseWorktree(wtPath, mainBranch)
+		err := git.RebaseWorktree(wtPath, mainBranch, logFn)
 		return RebaseDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
 
-func deleteCmd(repoPath, wtPath, branch string, repoIdx, wtIdx int) tea.Cmd {
+func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.DeleteWorktree(repoPath, wtPath, branch, false)
+		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteRemote, logFn)
 		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
 
-func createWorktreeCmd(repoNames []string, branch string, cfg *config.Config) tea.Cmd {
+func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		log := &git.CreateLog{}
+		log := &git.CreateLog{Stream: logFn}
 		basis := "main"
 		if len(repoNames) == 1 {
 			basis = cfg.GetRepoBasisBranch(repoNames[0])
 		}
 		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basis,
 			cfg.Global.PackageManager, cfg.Global.AICliCommand, log)
+		if err != nil {
+			logFn("create", "Failed: "+err.Error(), true)
+		} else {
+			logFn("create", "Worktree created successfully", false)
+		}
 		return CreateDoneMsg{Results: results, Branch: branch, Log: log, Err: err}
 	}
 }
 
-func cleanupCmd(cfg *config.Config) tea.Cmd {
+func cleanupCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg))
+		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), logFn)
 		return CleanupMergedDoneMsg{Cleaned: cleaned, Err: err}
 	}
 }
 
-func renameCmd(wtPath, newBranch string, repoIdx, wtIdx int) tea.Cmd {
+func renameCmd(logFn git.LogFunc, wtPath, newBranch string, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
+		logFn(newBranch, "Renaming branch", false)
 		err := git.RenameWorktreeBranch(wtPath, newBranch)
+		if err != nil {
+			logFn(newBranch, "Rename failed: "+err.Error(), true)
+		} else {
+			logFn(newBranch, "Branch renamed", false)
+		}
 		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }

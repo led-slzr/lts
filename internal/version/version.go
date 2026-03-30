@@ -1,7 +1,7 @@
 package version
 
 const (
-	Version = "2.0.1"
+	Version = "2.2.0"
 	Name    = "LTS"
 	Full    = Name + " v" + Version
 )

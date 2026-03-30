@@ -18,7 +18,58 @@ var ltsBanner = []string{
 	"╚══════╝   ╚═╝   ╚══════╝",
 }
 
-func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string) string {
+// Inline tree-themed spinner frames — all padded to equal visual width (13 chars).
+// A mini worktree branch growing cycle using the same characters as the loader.
+var spinnerFrames = []string{
+	"·            ",
+	"· ─          ",
+	"· ── ○       ",
+	"· ── ○ ─     ",
+	"· ── ○ ── ○  ",
+	"· ── ○ ── ○  ",
+	"· ── ○       ",
+	"·            ",
+}
+
+// RenderSpinner returns a styled inline spinner frame.
+func RenderSpinner(frame int) string {
+	idx := frame % len(spinnerFrames)
+	f := spinnerFrames[idx]
+
+	bg := lipgloss.NewStyle().Background(ColorBlack)
+	nodeStyle := bg.Foreground(ColorGreen).Bold(true)
+	branchStyle := bg.Foreground(ColorDarkGreen)
+	seedStyle := bg.Foreground(ColorYellow)
+
+	var result strings.Builder
+	for _, ch := range f {
+		switch ch {
+		case '○':
+			result.WriteString(nodeStyle.Render("○"))
+		case '·':
+			result.WriteString(seedStyle.Render("●"))
+		case '─':
+			result.WriteString(branchStyle.Render("─"))
+		default:
+			result.WriteRune(ch)
+		}
+	}
+	return result.String()
+}
+
+// HeaderOpts configures header rendering.
+type HeaderOpts struct {
+	Loading   bool
+	Frame     int
+	StatusMsg string
+}
+
+func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
+	var o HeaderOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+
 	// Render LTS banner
 	bannerStyle := lipgloss.NewStyle().
 		Foreground(ColorDarkGreen).
@@ -39,31 +90,50 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string) s
 	// Render click usage toggle
 	usageStr := renderClickUsage(activeUsage, aiCliLabel)
 
-	// Position: banner center-left, usage top-right
+	// Render status line below usage
+	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
+	rightBlock := usageStr + "\n" + statusLine
+
+	// Position: banner center-left, usage+status top-right
 	bannerWidth := lipgloss.Width(banner)
-	usageWidth := lipgloss.Width(usageStr)
+	rightWidth := lipgloss.Width(rightBlock)
 
 	availableWidth := width - (MarginH * 2)
-	gap := availableWidth - bannerWidth - usageWidth
+	gap := availableWidth - bannerWidth - rightWidth
 	if gap < 2 {
 		gap = 2
 	}
 
-	// Place usage aligned to top of banner
-	usagePadded := lipgloss.NewStyle().
+	// Place right block aligned to top of banner
+	rightPadded := lipgloss.NewStyle().
 		MarginTop(1).
-		Render(usageStr)
+		Render(rightBlock)
 
 	headerRow := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		banner,
 		strings.Repeat(" ", gap),
-		usagePadded,
+		rightPadded,
 	)
 
 	return lipgloss.NewStyle().
 		Margin(1, MarginH, 0, MarginH).
 		Render(headerRow)
+}
+
+func renderStatusLine(status string, loading bool, frame int) string {
+	labelStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	valueStyle := lipgloss.NewStyle().Foreground(ColorClean).Background(ColorBlack)
+
+	if status == "" {
+		status = "Ready to manage"
+	}
+
+	line := labelStyle.Render("Status: ") + valueStyle.Render(status)
+	if loading {
+		line += " " + RenderSpinner(frame)
+	}
+	return line
 }
 
 func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {

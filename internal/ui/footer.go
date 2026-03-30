@@ -91,9 +91,10 @@ func renderFooterBtnWithKey(key, label string, hovered bool, keyNormal, keyHover
 func RenderCreateButton(width int, hovered bool) string {
 	var btn string
 	if hovered {
-		btn = CreateBtnHoverStyle.Render("Create Worktree")
+		btn = CreateBtnHoverStyle.Render("n Create Worktree")
 	} else {
-		btn = CreateBtnStyle.Render("Create Worktree")
+		keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack)
+		btn = CreateBtnStyle.Render(keyStyle.Render("n") + " Create Worktree")
 	}
 
 	return lipgloss.NewStyle().
