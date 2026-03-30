@@ -226,17 +226,26 @@ func (s SetupModel) View() string {
 
 	var lines []string
 
-	// Banner
-	for _, line := range ltsBanner {
-		lines = append(lines, bannerStyle.Render(line))
+	// Banner — only show if terminal is tall enough
+	step := s.steps[s.stepIdx]
+	optionCount := len(step.Options)
+	// Modal needs: border(2) + padding(2) + progress(1) + blanks(4) + question(1) + options + help(1) = 11 + options
+	// Banner adds 8 lines (6 banner + version + blank)
+	needsHeight := 11 + optionCount
+	hasBanner := s.height >= needsHeight+12 // 12 = banner(8) + title(2) + breathing room(2)
+	if hasBanner {
+		for _, line := range ltsBanner {
+			lines = append(lines, bannerStyle.Render(line))
+		}
+		lines = append(lines, dimStyle.Render("v"+version.Version))
+		lines = append(lines, "")
+		lines = append(lines, titleStyle.Render("Welcome! Let's configure LTS."))
+	} else {
+		lines = append(lines, titleStyle.Render("LTS")+" "+dimStyle.Render("v"+version.Version)+" "+titleStyle.Render("— Setup"))
 	}
-	lines = append(lines, dimStyle.Render("v"+version.Version))
-	lines = append(lines, "")
-	lines = append(lines, titleStyle.Render("Welcome! Let's configure LTS."))
 	lines = append(lines, "")
 
 	// Progress
-	step := s.steps[s.stepIdx]
 	progress := progressStyle.Render(
 		strings.Repeat("●", s.stepIdx+1) + strings.Repeat("○", len(s.steps)-s.stepIdx-1) +
 			"  " + string(rune('0'+s.stepIdx+1)) + "/" + string(rune('0'+len(s.steps))),
@@ -271,7 +280,15 @@ func (s SetupModel) View() string {
 	}
 
 	content := strings.Join(lines, "\n")
-	modal := ModalStyle.Width(56).Render(content)
+
+	modalWidth := 56
+	if s.width-4 < modalWidth {
+		modalWidth = s.width - 4
+	}
+	if modalWidth < 40 {
+		modalWidth = 40
+	}
+	modal := ModalStyle.Width(modalWidth).Render(content)
 
 	return lipgloss.Place(
 		s.width, s.height,

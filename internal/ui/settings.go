@@ -465,7 +465,15 @@ func (s SettingsModel) View(width, height int) string {
 
 	content := strings.Join(lines, "\n")
 
-	modal := ModalStyle.Width(60).Render(content)
+	// Responsive modal width: wide enough for enum options, but fits the terminal
+	modalWidth := 78
+	if width-4 < modalWidth {
+		modalWidth = width - 4
+	}
+	if modalWidth < 50 {
+		modalWidth = 50
+	}
+	modal := ModalStyle.Width(modalWidth).Render(content)
 
 	return lipgloss.Place(
 		width, height,
