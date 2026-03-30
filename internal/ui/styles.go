@@ -152,7 +152,7 @@ var (
 
 	// Create button
 	CreateBtnStyle = lipgloss.NewStyle().
-			Foreground(ColorGreen).
+			Foreground(ColorWhite).
 			Background(ColorBlack).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(ColorGray).

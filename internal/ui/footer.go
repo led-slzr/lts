@@ -93,7 +93,7 @@ func RenderCreateButton(width int, hovered bool) string {
 	if hovered {
 		btn = CreateBtnHoverStyle.Render("n Create Worktree")
 	} else {
-		keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack)
+		keyStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
 		btn = CreateBtnStyle.Render(keyStyle.Render("n") + " Create Worktree")
 	}
 

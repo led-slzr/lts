@@ -1590,6 +1590,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 		branchDirName := expectedSubdir
 
 		// Rename worktree dirs inside the branch subdir
+		allWorktreesMigrated := true
 		for _, se := range subEntries {
 			if !se.IsDir() {
 				continue
@@ -1624,6 +1625,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 			repoPath := filepath.Join(scriptDir, bestRepo)
 			if _, err := RunGit(repoPath, "worktree", "move", "--force", wtPath, newWtPath); err != nil {
 				if err2 := os.Rename(wtPath, newWtPath); err2 != nil {
+					allWorktreesMigrated = false
 					continue
 				}
 				RunGit(repoPath, "worktree", "repair")
@@ -1639,7 +1641,10 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 			migrated++
 		}
 
-		// Rename the branch subdirectory itself
+		// Only rename the branch subdirectory if all worktrees inside were migrated
+		if !allWorktreesMigrated {
+			continue
+		}
 		if e.Name() != expectedSubdir {
 			newSubdirPath := filepath.Join(ltsPath, expectedSubdir)
 			if _, err := os.Stat(newSubdirPath); err != nil {
