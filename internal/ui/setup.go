@@ -98,6 +98,15 @@ func NewSetup() SetupModel {
 					{Label: "Every 15 minutes", Value: "15M"},
 				},
 			},
+			{
+				Question:  "Automatically check for LTS updates? (daily)",
+				ConfigKey: "DAILY_CHECK_FOR_UPDATES",
+				Options: []setupOption{
+					{Label: "Yes — check daily and auto-update", Value: "both"},
+					{Label: "Yes — check daily and notify me", Value: "check_only"},
+					{Label: "No — I'll update manually", Value: "none"},
+				},
+			},
 		},
 		config: config.DefaultGlobal(),
 		input:  ti,
@@ -191,6 +200,18 @@ func (s *SetupModel) applyOption(value string) {
 		s.config.PackageManager = value
 	case "AUTO_REFRESH":
 		s.config.AutoRefresh = value
+	case "DAILY_CHECK_FOR_UPDATES":
+		switch value {
+		case "both":
+			s.config.CheckForUpdates = true
+			s.config.AutoUpdate = true
+		case "check_only":
+			s.config.CheckForUpdates = true
+			s.config.AutoUpdate = false
+		case "none":
+			s.config.CheckForUpdates = false
+			s.config.AutoUpdate = false
+		}
 	}
 }
 

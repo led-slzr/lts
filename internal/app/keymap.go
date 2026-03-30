@@ -21,6 +21,11 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleContextMenuKey(m, msg)
 	}
 
+	// If cleanup confirmation is active
+	if m.cleanupConfirmActive {
+		return handleCleanupConfirmKey(m, msg)
+	}
+
 	// If delete confirmation is active
 	if m.deleteConfirmActive {
 		return handleDeleteConfirmKey(m, msg)
@@ -54,8 +59,10 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "c":
 		if !m.loading {
-			logFn, startCmd := m.beginLoading("Cleaning up merged...")
-			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
+			m.cleanupConfirmActive = true
+			m.cleanupRemoteBranch = false
+			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
+			return m, nil
 		}
 
 	case "n":
@@ -166,6 +173,7 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 			m.renameActive = true
 			m.renameRepoIdx = repoIdx
 			m.renameWTIdx = wtIdx
+			m.renameRemoteBranch = false
 			m.renameInput.SetValue("")
 			m.renameInput.Focus()
 			return m, textinput.Blink
@@ -220,6 +228,26 @@ func cancelDelete(m Model) (Model, tea.Cmd) {
 	m.deleteDangerous = false
 	m.deleteRemoteBranch = false
 	m.statusMsg = ""
+	return m, nil
+}
+
+func handleCleanupConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "n", "N":
+		m.cleanupConfirmActive = false
+		m.cleanupRemoteBranch = false
+		m.statusMsg = ""
+		return m, nil
+	case "d", "D":
+		m.cleanupRemoteBranch = !m.cleanupRemoteBranch
+		return m, nil
+	case "y", "Y":
+		m.cleanupConfirmActive = false
+		deleteRemote := m.cleanupRemoteBranch
+		m.cleanupRemoteBranch = false
+		logFn, startCmd := m.beginLoading("Cleaning up merged...")
+		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, deleteRemote))
+	}
 	return m, nil
 }
 
@@ -302,10 +330,28 @@ func handleOpenPromptKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
+func renameHasRemote(m Model) bool {
+	if m.renameRepoIdx < 0 || m.renameRepoIdx >= len(m.repos) || m.renameWTIdx < 0 {
+		return false
+	}
+	repo := m.repos[m.renameRepoIdx]
+	if m.renameWTIdx >= len(repo.Worktrees) {
+		return false
+	}
+	return deleteHasRemote(repo.Worktrees[m.renameWTIdx].Status)
+}
+
 func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	// Ctrl+d toggles remote rename (only for branch renames with remote)
+	if msg.String() == "ctrl+d" && m.renameWTIdx >= 0 && renameHasRemote(m) {
+		m.renameRemoteBranch = !m.renameRemoteBranch
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.renameActive = false
+		m.renameRemoteBranch = false
 		return m, nil
 	case "enter":
 		value := strings.TrimSpace(m.renameInput.Value())
@@ -344,8 +390,14 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			wt := repo.Worktrees[m.renameWTIdx]
 			repoIdx := m.renameRepoIdx
 			wtIdx := m.renameWTIdx
+			renameRemote := m.renameRemoteBranch
+			m.renameRemoteBranch = false
 			logFn, startCmd := m.beginLoading("Renaming branch...")
-			return m, tea.Batch(startCmd, renameCmd(logFn, wt.Path, value, repoIdx, wtIdx))
+			if repo.IsMonorepo {
+				// wt.Path is the branch subdirectory for monorepo worktrees
+				return m, tea.Batch(startCmd, renameMonorepoCmd(logFn, wt.Path, repo.RepoNames, wt.Branch, value, renameRemote, &m.config, repoIdx, wtIdx))
+			}
+			return m, tea.Batch(startCmd, renameCmd(logFn, repo.Path, wt.Path, wt.Branch, value, renameRemote, &m.config, repoIdx, wtIdx))
 		}
 		m.renameActive = false
 		return m, nil

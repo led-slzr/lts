@@ -1,6 +1,9 @@
 package app
 
-import "lts-revamp/internal/git"
+import (
+	"lts-revamp/internal/git"
+	"lts-revamp/internal/update"
+)
 
 // ReposLoadedMsg is sent when repo discovery completes.
 type ReposLoadedMsg struct {
@@ -57,7 +60,9 @@ type LogEntryMsg struct {
 }
 
 // StatusClearMsg clears the status bar.
-type StatusClearMsg struct{}
+type StatusClearMsg struct {
+	Gen int // only clear if this matches the current generation
+}
 
 // LoaderTickMsg advances the loading animation frame.
 type LoaderTickMsg struct{}
@@ -73,4 +78,19 @@ type RenameDoneMsg struct {
 type MigrateDoneMsg struct {
 	Result *git.CreateResult
 	Err    error
+}
+
+// UpdateCheckMsg is sent when a background update check completes.
+type UpdateCheckMsg struct {
+	Result update.Result
+}
+
+// MigrationCheckMsg is sent after checking if directory migration is needed.
+type MigrationCheckMsg struct {
+	Needed bool
+}
+
+// MigrationDoneMsg is sent after directory migration completes.
+type MigrationDoneMsg struct {
+	Count int
 }

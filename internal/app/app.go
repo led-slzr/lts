@@ -6,6 +6,7 @@ import (
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
+	"lts-revamp/internal/update"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type Model struct {
 	hoveredBtn  ui.HoverButton
 	loading     bool
 	statusMsg   string
+	statusGen   int // incremented on each statusMsg change; used to avoid stale clears
 
 	// Pre-computed layout (computed in Update, used in View)
 	gridResult    ui.GridResult
@@ -41,10 +43,11 @@ type Model struct {
 	settings ui.SettingsModel
 
 	// Rename input
-	renameActive  bool
-	renameInput   textinput.Model
-	renameRepoIdx int
-	renameWTIdx   int
+	renameActive       bool
+	renameInput        textinput.Model
+	renameRepoIdx      int
+	renameWTIdx        int
+	renameRemoteBranch bool // true = also rename remote branch (push new, delete old)
 
 	// Loading animation
 	initialLoad bool // true until first ReposLoadedMsg
@@ -64,6 +67,10 @@ type Model struct {
 	deleteTypedInput    textinput.Model // for "type DELETE" confirmation
 	deleteDangerous     bool            // true = requires typing DELETE
 	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
+
+	// Cleanup confirmation
+	cleanupConfirmActive bool
+	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
 
 	// Log panel
 	logPanel ui.LogPanelModel
@@ -167,11 +174,15 @@ func (m *Model) syncSettingsConfig() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		loadReposCmd(&m.config),
+	cmds := []tea.Cmd{
+		checkMigrationCmd(&m.config),
 		tea.SetWindowTitle("LTS - Led's Tree Script"),
 		loaderTickCmd(),
-	)
+	}
+	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
+		cmds = append(cmds, updateCheckCmd(m.config.Global.AutoUpdate))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -228,6 +239,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case MigrationCheckMsg:
+		if msg.Needed {
+			m.statusMsg = "Improving directory structure, please wait..."
+			m.recomputeLayout()
+			return m, doMigrationCmd(&m.config)
+		}
+		return m, loadReposCmd(&m.config)
+
+	case MigrationDoneMsg:
+		m.statusMsg = ""
+		return m, loadReposCmd(&m.config)
 
 	case ReposLoadedMsg:
 		m.repos = msg.Repos
@@ -394,10 +417,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case StatusClearMsg:
-		// Don't clear status while an operation is running
-		if !m.loading {
+		// Gen 0 = legacy (always clear). Gen > 0 = only clear if matching current gen.
+		if !m.loading && (msg.Gen == 0 || msg.Gen == m.statusGen) {
 			m.statusMsg = ""
 			m.recomputeLayout()
+		}
+		return m, nil
+
+	case UpdateCheckMsg:
+		m.config.SetLastUpdateCheck(time.Now().Unix())
+		r := msg.Result
+		if r.Err != nil {
+			// Silently ignore update check errors — don't disrupt the user
+			return m, nil
+		}
+		if r.Updated {
+			m.statusMsg = fmt.Sprintf("Updated to v%s — restart to apply", r.LatestVersion)
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
+		}
+		if r.UpdateAvail {
+			m.statusMsg = fmt.Sprintf("New version available: v%s (current: v%s)", r.LatestVersion, r.CurrentVersion)
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		return m, nil
 
@@ -429,7 +473,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.syncSettingsConfig()
 		return m, cmd
 	}
-	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive {
+	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive || m.cleanupConfirmActive {
 		return m, nil
 	}
 	// Context menu: close on click, block all other mouse events
@@ -550,8 +594,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 		if m.hoveredBtn == ui.BtnCleanupMerged {
-			logFn, startCmd := m.beginLoading("Cleaning up merged...")
-			return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config))
+			m.cleanupConfirmActive = true
+			m.cleanupRemoteBranch = false
+			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
+			return m, nil
 		}
 		if m.hoveredBtn == ui.BtnSettings {
 			var repoNames []string
@@ -729,6 +775,12 @@ func (m Model) View() string {
 		return paintBlack(dialog, m.width, m.height)
 	}
 
+	// Cleanup confirmation
+	if m.cleanupConfirmActive {
+		dialog := m.renderCleanupConfirmDialog()
+		return paintBlack(dialog, m.width, m.height)
+	}
+
 	// Delete confirmation
 	if m.deleteConfirmActive {
 		dialog := m.renderDeleteConfirmDialog()
@@ -753,22 +805,40 @@ func (m Model) View() string {
 func (m Model) renderRenameDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
 
 	title := "Rename Branch"
 	context := ""
-	if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+	isBasisChange := m.renameWTIdx == -2
+	if isBasisChange && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
 		title = "Change Basis Branch"
 		context = "Repository: " + m.repos[m.renameRepoIdx].Name
 	} else if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) && m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
-		wt := m.repos[m.renameRepoIdx].Worktrees[m.renameWTIdx]
+		repo := m.repos[m.renameRepoIdx]
+		wt := repo.Worktrees[m.renameWTIdx]
 		context = "Current: " + wt.Branch
+		if repo.IsMonorepo {
+			title = "Rename Branch (all " + fmt.Sprintf("%d", len(repo.RepoNames)) + " repos)"
+		}
 	}
 
 	content := titleStyle.Render(title) + "\n\n"
 	if context != "" {
 		content += dimStyle.Render(context) + "\n\n"
 	}
-	content += m.renameInput.View() + "\n\n"
+	content += m.renameInput.View() + "\n"
+
+	// Show remote branch toggle for actual renames (not basis branch changes)
+	if !isBasisChange && renameHasRemote(m) {
+		content += "\n"
+		if m.renameRemoteBranch {
+			content += whiteStyle.Render("  [ctrl+d] ✓ Rename remote branch") + "\n"
+		} else {
+			content += dimStyle.Render("  [ctrl+d] Rename remote branch") + "\n"
+		}
+	}
+
+	content += "\n"
 	content += dimStyle.Render("enter confirm • esc cancel")
 
 	modal := ui.ModalStyle.Width(50).Render(content)
@@ -885,6 +955,28 @@ func (m Model) renderDeleteConfirmDialog() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
 }
 
+func (m Model) renderCleanupConfirmDialog() string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
+	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+
+	content := titleStyle.Render("Cleanup Merged Worktrees") + "\n\n"
+	content += dimStyle.Render("This will remove all merged worktrees and their local branches.") + "\n"
+
+	content += "\n"
+	if m.cleanupRemoteBranch {
+		content += whiteStyle.Render("  [d] ✓ Also delete remote branches") + "\n"
+	} else {
+		content += dimStyle.Render("  [d] Also delete remote branches") + "\n"
+	}
+
+	content += "\n"
+	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+
+	modal := ui.ModalStyle.Width(56).Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+}
+
 // getCardScreenX computes the screen X position of a card by its repo index.
 func (m Model) getCardScreenX(repoIdx int) int {
 	cols := m.gridResult.Cols
@@ -933,6 +1025,19 @@ func paintBlack(content string, width, height int) string {
 func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 	return func(repoName string) string {
 		return cfg.GetRepoBasisBranch(repoName)
+	}
+}
+
+func checkMigrationCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		return MigrationCheckMsg{Needed: git.NeedsMigration(cfg.WorkDir)}
+	}
+}
+
+func doMigrationCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		count := git.MigrateDirectoryStructure(cfg.WorkDir)
+		return MigrationDoneMsg{Count: count}
 	}
 }
 
@@ -1026,21 +1131,30 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg
 	}
 }
 
-func cleanupCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
+func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cmd {
 	return func() tea.Msg {
-		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), logFn)
+		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), deleteRemote, logFn)
 		return CleanupMergedDoneMsg{Cleaned: cleaned, Err: err}
 	}
 }
 
-func renameCmd(logFn git.LogFunc, wtPath, newBranch string, repoIdx, wtIdx int) tea.Cmd {
+func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		logFn(newBranch, "Renaming branch", false)
-		err := git.RenameWorktreeBranch(wtPath, newBranch)
+		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
-		} else {
-			logFn(newBranch, "Branch renamed", false)
+		}
+		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+	}
+}
+
+func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
+	return func() tea.Msg {
+		_, err := git.RenameMonorepoWorktrees(cfg.WorkDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+		if err != nil {
+			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
 		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
@@ -1061,9 +1175,27 @@ func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd 
 	}
 }
 
+func updateCheckCmd(autoUpdate bool) tea.Cmd {
+	return func() tea.Msg {
+		var r update.Result
+		if autoUpdate {
+			r = update.Update()
+		} else {
+			r = update.Check()
+		}
+		return UpdateCheckMsg{Result: r}
+	}
+}
+
 func clearStatusCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return StatusClearMsg{}
+		return StatusClearMsg{} // Gen 0 = always clears
+	})
+}
+
+func clearStatusAfter(gen int, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return StatusClearMsg{Gen: gen}
 	})
 }
 
