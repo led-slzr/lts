@@ -175,7 +175,7 @@ func (m *Model) syncSettingsConfig() {
 
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
-		loadReposCmd(&m.config),
+		checkMigrationCmd(&m.config),
 		tea.SetWindowTitle("LTS - Led's Tree Script"),
 		loaderTickCmd(),
 	}
@@ -239,6 +239,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case MigrationCheckMsg:
+		if msg.Needed {
+			m.statusMsg = "Improving directory structure, please wait..."
+			m.recomputeLayout()
+			return m, doMigrationCmd(&m.config)
+		}
+		return m, loadReposCmd(&m.config)
+
+	case MigrationDoneMsg:
+		m.statusMsg = ""
+		return m, loadReposCmd(&m.config)
 
 	case ReposLoadedMsg:
 		m.repos = msg.Repos
@@ -1013,6 +1025,19 @@ func paintBlack(content string, width, height int) string {
 func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 	return func(repoName string) string {
 		return cfg.GetRepoBasisBranch(repoName)
+	}
+}
+
+func checkMigrationCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		return MigrationCheckMsg{Needed: git.NeedsMigration(cfg.WorkDir)}
+	}
+}
+
+func doMigrationCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		count := git.MigrateDirectoryStructure(cfg.WorkDir)
+		return MigrationDoneMsg{Count: count}
 	}
 }
 

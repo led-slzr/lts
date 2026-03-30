@@ -93,15 +93,18 @@ func SanitizeForFilename(s string) string {
 	return s
 }
 
-// GenerateUniqueWorktreeName creates a collision-free worktree folder name.
-func GenerateUniqueWorktreeName(repoName, suffix, ltsPath string) string {
-	safeSuffix := SanitizeForFilename(suffix)
-	baseName := repoName + "-" + safeSuffix
-	name := baseName
+// BranchToDirName converts a branch name to a directory-safe name.
+// "feat/login-system" → "feat-login-system", "hotfix" → "hotfix"
+func BranchToDirName(branch string) string {
+	return SanitizeForFilename(strings.ReplaceAll(branch, "/", "-"))
+}
 
+// generateUniqueName returns a collision-free name inside parentDir.
+func generateUniqueName(baseName, parentDir string) string {
+	name := baseName
 	counter := 2
 	for {
-		checkPath := filepath.Join(ltsPath, name)
+		checkPath := filepath.Join(parentDir, name)
 		if _, err := os.Stat(checkPath); os.IsNotExist(err) {
 			break
 		}
@@ -252,9 +255,8 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 	// Detect main branch
 	mainBranch := detectMainBranch(repoPath, basisBranch)
 
-	// Generate worktree name
-	suffix := ExtractSuffix(branch)
-	wtName := GenerateUniqueWorktreeName(repoName, suffix, ltsPath)
+	// Generate worktree name: feat/login → feat-login
+	wtName := generateUniqueName(BranchToDirName(branch), ltsPath)
 	wtPath := filepath.Join(ltsPath, wtName)
 
 	// Create worktree based on branch existence
@@ -303,8 +305,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	}
 
 	// Multi-repo monorepo mode
-	suffix := ExtractSuffix(branch)
-	safeSuffix := SanitizeForFilename(suffix)
+	branchDirName := BranchToDirName(branch)
 
 	// Generate LTS directory name (sorted repos joined with -)
 	sorted := make([]string, len(repoNames))
@@ -313,9 +314,8 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	ltsDir := strings.Join(sorted, "-") + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 
-	// Branch subdirectory
-	ltsPrefix := strings.TrimSuffix(ltsDir, "-lts")
-	branchSubdir := ltsPrefix + "-" + safeSuffix
+	// Branch subdirectory: feat/integration → feat-integration
+	branchSubdir := branchDirName
 	branchSubdirPath := filepath.Join(ltsPath, branchSubdir)
 
 	// Create directories
@@ -353,8 +353,8 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 		mainBranch := detectMainBranch(repoPath, basisBranch)
 
-		// Generate worktree name inside branch subdir
-		wtName := GenerateUniqueWorktreeName(repoName, safeSuffix, branchSubdirPath)
+		// Generate worktree name inside branch subdir: core-feat-integration
+		wtName := generateUniqueName(repoName+"-"+branchDirName, branchSubdirPath)
 		wtPath := filepath.Join(branchSubdirPath, wtName)
 
 		// Check if worktree already exists
@@ -413,7 +413,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 	// Generate monorepo workspace if 2+ succeeded
 	if len(results) >= 2 {
-		generateMonorepoWorkspace(branchSubdirPath, safeSuffix, repoWTPairs)
+		generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs)
 	}
 
 	return results, nil
@@ -903,10 +903,7 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 	// 2. Compute new directory name and move the worktree
 	ltsDir := filepath.Dir(wtPath)
 	oldWtName := filepath.Base(wtPath)
-	repoName := filepath.Base(repoPath)
-	newSuffix := ExtractSuffix(newBranch)
-	safeSuffix := SanitizeForFilename(newSuffix)
-	idealName := repoName + "-" + safeSuffix
+	idealName := BranchToDirName(newBranch)
 
 	// If the ideal name matches the current directory, no move needed.
 	// Otherwise, generate a unique name (which avoids collisions with OTHER dirs).
@@ -914,7 +911,7 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 	if idealName == oldWtName {
 		newWtName = oldWtName
 	} else {
-		newWtName = GenerateUniqueWorktreeName(repoName, newSuffix, ltsDir)
+		newWtName = generateUniqueName(idealName, ltsDir)
 	}
 	newWtPath := filepath.Join(ltsDir, newWtName)
 
@@ -979,8 +976,7 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 
 	ctx := newBranch
 	ltsPath := filepath.Dir(branchSubdirPath)
-	newSuffix := ExtractSuffix(newBranch)
-	newSafeSuffix := SanitizeForFilename(newSuffix)
+	newBranchDirName := BranchToDirName(newBranch)
 
 	// Discover all worktree directories inside the branch subdir
 	entries, err := os.ReadDir(branchSubdirPath)
@@ -1036,12 +1032,12 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 	var repoWTPairs []string
 	for i, wt := range worktrees {
 		oldWtName := filepath.Base(wt.path)
-		idealName := wt.repoName + "-" + newSafeSuffix
+		idealName := wt.repoName + "-" + newBranchDirName
 		var newWtName string
 		if idealName == oldWtName {
 			newWtName = oldWtName
 		} else {
-			newWtName = GenerateUniqueWorktreeName(wt.repoName, newSuffix, branchSubdirPath)
+			newWtName = generateUniqueName(idealName, branchSubdirPath)
 		}
 		newWtPath := filepath.Join(branchSubdirPath, newWtName)
 
@@ -1070,22 +1066,19 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 	}
 
 	// 3. Remove old monorepo workspace file and generate new one
-	oldSuffix := ExtractSuffix(oldBranch)
-	oldSafeSuffix := SanitizeForFilename(oldSuffix)
-	oldMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+oldSafeSuffix+".code-workspace")
+	oldBranchDirName := BranchToDirName(oldBranch)
+	oldMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+oldBranchDirName+".code-workspace")
 	if _, err := os.Stat(oldMonoWs); err == nil {
 		log(ctx, "Removing old monorepo workspace", false)
 		os.Remove(oldMonoWs)
 	}
 	if len(repoWTPairs) >= 2 {
 		log(ctx, "Generating new monorepo workspace", false)
-		generateMonorepoWorkspace(branchSubdirPath, newSafeSuffix, repoWTPairs)
+		generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs)
 	}
 
 	// 4. Rename the branch subdirectory itself
-	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
-	newBranchSubdir := ltsPrefix + "-" + newSafeSuffix
-	newBranchSubdirPath := filepath.Join(ltsPath, newBranchSubdir)
+	newBranchSubdirPath := filepath.Join(ltsPath, newBranchDirName)
 
 	if newBranchSubdirPath != branchSubdirPath {
 		log(ctx, "Renaming branch subdirectory", false)
@@ -1281,9 +1274,8 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 	// Prune orphaned worktree entries
 	RunGit(repoPath, "worktree", "prune")
 
-	// Generate worktree name
-	suffix := ExtractSuffix(currentBranch)
-	wtName := GenerateUniqueWorktreeName(repoName, suffix, ltsPath)
+	// Generate worktree name: feat/login → feat-login
+	wtName := generateUniqueName(BranchToDirName(currentBranch), ltsPath)
 	wtPath := filepath.Join(ltsPath, wtName)
 
 	// Create the worktree for the feature branch (now safe — branch is no longer checked out)
@@ -1371,4 +1363,307 @@ func IsProtectedBranch(branch string) bool {
 		return true
 	}
 	return false
+}
+
+// NeedsMigration checks if any LTS directories use the old naming convention.
+// Fast: only does stat checks and reads a single branch per LTS dir.
+func NeedsMigration(scriptDir string) bool {
+	entries, err := os.ReadDir(scriptDir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
+			continue
+		}
+		ltsPath := filepath.Join(scriptDir, e.Name())
+		ltsType := getLTSType(scriptDir, e.Name())
+
+		if ltsType == "single" {
+			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			if hasMismatchedSingleDirs(ltsPath, repoName) {
+				return true
+			}
+		} else {
+			if hasMismatchedMonorepoDirs(ltsPath, scriptDir, e.Name()) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasMismatchedSingleDirs checks if any worktree dir in an LTS dir doesn't match the new naming.
+func hasMismatchedSingleDirs(ltsPath, repoName string) bool {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(ltsPath, e.Name())
+		if !isWorktreeDir(dirPath) {
+			continue
+		}
+		branch, _ := RunGit(dirPath, "branch", "--show-current")
+		if branch == "" {
+			continue
+		}
+		expectedName := BranchToDirName(branch)
+		if e.Name() != expectedName {
+			return true
+		}
+	}
+	return false
+}
+
+// hasMismatchedMonorepoDirs checks monorepo LTS dirs for old naming.
+func hasMismatchedMonorepoDirs(ltsPath, scriptDir, ltsDirName string) bool {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return false
+	}
+	repoNames := getLTSRepos(scriptDir, ltsDirName)
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		branchSubdirPath := filepath.Join(ltsPath, e.Name())
+		subEntries, err := os.ReadDir(branchSubdirPath)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if !se.IsDir() {
+				continue
+			}
+			wtPath := filepath.Join(branchSubdirPath, se.Name())
+			if !isWorktreeDir(wtPath) {
+				continue
+			}
+			branch, _ := RunGit(wtPath, "branch", "--show-current")
+			if branch == "" {
+				continue
+			}
+			// Check branch subdir name
+			expectedSubdir := BranchToDirName(branch)
+			if e.Name() != expectedSubdir {
+				return true
+			}
+			// Check worktree dir name (match longest repo prefix)
+			bestRepo := ""
+			for _, rn := range repoNames {
+				if strings.HasPrefix(se.Name(), rn+"-") && len(rn) > len(bestRepo) {
+					bestRepo = rn
+				}
+			}
+			if bestRepo != "" {
+				expectedWtName := bestRepo + "-" + expectedSubdir
+				if se.Name() != expectedWtName {
+					return true
+				}
+			}
+			// One branch check per subdir is enough
+			break
+		}
+	}
+	return false
+}
+
+// MigrateDirectoryStructure renames old-style LTS directories to the new convention.
+// Returns the number of directories migrated.
+func MigrateDirectoryStructure(scriptDir string) int {
+	entries, err := os.ReadDir(scriptDir)
+	if err != nil {
+		return 0
+	}
+
+	migrated := 0
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
+			continue
+		}
+		ltsPath := filepath.Join(scriptDir, e.Name())
+		ltsType := getLTSType(scriptDir, e.Name())
+
+		if ltsType == "single" {
+			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			repoPath := filepath.Join(scriptDir, repoName)
+			migrated += migrateSingleLTS(ltsPath, repoPath, repoName)
+		} else {
+			repoNames := getLTSRepos(scriptDir, e.Name())
+			migrated += migrateMonorepoLTS(ltsPath, scriptDir, repoNames)
+		}
+	}
+	return migrated
+}
+
+// migrateSingleLTS migrates worktree dirs inside a single-repo LTS dir.
+func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return 0
+	}
+
+	migrated := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dirPath := filepath.Join(ltsPath, e.Name())
+		if !isWorktreeDir(dirPath) {
+			continue
+		}
+		branch, _ := RunGit(dirPath, "branch", "--show-current")
+		if branch == "" {
+			continue
+		}
+		expectedName := BranchToDirName(branch)
+		if e.Name() == expectedName {
+			continue
+		}
+
+		newPath := filepath.Join(ltsPath, expectedName)
+		// Avoid collision
+		if _, err := os.Stat(newPath); err == nil {
+			expectedName = generateUniqueName(expectedName, ltsPath)
+			newPath = filepath.Join(ltsPath, expectedName)
+		}
+
+		// Move worktree directory
+		if _, err := RunGit(repoPath, "worktree", "move", "--force", dirPath, newPath); err != nil {
+			if err2 := os.Rename(dirPath, newPath); err2 != nil {
+				continue
+			}
+			RunGit(repoPath, "worktree", "repair")
+		}
+
+		// Rename workspace file
+		oldWs := filepath.Join(ltsPath, e.Name()+".code-workspace")
+		newWs := filepath.Join(ltsPath, expectedName+".code-workspace")
+		if _, err := os.Stat(oldWs); err == nil {
+			os.Rename(oldWs, newWs)
+		}
+
+		migrated++
+	}
+	return migrated
+}
+
+// migrateMonorepoLTS migrates worktree dirs inside a monorepo LTS dir.
+func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
+	entries, err := os.ReadDir(ltsPath)
+	if err != nil {
+		return 0
+	}
+
+	migrated := 0
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		branchSubdirPath := filepath.Join(ltsPath, e.Name())
+
+		// Find a worktree inside to get the branch name
+		branch := ""
+		subEntries, err := os.ReadDir(branchSubdirPath)
+		if err != nil {
+			continue
+		}
+		for _, se := range subEntries {
+			if !se.IsDir() {
+				continue
+			}
+			wtPath := filepath.Join(branchSubdirPath, se.Name())
+			if isWorktreeDir(wtPath) {
+				branch, _ = RunGit(wtPath, "branch", "--show-current")
+				break
+			}
+		}
+		if branch == "" {
+			continue
+		}
+
+		expectedSubdir := BranchToDirName(branch)
+		branchDirName := expectedSubdir
+
+		// Rename worktree dirs inside the branch subdir
+		for _, se := range subEntries {
+			if !se.IsDir() {
+				continue
+			}
+			wtPath := filepath.Join(branchSubdirPath, se.Name())
+			if !isWorktreeDir(wtPath) {
+				continue
+			}
+
+			// Find the repo name by longest prefix match
+			bestRepo := ""
+			for _, rn := range repoNames {
+				if strings.HasPrefix(se.Name(), rn+"-") && len(rn) > len(bestRepo) {
+					bestRepo = rn
+				}
+			}
+			if bestRepo == "" {
+				continue
+			}
+
+			expectedWtName := bestRepo + "-" + branchDirName
+			if se.Name() == expectedWtName {
+				continue
+			}
+
+			newWtPath := filepath.Join(branchSubdirPath, expectedWtName)
+			if _, err := os.Stat(newWtPath); err == nil {
+				expectedWtName = generateUniqueName(expectedWtName, branchSubdirPath)
+				newWtPath = filepath.Join(branchSubdirPath, expectedWtName)
+			}
+
+			repoPath := filepath.Join(scriptDir, bestRepo)
+			if _, err := RunGit(repoPath, "worktree", "move", "--force", wtPath, newWtPath); err != nil {
+				if err2 := os.Rename(wtPath, newWtPath); err2 != nil {
+					continue
+				}
+				RunGit(repoPath, "worktree", "repair")
+			}
+
+			// Rename individual workspace
+			oldWs := filepath.Join(branchSubdirPath, se.Name()+".code-workspace")
+			newWs := filepath.Join(branchSubdirPath, expectedWtName+".code-workspace")
+			if _, err := os.Stat(oldWs); err == nil {
+				os.Rename(oldWs, newWs)
+			}
+
+			migrated++
+		}
+
+		// Rename the branch subdirectory itself
+		if e.Name() != expectedSubdir {
+			newSubdirPath := filepath.Join(ltsPath, expectedSubdir)
+			if _, err := os.Stat(newSubdirPath); err != nil {
+				if os.Rename(branchSubdirPath, newSubdirPath) == nil {
+					branchSubdirPath = newSubdirPath
+					// Repair all worktrees after parent move
+					for _, rn := range repoNames {
+						RunGit(filepath.Join(scriptDir, rn), "worktree", "repair")
+					}
+					migrated++
+				}
+			}
+		}
+
+		// Rename monorepo workspace if suffix changed
+		oldSuffix := ExtractSuffix(branch)
+		oldSafeSuffix := SanitizeForFilename(oldSuffix)
+		oldMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+oldSafeSuffix+".code-workspace")
+		newMonoWs := filepath.Join(branchSubdirPath, "monorepo-"+branchDirName+".code-workspace")
+		if oldMonoWs != newMonoWs {
+			if _, err := os.Stat(oldMonoWs); err == nil {
+				os.Rename(oldMonoWs, newMonoWs)
+			}
+		}
+	}
+	return migrated
 }

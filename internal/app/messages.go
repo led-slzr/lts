@@ -84,3 +84,13 @@ type MigrateDoneMsg struct {
 type UpdateCheckMsg struct {
 	Result update.Result
 }
+
+// MigrationCheckMsg is sent after checking if directory migration is needed.
+type MigrationCheckMsg struct {
+	Needed bool
+}
+
+// MigrationDoneMsg is sent after directory migration completes.
+type MigrationDoneMsg struct {
+	Count int
+}
