@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v2.3.0](https://img.shields.io/badge/version-2.3.0-green)
+![LTS v2.5.0](https://img.shields.io/badge/version-2.5.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -63,6 +63,15 @@ mv lts ~/.local/bin/
 
 </details>
 
+## Uninstall
+
+```bash
+rm -f ~/.local/bin/lts          # Remove binary
+rm -rf ~/.config/lts            # Remove global config
+```
+
+To also remove per-project config, delete `.lts.conf` from each project directory where LTS was used.
+
 ## Usage
 
 ```bash
@@ -108,7 +117,9 @@ IDE_COMMAND="windsurf"
 AI_CLI_COMMAND="claude"
 PACKAGE_MANAGER="pnpm"
 AUTO_REFRESH="24H"
-TERMINAL="ghostty"
+TERMINAL="terminal"
+DAILY_CHECK_FOR_UPDATES="true"
+AUTO_UPDATE_NEW_RELEASE="true"
 ```
 
 Supported values:
@@ -117,6 +128,8 @@ Supported values:
 - **Package Manager**: `pnpm`, `npm`, `yarn`, `bun`
 - **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
+- **Check for Updates**: `true` / `false` — daily check for new releases on startup
+- **Auto Update**: `true` / `false` — silently download and install new releases in the background
 
 **Local** (`.lts.conf` in your project directory) — per-repo:
 

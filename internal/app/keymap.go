@@ -242,8 +242,10 @@ func handleCleanupConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 	case "y", "Y":
 		m.cleanupConfirmActive = false
+		deleteRemote := m.cleanupRemoteBranch
+		m.cleanupRemoteBranch = false
 		logFn, startCmd := m.beginLoading("Cleaning up merged...")
-		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, m.cleanupRemoteBranch))
+		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, deleteRemote))
 	}
 	return m, nil
 }

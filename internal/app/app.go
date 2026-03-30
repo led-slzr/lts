@@ -6,6 +6,7 @@ import (
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
+	"lts-revamp/internal/update"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type Model struct {
 	hoveredBtn  ui.HoverButton
 	loading     bool
 	statusMsg   string
+	statusGen   int // incremented on each statusMsg change; used to avoid stale clears
 
 	// Pre-computed layout (computed in Update, used in View)
 	gridResult    ui.GridResult
@@ -171,11 +173,15 @@ func (m *Model) syncSettingsConfig() {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		loadReposCmd(&m.config),
 		tea.SetWindowTitle("LTS - Led's Tree Script"),
 		loaderTickCmd(),
-	)
+	}
+	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
+		cmds = append(cmds, updateCheckCmd(m.config.Global.AutoUpdate))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -398,10 +404,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case StatusClearMsg:
-		// Don't clear status while an operation is running
-		if !m.loading {
+		// Gen 0 = legacy (always clear). Gen > 0 = only clear if matching current gen.
+		if !m.loading && (msg.Gen == 0 || msg.Gen == m.statusGen) {
 			m.statusMsg = ""
 			m.recomputeLayout()
+		}
+		return m, nil
+
+	case UpdateCheckMsg:
+		m.config.SetLastUpdateCheck(time.Now().Unix())
+		r := msg.Result
+		if r.Err != nil {
+			// Silently ignore update check errors — don't disrupt the user
+			return m, nil
+		}
+		if r.Updated {
+			m.statusMsg = fmt.Sprintf("Updated to v%s — restart to apply", r.LatestVersion)
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
+		}
+		if r.UpdateAvail {
+			m.statusMsg = fmt.Sprintf("New version available: v%s (current: v%s)", r.LatestVersion, r.CurrentVersion)
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		return m, nil
 
@@ -1095,9 +1122,27 @@ func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd 
 	}
 }
 
+func updateCheckCmd(autoUpdate bool) tea.Cmd {
+	return func() tea.Msg {
+		var r update.Result
+		if autoUpdate {
+			r = update.Update()
+		} else {
+			r = update.Check()
+		}
+		return UpdateCheckMsg{Result: r}
+	}
+}
+
 func clearStatusCmd() tea.Cmd {
 	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return StatusClearMsg{}
+		return StatusClearMsg{} // Gen 0 = always clears
+	})
+}
+
+func clearStatusAfter(gen int, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(t time.Time) tea.Msg {
+		return StatusClearMsg{Gen: gen}
 	})
 }
 

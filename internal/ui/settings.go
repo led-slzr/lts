@@ -15,8 +15,9 @@ type SettingKind int
 
 const (
 	SettingEnum    SettingKind = iota // cycle through options
-	SettingText                      // free text input
-	SettingDisplay                   // read-only
+	SettingText                       // free text input
+	SettingDisplay                    // read-only
+	SettingBool                       // toggle true/false
 )
 
 type SettingsItem struct {
@@ -47,6 +48,13 @@ type SettingsModel struct {
 type SettingsSavedMsg struct{}
 type SettingsSaveClearMsg struct {
 	Gen int // only clear if this matches current generation
+}
+
+func boolToStr(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
@@ -82,6 +90,10 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 		SettingsItem{Section: "Global", Label: "Terminal", Key: "TERMINAL",
 			Value: s.Config.Global.Terminal, Kind: SettingEnum,
 			Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
+		SettingsItem{Section: "Global", Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
+			Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
+		SettingsItem{Section: "Global", Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
+			Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
 	)
 
 	// Local settings per repo
@@ -181,6 +193,13 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 			s.EditInput.SetValue(item.Value)
 			s.EditInput.Focus()
 			return s, textinput.Blink
+		case SettingBool:
+			if item.Value == "true" {
+				item.Value = "false"
+			} else {
+				item.Value = "true"
+			}
+			return s, s.applyChange(*item)
 		}
 	}
 	return s, nil
@@ -262,6 +281,10 @@ func (s *SettingsModel) previousValue(item SettingsItem) string {
 			return s.Config.Global.AutoRefresh
 		case "TERMINAL":
 			return s.Config.Global.Terminal
+		case "DAILY_CHECK_FOR_UPDATES":
+			return boolToStr(s.Config.Global.CheckForUpdates)
+		case "AUTO_UPDATE_NEW_RELEASE":
+			return boolToStr(s.Config.Global.AutoUpdate)
 		}
 	} else {
 		key := strings.ToUpper(item.RepoName)
@@ -318,6 +341,10 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.AutoRefresh = item.Value
 		case "TERMINAL":
 			s.Config.Global.Terminal = item.Value
+		case "DAILY_CHECK_FOR_UPDATES":
+			s.Config.Global.CheckForUpdates = item.Value == "true"
+		case "AUTO_UPDATE_NEW_RELEASE":
+			s.Config.Global.AutoUpdate = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {
@@ -398,6 +425,12 @@ func (s SettingsModel) View(width, height int) string {
 			} else {
 				valueFmt = cyanStyle.Render(value)
 			}
+		case SettingBool:
+			if value == "true" {
+				valueFmt = cyanStyle.Render("● enabled")
+			} else {
+				valueFmt = dimStyle.Render("○ disabled")
+			}
 		case SettingDisplay:
 			valueFmt = dimStyle.Render(value)
 		}
@@ -410,6 +443,8 @@ func (s SettingsModel) View(width, height int) string {
 				line += editStyle.Render("  ⏎ cycle")
 			} else if item.Kind == SettingText && !s.Editing {
 				line += editStyle.Render("  ⏎ edit")
+			} else if item.Kind == SettingBool {
+				line += editStyle.Render("  ⏎ toggle")
 			}
 			lines = append(lines, line)
 		} else {

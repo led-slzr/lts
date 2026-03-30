@@ -13,11 +13,14 @@ import (
 // GlobalConfig holds settings that apply regardless of working directory.
 // Stored at ~/.config/lts/config
 type GlobalConfig struct {
-	IDECommand     string // windsurf, code, cursor, zed
-	AICliCommand   string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager string // pnpm, npm, yarn, bun
-	AutoRefresh    string // 30M, 1H, 24H, etc.
-	Terminal       string // ghostty, iterm, terminal, wezterm, alacritty
+	IDECommand      string // windsurf, code, cursor, zed
+	AICliCommand    string // claude, opencode, "claude --dangerously-skip-permissions"
+	PackageManager  string // pnpm, npm, yarn, bun
+	AutoRefresh     string // 30M, 1H, 24H, etc.
+	Terminal        string // ghostty, iterm, terminal, wezterm, alacritty
+	CheckForUpdates bool   // daily check for new releases
+	AutoUpdate      bool   // automatically install new releases in background
+	LastUpdateCheck int64  // unix timestamp of last update check
 }
 
 // RepoLocalConfig holds per-repo settings.
@@ -35,11 +38,14 @@ type Config struct {
 
 func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
-		IDECommand:     "windsurf",
-		AICliCommand:   "claude",
-		PackageManager: "pnpm",
-		AutoRefresh:    "24H",
-		Terminal:       "ghostty",
+		IDECommand:      "windsurf",
+		AICliCommand:    "claude",
+		PackageManager:  "pnpm",
+		AutoRefresh:     "24H",
+		Terminal:        "terminal",
+		CheckForUpdates: true,
+		AutoUpdate:      true,
+		LastUpdateCheck: 0,
 	}
 }
 
@@ -158,6 +164,12 @@ func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
 	return c.SaveLocal()
 }
 
+// SetLastUpdateCheck records when we last checked for updates and saves.
+func (c *Config) SetLastUpdateCheck(ts int64) error {
+	c.Global.LastUpdateCheck = ts
+	return c.SaveGlobal()
+}
+
 // AICliLabel returns a display label derived from the AI CLI command.
 // e.g. "claude" → "Claude", "opencode" → "Opencode", "claude --dangerously-skip-permissions" → "Claude"
 func (c *Config) AICliLabel() string {
@@ -190,6 +202,9 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("PACKAGE_MANAGER=\"%s\"", c.Global.PackageManager),
 		fmt.Sprintf("AUTO_REFRESH=\"%s\"", c.Global.AutoRefresh),
 		fmt.Sprintf("TERMINAL=\"%s\"", c.Global.Terminal),
+		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
+		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
+		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
 }
@@ -244,6 +259,17 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["TERMINAL"]; ok {
 		g.Terminal = v
+	}
+	if v, ok := kv["DAILY_CHECK_FOR_UPDATES"]; ok {
+		g.CheckForUpdates = v != "false"
+	}
+	if v, ok := kv["AUTO_UPDATE_NEW_RELEASE"]; ok {
+		g.AutoUpdate = v != "false"
+	}
+	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			g.LastUpdateCheck = n
+		}
 	}
 }
 
