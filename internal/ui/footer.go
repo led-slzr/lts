@@ -13,57 +13,86 @@ type FooterButtonInfo struct {
 	Btn HoverButton
 }
 
-// RenderFooter renders footer and returns button positions for hit testing.
-func RenderFooter(width int, hoveredBtn HoverButton) string {
-	keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBtnBg)
-	keyHoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBtnHoverBg).Bold(true)
+// footerButton defines a footer button's content.
+type footerButton struct {
+	Key   string
+	Label string
+	Btn   HoverButton
+}
 
-	refreshBtn := renderFooterBtnWithKey("r", "Refresh All", hoveredBtn == BtnRefreshAll, keyStyle, keyHoverStyle)
-	cleanupBtn := renderFooterBtnWithKey("c", "Cleanup Merged", hoveredBtn == BtnCleanupMerged, keyStyle, keyHoverStyle)
-	settingsBtn := renderFooterBtnWithKey("s", "Settings", hoveredBtn == BtnSettings, keyStyle, keyHoverStyle)
-	exitBtn := renderFooterBtnWithKey("q", "Exit", hoveredBtn == BtnExit, keyStyle, keyHoverStyle)
+var (
+	footerLeft = []footerButton{
+		{"r", "Refresh All", BtnRefreshAll},
+		{"c", "Cleanup Merged", BtnCleanupMerged},
+	}
+	footerRight = []footerButton{
+		{"s", "Settings", BtnSettings},
+		{"q", "Exit", BtnExit},
+	}
+)
 
-	left := refreshBtn + "  " + cleanupBtn
-	right := settingsBtn + "  " + exitBtn
+// computeFooterLayout returns the rendered button widths and gap for the footer.
+// This is the single source of truth used by both rendering and hit testing.
+func computeFooterLayout(width int) (leftBtns []int, rightBtns []int, gap int) {
+	for _, b := range footerLeft {
+		// Measure using the normal (non-hover) rendering which determines layout width
+		rendered := ButtonStyle.Render(b.Key + " " + b.Label)
+		leftBtns = append(leftBtns, lipgloss.Width(rendered))
+	}
+	for _, b := range footerRight {
+		rendered := ButtonStyle.Render(b.Key + " " + b.Label)
+		rightBtns = append(rightBtns, lipgloss.Width(rendered))
+	}
 
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
+	leftW := 0
+	for i, w := range leftBtns {
+		leftW += w
+		if i < len(leftBtns)-1 {
+			leftW += 2 // gap between buttons
+		}
+	}
+	rightW := 0
+	for i, w := range rightBtns {
+		rightW += w
+		if i < len(rightBtns)-1 {
+			rightW += 2
+		}
+	}
+
 	availWidth := width - (MarginH * 2)
-	gap := availWidth - leftWidth - rightWidth
+	gap = availWidth - leftW - rightW
 	if gap < 2 {
 		gap = 2
 	}
-
-	footer := left + strings.Repeat(" ", gap) + right
-
-	return lipgloss.NewStyle().
-		Margin(0, MarginH).
-		Render(footer)
+	return
 }
 
 // FooterHitZones computes the screen X positions and widths of all footer buttons.
-// Matches the layout logic in RenderFooter exactly.
 func FooterHitZones(width int) []FooterButtonInfo {
-	refreshW := lipgloss.Width("r Refresh All") + 2  // +2 for ButtonStyle padding
-	cleanupW := lipgloss.Width("c Cleanup Merged") + 2
-	settingsW := lipgloss.Width("s Settings") + 2
-	exitW := lipgloss.Width("q Exit") + 2
+	leftBtns, rightBtns, gap := computeFooterLayout(width)
 
-	leftW := refreshW + 2 + cleanupW // 2 = gap between left buttons
-	rightW := settingsW + 2 + exitW
-
-	availWidth := width - (MarginH * 2)
-	gap := availWidth - leftW - rightW
-	if gap < 2 {
-		gap = 2
+	var zones []FooterButtonInfo
+	x := MarginH
+	for i, w := range leftBtns {
+		zones = append(zones, FooterButtonInfo{X: x, W: w, Btn: footerLeft[i].Btn})
+		x += w + 2
 	}
 
-	return []FooterButtonInfo{
-		{X: MarginH, W: refreshW, Btn: BtnRefreshAll},
-		{X: MarginH + refreshW + 2, W: cleanupW, Btn: BtnCleanupMerged},
-		{X: MarginH + leftW + gap, W: settingsW, Btn: BtnSettings},
-		{X: MarginH + leftW + gap + settingsW + 2, W: exitW, Btn: BtnExit},
+	// Right side starts after left + gap
+	leftW := 0
+	for i, w := range leftBtns {
+		leftW += w
+		if i < len(leftBtns)-1 {
+			leftW += 2
+		}
 	}
+	x = MarginH + leftW + gap
+	for i, w := range rightBtns {
+		zones = append(zones, FooterButtonInfo{X: x, W: w, Btn: footerRight[i].Btn})
+		x += w + 2
+	}
+
+	return zones
 }
 
 // GetFooterButtonAtX returns which button is at the given X coordinate.
@@ -76,18 +105,35 @@ func GetFooterButtonAtX(x, width int) HoverButton {
 	return BtnNone
 }
 
-func renderFooterBtn(label string, hovered bool) string {
-	if hovered {
-		return ButtonHoverStyle.Render(label)
-	}
-	return ButtonStyle.Render(label)
-}
+// RenderFooter renders footer using the shared layout computation.
+func RenderFooter(width int, hoveredBtn HoverButton) string {
+	keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBtnBg)
 
-func renderFooterBtnWithKey(key, label string, hovered bool, keyNormal, keyHover lipgloss.Style) string {
-	if hovered {
-		return ButtonHoverStyle.Render(key + " " + label)
+	_, _, gap := computeFooterLayout(width)
+
+	renderBtn := func(b footerButton, hovered bool) string {
+		if hovered {
+			return ButtonHoverStyle.Render(b.Key + " " + b.Label)
+		}
+		return keyStyle.Render(b.Key) + ButtonStyle.Render(" "+b.Label)
 	}
-	return keyNormal.Render(key) + ButtonStyle.Render(" " + label)
+
+	var leftParts []string
+	for _, b := range footerLeft {
+		leftParts = append(leftParts, renderBtn(b, hoveredBtn == b.Btn))
+	}
+	var rightParts []string
+	for _, b := range footerRight {
+		rightParts = append(rightParts, renderBtn(b, hoveredBtn == b.Btn))
+	}
+
+	left := strings.Join(leftParts, "  ")
+	right := strings.Join(rightParts, "  ")
+	footer := left + strings.Repeat(" ", gap) + right
+
+	return lipgloss.NewStyle().
+		Margin(0, MarginH).
+		Render(footer)
 }
 
 // CreateBtnHitZone returns the X position and width of the centered create button.

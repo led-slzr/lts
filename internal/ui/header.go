@@ -77,35 +77,28 @@ type ClickUsageZone struct {
 	Usage opener.ClickUsage
 }
 
-// ClickUsageHitZones returns the screen coordinates of each click usage tab.
-// The right block is positioned at: MarginH + bannerWidth + gap.
-// The usage line is at Y = 2 (1 header margin + 1 rightBlock marginTop).
-func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickUsageZone) {
-	if aiCliLabel == "" {
-		aiCliLabel = "AI CLI"
-	}
+// headerLayout holds the computed positions shared between rendering and hit testing.
+type headerLayout struct {
+	BannerWidth  int
+	RightBlockX  int // screen X where the right block starts
+	Gap          int
+}
 
+// computeHeaderLayout is the single source of truth for header positioning.
+func computeHeaderLayout(termWidth int, aiCliLabel string) headerLayout {
 	bannerStyle := lipgloss.NewStyle().
 		Foreground(ColorDarkGreen).
 		Background(ColorBlack).
 		Bold(true)
-	bannerWidth := lipgloss.Width(bannerStyle.Render(ltsBanner[0]))
 
-	// Build the usage line to measure each part's width
-	labelText := "Click Usage:"
-	labelW := lipgloss.Width(ClickUsageLabelStyle.Render(labelText)) + 1 // +1 for space after label
-
-	modes := []struct {
-		usage opener.ClickUsage
-		name  string
-	}{
-		{opener.ClickIDE, "IDE"},
-		{opener.ClickAICli, aiCliLabel},
-		{opener.ClickTerminal, "Terminal"},
+	var bannerLines []string
+	for _, line := range ltsBanner {
+		bannerLines = append(bannerLines, bannerStyle.Render(line))
 	}
+	bannerLines = append(bannerLines, lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v"+version.Version))
+	bannerWidth := lipgloss.Width(strings.Join(bannerLines, "\n"))
 
-	// Measure full right block width to compute gap
-	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1) // active mode doesn't affect width
+	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1)
 	statusLine := renderStatusLine("", false, 0)
 	rightBlock := usageStr + "\n" + statusLine
 	rightWidth := lipgloss.Width(rightBlock)
@@ -116,19 +109,41 @@ func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickU
 		gap = 2
 	}
 
-	// Right block starts at this X
-	rightBlockX := MarginH + bannerWidth + gap
-	y = 2 // 1 (header top margin) + 1 (rightBlock marginTop)
+	return headerLayout{
+		BannerWidth: bannerWidth,
+		RightBlockX: MarginH + bannerWidth + gap,
+		Gap:         gap,
+	}
+}
 
-	// Walk through the usage line parts to compute X positions
-	curX := rightBlockX + labelW
+// ClickUsageHitZones returns the screen coordinates of each click usage tab.
+func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickUsageZone) {
+	if aiCliLabel == "" {
+		aiCliLabel = "AI CLI"
+	}
+
+	layout := computeHeaderLayout(termWidth, aiCliLabel)
+
+	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("Click Usage:")) + 1 // +1 for space after label
+
+	modes := []struct {
+		usage opener.ClickUsage
+		name  string
+	}{
+		{opener.ClickIDE, "IDE"},
+		{opener.ClickAICli, aiCliLabel},
+		{opener.ClickTerminal, "Terminal"},
+	}
+
+	y = 2 // 1 (header top margin) + 1 (rightBlock marginTop)
+	curX := layout.RightBlockX + labelW
 	var result []ClickUsageZone
 	for i, m := range modes {
-		w := lipgloss.Width(ClickUsageActiveStyle.Render(m.name)) // padded width
+		w := lipgloss.Width(ClickUsageActiveStyle.Render(m.name))
 		result = append(result, ClickUsageZone{X: curX, W: w, Usage: m.usage})
 		curX += w
 		if i < len(modes)-1 {
-			curX += lipgloss.Width(BranchDimStyle.Render("│")) // separator
+			curX += lipgloss.Width(BranchDimStyle.Render("│"))
 		}
 	}
 
@@ -186,14 +201,8 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 	rightBlock := usageStr + "\n" + statusLine
 
 	// Position: banner center-left, usage+status top-right
-	bannerWidth := lipgloss.Width(banner)
-	rightWidth := lipgloss.Width(rightBlock)
-
-	availableWidth := width - (MarginH * 2)
-	gap := availableWidth - bannerWidth - rightWidth
-	if gap < 2 {
-		gap = 2
-	}
+	layout := computeHeaderLayout(width, aiCliLabel)
+	gap := layout.Gap
 
 	// Place right block aligned to top of banner
 	rightPadded := lipgloss.NewStyle().
