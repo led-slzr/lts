@@ -93,11 +93,11 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 	lines = append(lines, dimStyle.Render("↑/↓ navigate • enter select • esc close"))
 
 	content := strings.Join(lines, "\n")
-	rendered := ModalStyle.Width(40).Render(content)
+	return ModalStyle.Width(40).Render(content)
+}
 
-	return lipgloss.Place(
-		screenWidth, screenHeight,
-		lipgloss.Center, lipgloss.Center,
-		rendered,
-	)
+// RenderContextMenuPlaced renders the context menu centered on screen.
+func RenderContextMenuPlaced(menu ContextMenuModel, screenWidth, screenHeight int) string {
+	modal := RenderContextMenu(menu, screenWidth, screenHeight)
+	return lipgloss.Place(screenWidth, screenHeight, lipgloss.Center, lipgloss.Center, modal)
 }

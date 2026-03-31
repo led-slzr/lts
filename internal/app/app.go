@@ -474,11 +474,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// modalContentY returns the Y coordinate of the first content line inside a centered modal,
-// and the modal height. Modal has DoubleBorder (1 top) + Padding (1 top) = 2 lines offset.
-func modalContentY(screenHeight, modalHeight int) int {
-	modalTop := (screenHeight - modalHeight) / 2
-	return modalTop + 2 // border(1) + padding(1)
+// modalMetrics computes the screen position of modal content.
+// modalRendered is the styled modal box (before lipgloss.Place), screenH is terminal height.
+// Returns: contentStartY (first content line), modalTop, modalH.
+func modalMetrics(modalRendered string, screenH int) (contentStartY, modalTop, modalH int) {
+	modalH = lipgloss.Height(modalRendered)
+	modalTop = (screenH - modalH) / 2
+	contentStartY = modalTop + 2 // border(1) + padding(1)
+	return
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -492,8 +495,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Context menu: hover to highlight, click to execute, click elsewhere to close
 	if m.contextMenu.Active {
 		menuRendered := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
-		menuH := lipgloss.Height(menuRendered)
-		contentStartY := modalContentY(m.height, menuH)
+		contentStartY, _, _ := modalMetrics(menuRendered, m.height)
 		itemStartY := contentStartY + 2 // skip title + empty line
 
 		hoveredItem := msg.Y - itemStartY
@@ -515,18 +517,15 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	// Y/N dialogs: click on [Y] or [N] buttons
 	if m.openPromptActive {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			rendered := m.renderOpenPromptDialog()
-			modalH := lipgloss.Height(rendered)
-			// Last content Y = modalTop + modalH - border(1) - padding(1) - 1
-			ynY := (m.height-modalH)/2 + modalH - 3
+			modal := m.renderOpenPromptDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3 // last content line before padding+border
 			if msg.Y == ynY {
-				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
 				relX := msg.X - modalLeft
 				if relX >= 0 && relX < 20 {
-					// Left half = Yes
 					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 				} else {
-					// Right half = No
 					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 				}
 			}
@@ -536,13 +535,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if m.cleanupConfirmActive {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			rendered := m.renderCleanupConfirmDialog()
-			modalH := lipgloss.Height(rendered)
-			modalTop := (m.height - modalH) / 2
+			modal := m.renderCleanupConfirmDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
 			ynY := modalTop + modalH - 3
 
 			if msg.Y == ynY {
-				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
 				relX := msg.X - modalLeft
 				if relX >= 0 && relX < 20 {
 					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
@@ -550,10 +548,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 				}
 			}
-			// Click on [d] toggle line (remote branch toggle)
-			// It's 2 lines above the Y/N line (toggle + empty line + Y/N)
-			toggleY := ynY - 2
-			if msg.Y == toggleY {
+			// [d] toggle is 2 lines above Y/N (toggle + empty + Y/N)
+			if msg.Y == ynY-2 {
 				return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 			}
 		}
@@ -562,14 +558,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if m.deleteConfirmActive {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			rendered := m.renderDeleteConfirmDialog()
-			modalH := lipgloss.Height(rendered)
-			modalTop := (m.height - modalH) / 2
+			modal := m.renderDeleteConfirmDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
 			ynY := modalTop + modalH - 3
 
 			if !m.deleteDangerous && msg.Y == ynY {
-				// Simple Y/N mode
-				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
 				relX := msg.X - modalLeft
 				if relX >= 0 && relX < 20 {
 					return confirmDelete(m)
@@ -577,14 +571,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return cancelDelete(m)
 				}
 			}
-			// Click on remote toggle line
-			// Find it relative to bottom: toggle is 2 lines above Y/N (or 2 above input in dangerous mode)
+			// Remote toggle: 2 lines above Y/N (simple) or 4 lines above bottom hint (dangerous)
 			toggleY := ynY - 2
-			if !m.deleteDangerous {
-				toggleY = ynY - 2
-			} else {
-				// In dangerous mode: bottom lines are "Type DELETE:" + input + "enter confirm"
-				// toggle is further up
+			if m.deleteDangerous {
 				toggleY = ynY - 4
 			}
 			if msg.Y == toggleY {
@@ -603,13 +592,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.modal.Active {
-		rendered := m.modal.View(m.width, m.height)
-		modalH := lipgloss.Height(rendered)
-		contentStartY := modalContentY(m.height, modalH)
+		modal := m.modal.View(m.width, m.height)
+		// modal.View already calls lipgloss.Place, so extract the inner modal height
+		// by computing from content: ModalStyle has border(1)+padding(1) each side
+		// Simpler: measure content lines + chrome
+		contentStartY, _, _ := modalMetrics(modal, m.height)
 
 		if m.modal.Step == ui.ModalSelectRepos {
-			// Content: title(1) + empty(1) + description(1) + empty(1) + repos...
-			repoStartY := contentStartY + 4
+			repoStartY := contentStartY + 4 // title(1) + empty(1) + description(1) + empty(1)
 			hoveredRepo := msg.Y - repoStartY
 			if hoveredRepo >= 0 && hoveredRepo < len(m.modal.Repos) {
 				m.modal.CursorIdx = hoveredRepo
@@ -640,13 +630,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if m.renameActive {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			// Click on remote toggle
 			if m.renameWTIdx >= 0 && renameHasRemote(m) {
-				rendered := m.renderRenameDialog()
-				modalH := lipgloss.Height(rendered)
-				modalTop := (m.height - modalH) / 2
-				// Toggle line is 2 lines above the bottom hint line
-				toggleY := modalTop + modalH - 3 - 2
+				modal := m.renderRenameDialog()
+				_, modalTop, modalH := modalMetrics(modal, m.height)
+				toggleY := modalTop + modalH - 3 - 2 // 2 lines above bottom hint
 				if msg.Y == toggleY {
 					m.renameRemoteBranch = !m.renameRemoteBranch
 					return m, nil
@@ -1004,35 +991,34 @@ func (m Model) View() string {
 	content := strings.Join(sections, "\n")
 
 	// --- Overlay dialogs (rendered on top of content) ---
+	placeDialog := func(modal string) string {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	}
 
 	// Context menu
 	if m.contextMenu.Active {
-		dialog := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		dialog := ui.RenderContextMenuPlaced(m.contextMenu, m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
 	}
 
 	// Rename dialog
 	if m.renameActive {
-		dialog := m.renderRenameDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderRenameDialog()), m.width, m.height)
 	}
 
 	// Open workspace prompt
 	if m.openPromptActive {
-		dialog := m.renderOpenPromptDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
 	}
 
 	// Cleanup confirmation
 	if m.cleanupConfirmActive {
-		dialog := m.renderCleanupConfirmDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderCleanupConfirmDialog()), m.width, m.height)
 	}
 
 	// Delete confirmation
 	if m.deleteConfirmActive {
-		dialog := m.renderDeleteConfirmDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderDeleteConfirmDialog()), m.width, m.height)
 	}
 
 	// Settings
@@ -1043,7 +1029,7 @@ func (m Model) View() string {
 
 	// Create worktree modal
 	if m.modal.Active {
-		dialog := m.modal.View(m.width, m.height)
+		dialog := m.modal.ViewPlaced(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
 	}
 
@@ -1089,8 +1075,7 @@ func (m Model) renderRenameDialog() string {
 	content += "\n"
 	content += dimStyle.Render("enter confirm • esc cancel")
 
-	modal := ui.ModalStyle.Width(50).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(50).Render(content)
 }
 
 func (m Model) renderOpenPromptDialog() string {
@@ -1105,8 +1090,7 @@ func (m Model) renderOpenPromptDialog() string {
 	content += "\n" + dimStyle.Render("Open workspace in IDE?") + "\n\n"
 	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 
-	modal := ui.ModalStyle.Width(50).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(50).Render(content)
 }
 
 // deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
@@ -1199,8 +1183,7 @@ func (m Model) renderDeleteConfirmDialog() string {
 		content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 	}
 
-	modal := ui.ModalStyle.Width(56).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(56).Render(content)
 }
 
 func (m Model) renderCleanupConfirmDialog() string {
@@ -1221,8 +1204,7 @@ func (m Model) renderCleanupConfirmDialog() string {
 	content += "\n"
 	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 
-	modal := ui.ModalStyle.Width(56).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(56).Render(content)
 }
 
 // getCardScreenX computes the screen X position of a card by its repo index.

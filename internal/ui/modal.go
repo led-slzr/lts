@@ -169,6 +169,7 @@ func (m *ModalModel) computePlan() {
 	}
 }
 
+// View returns the rendered modal box (not placed on screen).
 func (m ModalModel) View(width, height int) string {
 	if !m.Active {
 		return ""
@@ -275,11 +276,11 @@ func (m ModalModel) View(width, height int) string {
 		content += "\n" + dimStyle.Render("enter create • esc cancel")
 	}
 
-	modal := ModalStyle.Render(content)
+	return ModalStyle.Render(content)
+}
 
-	return lipgloss.Place(
-		width, height,
-		lipgloss.Center, lipgloss.Center,
-		modal,
-	)
+// ViewPlaced renders the modal centered on screen.
+func (m ModalModel) ViewPlaced(width, height int) string {
+	modal := m.View(width, height)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
 }
