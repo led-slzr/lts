@@ -385,15 +385,11 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 		// Install dependencies
 		runPackageInstall(wtPath, pkgManager, log)
 
-		// Generate individual workspace
-		wsFile := generateIndividualWorkspace(branchSubdirPath, wtName, pkgManager, aiCliCommand)
-
 		results = append(results, &CreateResult{
-			WorktreePath:  wtPath,
-			WorktreeName:  wtName,
-			WorkspaceFile: wsFile,
-			RepoName:      repoName,
-			Branch:        branch,
+			WorktreePath: wtPath,
+			WorktreeName: wtName,
+			RepoName:     repoName,
+			Branch:       branch,
 		})
 		repoWTPairs = append(repoWTPairs, repoName+":"+wtName)
 	}
@@ -411,9 +407,10 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	// Write/merge .lts-repos metadata
 	writeReposMetadata(ltsPath, sorted)
 
-	// Generate monorepo workspace if 2+ succeeded
-	if len(results) >= 2 {
-		generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs)
+	// Generate monorepo workspace (only workspace file for monorepo setups)
+	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand)
+	for _, r := range results {
+		r.WorkspaceFile = wsFile
 	}
 
 	return results, nil
@@ -616,18 +613,54 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) strin
 }
 
 // generateMonorepoWorkspace creates a workspace for multi-repo monorepo-like worktrees.
-func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string) {
+// Includes: all repo folders, AI CLI task at parent dir, and one terminal per repo.
+func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string, aiCliCmd string) string {
 	wsPath := filepath.Join(branchSubdirPath, "monorepo-"+suffix+".code-workspace")
 
+	// Derive AI CLI label from command
+	aiLabel := "Claude"
+	if aiCliCmd != "" {
+		parts := strings.Fields(aiCliCmd)
+		if len(parts) > 0 {
+			name := parts[0]
+			if len(name) > 0 {
+				aiLabel = strings.ToUpper(name[:1]) + name[1:]
+			}
+		}
+	}
+	if aiCliCmd == "" {
+		aiCliCmd = "claude"
+	}
+
 	var folders []string
+	var repoTasks []string
 	for _, pair := range repoWTPairs {
 		parts := strings.SplitN(pair, ":", 2)
 		if len(parts) < 2 {
 			continue
 		}
 		repo, wt := parts[0], parts[1]
-		folders = append(folders, fmt.Sprintf(`    { "name": "%s - %s", "path": "%s" }`, repo, suffix, wt))
+		folderName := repo + " - " + suffix
+		folders = append(folders, fmt.Sprintf(`    { "name": "%s", "path": "%s" }`, folderName, wt))
+
+		repoTasks = append(repoTasks, fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "echo '' && echo '📂 %s Terminal (%s)' && echo '' && exec $SHELL",
+        "options": { "cwd": "${workspaceFolder:%s}" },
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
+      }`, repo, repo, suffix, folderName))
 	}
+
+	allTasks := []string{fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "%s",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "new" }
+      }`, aiLabel, aiCliCmd)}
+	allTasks = append(allTasks, repoTasks...)
 
 	content := fmt.Sprintf(`{
   "folders": [
@@ -635,11 +668,18 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
   ],
   "settings": {
     "terminal.integrated.defaultProfile.osx": "zsh"
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+%s
+    ]
   }
 }
-`, strings.Join(folders, ",\n"))
+`, strings.Join(folders, ",\n"), strings.Join(allTasks, ",\n"))
 
 	os.WriteFile(wsPath, []byte(content), 0644)
+	return wsPath
 }
 
 // updateWorkspaceContents replaces occurrences of oldName with newName inside a workspace file.
@@ -1084,10 +1124,8 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 		log(ctx, "Removing old monorepo workspace", false)
 		os.Remove(oldMonoWs)
 	}
-	if len(repoWTPairs) >= 2 {
-		log(ctx, "Generating new monorepo workspace", false)
-		generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs)
-	}
+	log(ctx, "Generating new monorepo workspace", false)
+	generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs, aiCliCmd)
 
 	// 4. Rename the branch subdirectory itself
 	newBranchSubdirPath := filepath.Join(ltsPath, newBranchDirName)
