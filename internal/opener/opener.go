@@ -131,16 +131,35 @@ func openTerminal(path, terminal string) error {
 
 	switch terminal {
 	case "ghostty":
+		if runtime.GOOS == "darwin" {
+			// Open a new tab in the running Ghostty instance via AppleScript
+			script := fmt.Sprintf(`tell application "Ghostty"
+				activate
+			end tell
+			delay 0.1
+			tell application "System Events"
+				tell process "Ghostty"
+					keystroke "t" using command down
+					delay 0.2
+					keystroke "cd '%s' && clear"
+					key code 36
+				end tell
+			end tell`, path)
+			cmd := exec.Command("osascript", "-e", script)
+			return cmd.Start()
+		}
 		cmd := exec.Command("ghostty", fmt.Sprintf("--working-directory=%s", path))
 		return cmd.Start()
 
 	case "iterm":
 		script := fmt.Sprintf(`tell application "iTerm2"
-			create window with default profile
-			tell current session of current window
-				write text "cd '%s'"
-			end tell
 			activate
+			tell current window
+				create tab with default profile
+				tell current session
+					write text "cd '%s' && clear"
+				end tell
+			end tell
 		end tell`, path)
 		cmd := exec.Command("osascript", "-e", script)
 		return cmd.Start()
@@ -159,9 +178,12 @@ func openTerminal(path, terminal string) error {
 
 	case "terminal":
 		if runtime.GOOS == "darwin" {
+			// Open a new tab in the frontmost Terminal window
 			script := fmt.Sprintf(`tell application "Terminal"
-				do script "cd '%s'"
 				activate
+				tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
+				delay 0.2
+				do script "cd '%s' && clear" in front window
 			end tell`, path)
 			cmd := exec.Command("osascript", "-e", script)
 			return cmd.Start()
