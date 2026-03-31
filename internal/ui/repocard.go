@@ -108,7 +108,7 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("(") + monoLabel + BranchDimStyle.Render(")")
 	} else if isHeaderHovered && repo.Path != "" {
 		// Highlighted header (hovered, clickable repo)
-		header = WTHighlightStyle.Render(repo.Name+" ("+repo.MainBranch+")")
+		header = WTHighlightStyle.Underline(true).Render(repo.Name+" ("+repo.MainBranch+")")
 	} else {
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
 	}
