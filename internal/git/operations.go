@@ -114,6 +114,96 @@ func generateUniqueName(baseName, parentDir string) string {
 	return name
 }
 
+// BranchInfo holds a branch name with its source and last commit date.
+type BranchInfo struct {
+	Name     string
+	IsLocal  bool // true = local, false = remote-only
+	Date     string // formatted date string (e.g. "2025-03-28")
+	UnixTime int64  // for sorting by recency
+}
+
+// GetBranchesWithDates returns all branches (local + remote-only) for the selected repos,
+// sorted: local first, then remote, each group sorted by most recent commit.
+// Deduplicates: if a branch exists both locally and remotely, it's shown as local.
+func GetBranchesWithDates(repoPaths []string) []BranchInfo {
+	seen := make(map[string]*BranchInfo)
+
+	for _, repoPath := range repoPaths {
+		// Local branches with date
+		out, err := RunGit(repoPath, "for-each-ref",
+			"--sort=-committerdate",
+			"--format=%(refname:short)\t%(committerdate:unix)\t%(committerdate:relative)",
+			"refs/heads/")
+		if err == nil && out != "" {
+			for _, line := range strings.Split(out, "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+				if len(parts) < 3 || parts[0] == "" {
+					continue
+				}
+				name := parts[0]
+				if name == "main" || name == "master" {
+					continue
+				}
+				if _, exists := seen[name]; !exists {
+					var unix int64
+					fmt.Sscanf(parts[1], "%d", &unix)
+					seen[name] = &BranchInfo{
+						Name:     name,
+						IsLocal:  true,
+						Date:     parts[2],
+						UnixTime: unix,
+					}
+				}
+			}
+		}
+
+		// Remote branches
+		rOut, err := RunGit(repoPath, "for-each-ref",
+			"--sort=-committerdate",
+			"--format=%(refname:short)\t%(committerdate:unix)\t%(committerdate:relative)",
+			"refs/remotes/origin/")
+		if err == nil && rOut != "" {
+			for _, line := range strings.Split(rOut, "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+				if len(parts) < 3 || parts[0] == "" {
+					continue
+				}
+				name := strings.TrimPrefix(parts[0], "origin/")
+				if name == "main" || name == "master" || name == "HEAD" {
+					continue
+				}
+				if _, exists := seen[name]; !exists {
+					var unix int64
+					fmt.Sscanf(parts[1], "%d", &unix)
+					seen[name] = &BranchInfo{
+						Name:     name,
+						IsLocal:  false,
+						Date:     parts[2],
+						UnixTime: unix,
+					}
+				}
+			}
+		}
+	}
+
+	// Collect and sort: local first (by recency), then remote (by recency)
+	var local, remote []BranchInfo
+	for _, b := range seen {
+		if b.IsLocal {
+			local = append(local, *b)
+		} else {
+			remote = append(remote, *b)
+		}
+	}
+	sort.Slice(local, func(i, j int) bool { return local[i].UnixTime > local[j].UnixTime })
+	sort.Slice(remote, func(i, j int) bool { return remote[i].UnixTime > remote[j].UnixTime })
+
+	result := make([]BranchInfo, 0, len(local)+len(remote))
+	result = append(result, local...)
+	result = append(result, remote...)
+	return result
+}
+
 // GetExistingBranches returns local and remote-only branches for a repo.
 func GetExistingBranches(repoPath string) (local []string, remoteOnly []string) {
 	// Local branches (exclude main/master)
@@ -385,15 +475,11 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 		// Install dependencies
 		runPackageInstall(wtPath, pkgManager, log)
 
-		// Generate individual workspace
-		wsFile := generateIndividualWorkspace(branchSubdirPath, wtName, pkgManager, aiCliCommand)
-
 		results = append(results, &CreateResult{
-			WorktreePath:  wtPath,
-			WorktreeName:  wtName,
-			WorkspaceFile: wsFile,
-			RepoName:      repoName,
-			Branch:        branch,
+			WorktreePath: wtPath,
+			WorktreeName: wtName,
+			RepoName:     repoName,
+			Branch:       branch,
 		})
 		repoWTPairs = append(repoWTPairs, repoName+":"+wtName)
 	}
@@ -411,9 +497,10 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	// Write/merge .lts-repos metadata
 	writeReposMetadata(ltsPath, sorted)
 
-	// Generate monorepo workspace if 2+ succeeded
-	if len(results) >= 2 {
-		generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs)
+	// Generate monorepo workspace (only workspace file for monorepo setups)
+	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand)
+	for _, r := range results {
+		r.WorkspaceFile = wsFile
 	}
 
 	return results, nil
@@ -616,18 +703,54 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) strin
 }
 
 // generateMonorepoWorkspace creates a workspace for multi-repo monorepo-like worktrees.
-func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string) {
+// Includes: all repo folders, AI CLI task at parent dir, and one terminal per repo.
+func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string, aiCliCmd string) string {
 	wsPath := filepath.Join(branchSubdirPath, "monorepo-"+suffix+".code-workspace")
 
+	// Derive AI CLI label from command
+	aiLabel := "Claude"
+	if aiCliCmd != "" {
+		parts := strings.Fields(aiCliCmd)
+		if len(parts) > 0 {
+			name := parts[0]
+			if len(name) > 0 {
+				aiLabel = strings.ToUpper(name[:1]) + name[1:]
+			}
+		}
+	}
+	if aiCliCmd == "" {
+		aiCliCmd = "claude"
+	}
+
 	var folders []string
+	var repoTasks []string
 	for _, pair := range repoWTPairs {
 		parts := strings.SplitN(pair, ":", 2)
 		if len(parts) < 2 {
 			continue
 		}
 		repo, wt := parts[0], parts[1]
-		folders = append(folders, fmt.Sprintf(`    { "name": "%s - %s", "path": "%s" }`, repo, suffix, wt))
+		folderName := repo + " - " + suffix
+		folders = append(folders, fmt.Sprintf(`    { "name": "%s", "path": "%s" }`, folderName, wt))
+
+		repoTasks = append(repoTasks, fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "echo '' && echo '📂 %s Terminal (%s)' && echo '' && exec $SHELL",
+        "options": { "cwd": "${workspaceFolder:%s}" },
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
+      }`, repo, repo, suffix, folderName))
 	}
+
+	allTasks := []string{fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "%s",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "new" }
+      }`, aiLabel, aiCliCmd)}
+	allTasks = append(allTasks, repoTasks...)
 
 	content := fmt.Sprintf(`{
   "folders": [
@@ -635,11 +758,18 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
   ],
   "settings": {
     "terminal.integrated.defaultProfile.osx": "zsh"
+  },
+  "tasks": {
+    "version": "2.0.0",
+    "tasks": [
+%s
+    ]
   }
 }
-`, strings.Join(folders, ",\n"))
+`, strings.Join(folders, ",\n"), strings.Join(allTasks, ",\n"))
 
 	os.WriteFile(wsPath, []byte(content), 0644)
+	return wsPath
 }
 
 // updateWorkspaceContents replaces occurrences of oldName with newName inside a workspace file.
@@ -727,6 +857,109 @@ func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn
 		return 0, failed, lastErr
 	}
 	return refreshed, failed, nil
+}
+
+// resolveWorktreeRepo finds the main repository path for a git worktree
+// by reading the .git file which contains "gitdir: /path/to/repo/.git/worktrees/name".
+func resolveWorktreeRepo(wtPath string) string {
+	gitFile := filepath.Join(wtPath, ".git")
+	data, err := os.ReadFile(gitFile)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.HasPrefix(line, "gitdir: ") {
+		return ""
+	}
+	gitDir := strings.TrimPrefix(line, "gitdir: ")
+	// gitDir is like /path/to/repo/.git/worktrees/name
+	// Walk up to find the .git dir, then its parent is the repo
+	dir := gitDir
+	for {
+		base := filepath.Base(dir)
+		dir = filepath.Dir(dir)
+		if base == ".git" {
+			return dir
+		}
+		if dir == filepath.Dir(dir) {
+			break // reached root
+		}
+	}
+	return ""
+}
+
+// DeleteMonorepoWorktree removes all repo worktrees inside a monorepo branch subdir,
+// cleans up workspace files, and removes the branch subdir.
+func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, logFn ...LogFunc) error {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+
+	ctx := branch
+	if ctx == "" {
+		ctx = filepath.Base(branchSubdir)
+	}
+
+	entries, err := os.ReadDir(branchSubdir)
+	if err != nil {
+		return fmt.Errorf("failed to read branch subdir: %w", err)
+	}
+
+	// Remove all worktree directories inside the branch subdir
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(branchSubdir, e.Name())
+		if !isWorktreeDir(wtPath) {
+			continue
+		}
+
+		repoPath := resolveWorktreeRepo(wtPath)
+		if repoPath == "" {
+			// Fallback: try to match by repo name prefix
+			for _, rn := range repoNames {
+				if strings.HasPrefix(e.Name(), rn+"-") {
+					repoPath = filepath.Join(scriptDir, rn)
+					break
+				}
+			}
+		}
+
+		log(ctx, "Removing worktree "+e.Name(), false)
+		if repoPath != "" {
+			_, gitErr := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
+			if gitErr != nil {
+				log(ctx, "Git remove failed for "+e.Name()+", removing manually", true)
+				os.RemoveAll(wtPath)
+				RunGit(repoPath, "worktree", "prune")
+			}
+		} else {
+			log(ctx, "Could not resolve repo for "+e.Name()+", removing manually", true)
+			os.RemoveAll(wtPath)
+		}
+
+		// Delete the branch in this repo
+		if repoPath != "" && branch != "" && !IsProtectedBranch(branch) {
+			log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
+			RunGit(repoPath, "branch", "-D", branch)
+
+			if deleteRemote {
+				log(ctx, "Deleting remote branch in "+filepath.Base(repoPath), false)
+				RunGit(repoPath, "push", "origin", "--delete", branch)
+			}
+		}
+	}
+
+	// Remove the entire branch subdir (workspace files + any leftovers)
+	os.RemoveAll(branchSubdir)
+
+	// Clean up empty LTS parent
+	log(ctx, "Cleaning up empty directories", false)
+	cleanEmptyLTSDirs(filepath.Dir(branchSubdir))
+
+	return nil
 }
 
 // DeleteWorktree removes a worktree, its workspace file, and optionally its branch.
@@ -835,8 +1068,8 @@ func cleanEmptyLTSDirs(dir string) {
 	}
 }
 
-// RebaseWorktree rebases a worktree onto its main branch.
-func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
+// RebaseWorktree rebases a worktree onto its main branch and runs package install after.
+func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -888,6 +1121,23 @@ func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
 	}
 
 	log(ctx, "Rebase complete", false)
+
+	// Run package install if configured and package.json exists
+	if pkgManager != "" {
+		if _, err := os.Stat(filepath.Join(wtPath, "package.json")); err == nil {
+			if _, lookErr := exec.LookPath(pkgManager); lookErr == nil {
+				log(ctx, "Installing dependencies with "+pkgManager, false)
+				cmd := exec.Command(pkgManager, "install", "--silent")
+				cmd.Dir = wtPath
+				if installErr := cmd.Run(); installErr != nil {
+					log(ctx, pkgManager+" install completed with warnings", true)
+				} else {
+					log(ctx, "Dependencies installed", false)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1084,10 +1334,8 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 		log(ctx, "Removing old monorepo workspace", false)
 		os.Remove(oldMonoWs)
 	}
-	if len(repoWTPairs) >= 2 {
-		log(ctx, "Generating new monorepo workspace", false)
-		generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs)
-	}
+	log(ctx, "Generating new monorepo workspace", false)
+	generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs, aiCliCmd)
 
 	// 4. Rename the branch subdirectory itself
 	newBranchSubdirPath := filepath.Join(ltsPath, newBranchDirName)
@@ -1161,19 +1409,25 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	for _, repo := range repos {
 		for _, wt := range repo.Worktrees {
 			if wt.Status == StatusMergedCleanable {
-				repoPath := repo.Path
-				if repo.IsMonorepo && len(repo.RepoNames) > 0 {
-					repoPath = filepath.Join(scriptDir, repo.RepoNames[0])
-				}
-				if repoPath == "" {
-					continue
-				}
-				log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
-				err := DeleteWorktree(repoPath, wt.Path, wt.Branch, deleteRemote, log)
-				if err == nil {
-					cleaned++
+				if repo.IsMonorepo {
+					log(wt.Branch, "Cleaning merged monorepo worktree in "+repo.Name, false)
+					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, deleteRemote, log)
+					if err == nil {
+						cleaned++
+					} else {
+						log(wt.Branch, "Failed: "+err.Error(), true)
+					}
 				} else {
-					log(wt.Branch, "Failed: "+err.Error(), true)
+					if repo.Path == "" {
+						continue
+					}
+					log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
+					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, deleteRemote, log)
+					if err == nil {
+						cleaned++
+					} else {
+						log(wt.Branch, "Failed: "+err.Error(), true)
+					}
 				}
 			}
 		}

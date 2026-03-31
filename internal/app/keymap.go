@@ -52,13 +52,13 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		if !m.loading {
+		if !m.loading && len(m.repos) > 0 {
 			logFn, startCmd := m.beginLoading("Refreshing all repos...")
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 
 	case "c":
-		if !m.loading {
+		if !m.loading && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false
 			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
@@ -66,8 +66,8 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	case "n":
-		if !m.loading {
-			m.modal = ui.NewModal(m.repos)
+		if !m.loading && len(m.repos) > 0 {
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}
 
@@ -165,7 +165,7 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[wtIdx]
 			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, repoIdx, wtIdx))
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.Global.PackageManager, repoIdx, wtIdx))
 		}
 
 	case ui.BtnRename:
@@ -216,6 +216,9 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 			wt := repo.Worktrees[m.deleteWTIdx]
 			logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
 			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
+			if repo.IsMonorepo {
+				return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteRemoteBranch, ri, wi))
+			}
 			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi))
 		}
 	}

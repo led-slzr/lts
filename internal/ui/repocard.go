@@ -100,16 +100,20 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 	var lines []string
 
 	// Header line
+	isHeaderHovered := focused && focusedWT == -2
 	var header string
 	if repo.IsMonorepo {
 		// Monorepo card: show name with repo count
 		monoLabel := lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack).Render("mono")
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("(") + monoLabel + BranchDimStyle.Render(")")
+	} else if isHeaderHovered && repo.Path != "" {
+		// Highlighted header (hovered, clickable repo)
+		header = WTHighlightStyle.Underline(true).Render(repo.Name+" ("+repo.MainBranch+")")
 	} else {
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
 	}
 
-	if focused && focusedWT == -2 {
+	if isHeaderHovered {
 		triggerBtn := renderInlineBtn("[▸]", hoveredBtn == BtnContextMenu)
 		header = rightAlignButtons(header, triggerBtn, iw)
 	}

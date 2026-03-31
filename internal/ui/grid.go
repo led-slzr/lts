@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"fmt"
+	"lts-revamp/internal/config"
 	"lts-revamp/internal/git"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -26,6 +29,7 @@ const (
 	ZoneCreateBtn
 	ZoneFooterBtn
 	ZoneMigrateBtn
+	ZoneHistoryItem
 )
 
 // HitZone represents a clickable/hoverable region on screen.
@@ -48,12 +52,11 @@ type GridResult struct {
 
 // LayoutGrid arranges repo cards in a responsive grid.
 // gridYOffset is the screen Y coordinate where the grid section starts (before its own margin).
-func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton) GridResult {
+var CurrentWorkDir string // set by the app to filter history suggestions
+
+func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int) GridResult {
 	if len(repos) == 0 {
-		empty := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(
-			EmptyStyle.Render("No repositories found. Add git repos to this directory."),
-		)
-		return GridResult{View: empty}
+		return renderEmptyState(termWidth, gridYOffset, hoveredHistory)
 	}
 
 	availWidth := termWidth - (MarginH * 2)
@@ -309,4 +312,67 @@ func HitTest(zones []HitZone, x, y int) (repoIdx int, wtIdx int, btn HoverButton
 	}
 
 	return -1, -1, BtnNone
+}
+
+// HistoryHitTest checks if coordinates hit a history suggestion item.
+// Returns the suggestion index or -1.
+func HistoryHitTest(zones []HitZone, x, y int) int {
+	for _, z := range zones {
+		if z.Type == ZoneHistoryItem {
+			if x >= z.X && x < z.X+z.W && y >= z.Y && y < z.Y+z.H {
+				return z.RepoIdx
+			}
+		}
+	}
+	return -1
+}
+
+// renderEmptyState renders the "no repos" message with history suggestions.
+func renderEmptyState(termWidth, gridYOffset, hoveredHistory int) GridResult {
+	suggestions := config.GetHistorySuggestions(CurrentWorkDir)
+
+	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorBlack)
+	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
+	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, EmptyStyle.Render("No repositories found in this directory."))
+	lines = append(lines, dimStyle.Render("Add git repos here, or open LTS in a previous location:"))
+	lines = append(lines, "")
+
+	var hitZones []HitZone
+	baseY := gridYOffset + GridMarginY
+
+	if len(suggestions) > 0 {
+		for i, s := range suggestions {
+			dir := filepath.Base(s.Path)
+			parent := filepath.Dir(s.Path)
+			repoLabel := fmt.Sprintf("%d repos", s.RepoCount)
+
+			var line string
+			if i == hoveredHistory {
+				line = hoverStyle.Render("▸ "+dir) + " " + dimStyle.Render(parent) + " " + greenStyle.Render("("+repoLabel+")")
+			} else {
+				line = whiteStyle.Render("  "+dir) + " " + dimStyle.Render(parent) + " " + greenStyle.Render("("+repoLabel+")")
+			}
+			lines = append(lines, line)
+
+			// Hit zone for this suggestion
+			hitZones = append(hitZones, HitZone{
+				X: MarginH, Y: baseY + len(lines) - 1, W: termWidth - MarginH*2, H: 1,
+				Type:    ZoneHistoryItem,
+				RepoIdx: i,
+				WTIdx:   -1,
+			})
+		}
+	} else {
+		lines = append(lines, dimStyle.Render("  No previous locations found."))
+	}
+
+	content := strings.Join(lines, "\n")
+	view := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(content)
+
+	return GridResult{View: view, HitZones: hitZones}
 }

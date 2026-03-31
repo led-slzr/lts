@@ -33,13 +33,28 @@ func (c ClickUsage) Next() ClickUsage {
 	return (c + 1) % 3
 }
 
+// OpenRepo opens the main repo path using the specified click usage mode.
+// For IDE mode, it opens the directory directly without searching for workspace files.
+func OpenRepo(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
+	switch mode {
+	case ClickIDE:
+		cmd := exec.Command(ideCommand, path)
+		return cmd.Start()
+	case ClickAICli:
+		return openAICli(path, aiCliCommand, terminal)
+	case ClickTerminal:
+		return openTerminal(path, terminal)
+	}
+	return nil
+}
+
 // OpenWorktree opens a worktree path using the specified click usage mode.
 func OpenWorktree(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
 	switch mode {
 	case ClickIDE:
 		return openIDE(path, ideCommand)
 	case ClickAICli:
-		return openAICli(path, aiCliCommand)
+		return openAICli(path, aiCliCommand, terminal)
 	case ClickTerminal:
 		return openTerminal(path, terminal)
 	}
@@ -81,52 +96,60 @@ func openIDE(wtPath, ideCommand string) error {
 	return cmd.Start()
 }
 
-func openAICli(path, aiCliCommand string) error {
+func openAICli(path, aiCliCommand, terminal string) error {
 	if aiCliCommand == "" {
 		return fmt.Errorf("no AI CLI configured — set one in Settings")
 	}
-	// Split command and flags: "claude --dangerously-skip-permissions" → ["claude", "--dangerously-skip-permissions"]
 	parts := strings.Fields(aiCliCommand)
 	if len(parts) == 0 {
 		return fmt.Errorf("empty AI CLI command")
 	}
+	fullCmd := strings.Join(parts, " ")
 
-	// Open terminal at path, then run AI CLI
-	switch runtime.GOOS {
-	case "darwin":
-		fullCmd := strings.Join(parts, " ")
-		script := fmt.Sprintf(`tell application "Terminal"
-			do script "cd '%s' && %s"
-			activate
-		end tell`, path, fullCmd)
-		cmd := exec.Command("osascript", "-e", script)
-		return cmd.Start()
-	default:
-		args := append(parts[1:], path)
-		cmd := exec.Command(parts[0], args...)
-		cmd.Dir = path
-		return cmd.Start()
-	}
+	// Open a new tab in the configured terminal and run the AI CLI command
+	return openTerminalWithCommand(path, terminal, fmt.Sprintf("cd '%s' && %s", path, fullCmd))
 }
 
 func openTerminal(path, terminal string) error {
+	return openTerminalWithCommand(path, terminal, fmt.Sprintf("cd '%s' && clear", path))
+}
+
+func openTerminalWithCommand(path, terminal, command string) error {
 	if terminal == "" {
 		terminal = "terminal"
 	}
 
 	switch terminal {
 	case "ghostty":
+		if runtime.GOOS == "darwin" {
+			script := fmt.Sprintf(`tell application "Ghostty"
+				activate
+			end tell
+			delay 0.1
+			tell application "System Events"
+				tell process "Ghostty"
+					keystroke "t" using command down
+					delay 0.2
+					keystroke "%s"
+					key code 36
+				end tell
+			end tell`, command)
+			cmd := exec.Command("osascript", "-e", script)
+			return cmd.Start()
+		}
 		cmd := exec.Command("ghostty", fmt.Sprintf("--working-directory=%s", path))
 		return cmd.Start()
 
 	case "iterm":
 		script := fmt.Sprintf(`tell application "iTerm2"
-			create window with default profile
-			tell current session of current window
-				write text "cd '%s'"
-			end tell
 			activate
-		end tell`, path)
+			tell current window
+				create tab with default profile
+				tell current session
+					write text "%s"
+				end tell
+			end tell
+		end tell`, command)
 		cmd := exec.Command("osascript", "-e", script)
 		return cmd.Start()
 
@@ -145,9 +168,11 @@ func openTerminal(path, terminal string) error {
 	case "terminal":
 		if runtime.GOOS == "darwin" {
 			script := fmt.Sprintf(`tell application "Terminal"
-				do script "cd '%s'"
 				activate
-			end tell`, path)
+				tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
+				delay 0.2
+				do script "%s" in front window
+			end tell`, command)
 			cmd := exec.Command("osascript", "-e", script)
 			return cmd.Start()
 		}
@@ -155,7 +180,6 @@ func openTerminal(path, terminal string) error {
 		return cmd.Start()
 
 	default:
-		// Try running terminal name directly
 		cmd := exec.Command(terminal, path)
 		return cmd.Start()
 	}

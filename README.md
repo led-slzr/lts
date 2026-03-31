@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v2.5.1](https://img.shields.io/badge/version-2.5.1-green)
+![LTS v2.6.0](https://img.shields.io/badge/version-2.6.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -13,20 +13,29 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 ╚══════╝   ╚═╝   ╚══════╝
 ```
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/images/sample_main_view_many_repos.png" alt="Main View" width="300"></td>
+    <td><img src="docs/images/sample_create_worktree_branch_input.png" alt="Create Worktree" width="300"></td>
+    <td><img src="docs/images/sample_setup_wizard.png" alt="Setup Wizard" width="300"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Main View</sub></td>
+    <td align="center"><sub>Create Worktree</sub></td>
+    <td align="center"><sub>Setup Wizard</sub></td>
+  </tr>
+</table>
+
 ## Features
 
-- **Interactive grid UI** — Repo cards with mouse hover, click, and context menus
-- **First-run setup wizard** — Guided configuration on first install (IDE, terminal, AI CLI, package manager, refresh interval)
-- **Single & multi-repo worktrees** — Create worktrees for one repo or across multiple repos (monorepo-like)
-- **Full creation pipeline** — Stash, checkout main, pull, create branch, copy `.env` files, install dependencies, generate VS Code workspace
-- **Click-to-open** — Click a worktree to open in your IDE, AI CLI, or terminal
-- **Per-repo config** — Each repo gets its own basis branch and refresh timestamp
-- **Status at a glance** — Branch names colored by status (clean, changed, diverged, merged, new)
-- **Context menu actions** — Rebase, rename, delete per worktree; refresh, change basis per repo
-- **Settings UI** — Configure IDE, AI CLI, package manager, terminal, auto-refresh from within the TUI with live save confirmation and instant reload
-- **Scrollable settings** — Mouse wheel and keyboard scroll for long settings lists
-- **Black background** — Full-screen black with no terminal bleed-through
-- **Tree loading animation** — A growing worktree animation on startup
+- **One-click worktree creation** — Stash, pull, branch, copy `.env`, install deps, and generate workspace in one step
+- **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows
+- **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
+- **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches
+- **Rebase, rename, delete** — Manage worktrees and branches from context menus without leaving the TUI
+- **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings
 
 ## Platform Support
 

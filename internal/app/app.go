@@ -7,6 +7,7 @@ import (
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -72,6 +73,18 @@ type Model struct {
 	cleanupConfirmActive bool
 	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
 
+	// Header hover states
+	versionHovered     bool
+	hoveredUsage       opener.ClickUsage // -1 = none
+	updateAvailVersion string             // non-empty when update available but not auto-installed
+	updateBadgeHovered bool
+
+	// History suggestion hover (empty state)
+	hoveredHistory int // -1 = none
+
+	// Relaunch: set to a directory path to relaunch LTS there after quit
+	RelaunchDir string
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
@@ -88,11 +101,15 @@ func NewModel(cfg config.Config) Model {
 	di.CharLimit = 6
 	di.Width = 10
 
+	ui.CurrentWorkDir = cfg.WorkDir
+
 	return Model{
 		config:           cfg,
 		focusedCard:      -1,
 		focusedWT:        -1,
 		hoveredBtn:       ui.BtnNone,
+		hoveredUsage:     -1,
+		hoveredHistory:   -1,
 		renameInput:      ti,
 		deleteTypedInput: di,
 		initialLoad:      true,
@@ -111,27 +128,34 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel(), ui.HeaderOpts{
-		Loading:   m.loading,
-		Frame:     m.loaderFrame,
-		StatusMsg: m.statusMsg,
+		Loading:            m.loading,
+		Frame:              m.loaderFrame,
+		StatusMsg:          m.statusMsg,
+		VersionHovered:     m.versionHovered,
+		HoveredUsage:       m.hoveredUsage,
+		UpdateAvailable:    m.updateAvailVersion,
+		UpdateBadgeHovered: m.updateBadgeHovered,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
-	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn)
+	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory)
 	gridH := lipgloss.Height(m.gridResult.View)
 	yPos += gridH
 
-	// Status legend
-	legend := ui.RenderStatusLegend(m.width)
-	yPos += lipgloss.Height(legend)
+	// Status legend and create button (only when repos exist)
+	if len(m.repos) > 0 {
+		legend := ui.RenderStatusLegend(m.width)
+		yPos += lipgloss.Height(legend)
 
-	// Create button
-	m.createBtnY = yPos
-	createBtn := ui.RenderCreateButton(m.width, false)
-	yPos += lipgloss.Height(createBtn)
+		m.createBtnY = yPos
+		createBtn := ui.RenderCreateButton(m.width, false)
+		yPos += lipgloss.Height(createBtn)
+	} else {
+		m.createBtnY = 0
+	}
 
 	// Total scrollable content height (everything between header and footer)
 	m.contentHeight = yPos - m.headerH
@@ -267,6 +291,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.config.InitLocalForRepos(repoNames)
+		// Save to history if repos were found
+		if len(m.repos) > 0 {
+			go config.SaveHistory(m.config.WorkDir, len(m.repos))
+		}
 		m.recomputeLayout()
 		return m, nil
 
@@ -428,17 +456,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.config.SetLastUpdateCheck(time.Now().Unix())
 		r := msg.Result
 		if r.Err != nil {
-			// Silently ignore update check errors — don't disrupt the user
-			return m, nil
+			if r.LatestVersion == "" {
+				// Silently ignore startup check errors (no version info)
+				return m, nil
+			}
+			// Update failed — restore badge for retry
+			m.updateAvailVersion = r.LatestVersion
+			m.statusMsg = "Update failed: " + r.Err.Error()
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		if r.Updated {
+			m.updateAvailVersion = "" // clear badge
+			m.updateBadgeHovered = false
 			m.statusMsg = fmt.Sprintf("Updated to v%s — restart to apply", r.LatestVersion)
 			m.statusGen++
 			m.recomputeLayout()
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		if r.UpdateAvail {
-			m.statusMsg = fmt.Sprintf("New version available: v%s (current: v%s)", r.LatestVersion, r.CurrentVersion)
+			// Only show persistent badge when auto-update is disabled
+			if !m.config.Global.AutoUpdate {
+				m.updateAvailVersion = r.LatestVersion
+			}
+			m.statusMsg = fmt.Sprintf("New version available: v%s", r.LatestVersion)
 			m.statusGen++
 			m.recomputeLayout()
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
@@ -466,6 +508,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// modalMetrics computes the screen position of modal content.
+// modalRendered is the styled modal box (before lipgloss.Place), screenH is terminal height.
+// Returns: contentStartY (first content line), modalTop, modalH.
+func modalMetrics(modalRendered string, screenH int) (contentStartY, modalTop, modalH int) {
+	modalH = lipgloss.Height(modalRendered)
+	modalTop = (screenH - modalH) / 2
+	contentStartY = modalTop + 2 // border(1) + padding(1)
+	return
+}
+
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.settings.Active {
 		var cmd tea.Cmd
@@ -473,13 +525,244 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.syncSettingsConfig()
 		return m, cmd
 	}
-	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive || m.cleanupConfirmActive {
+
+	// Context menu: hover to highlight, click to execute, click elsewhere to close
+	if m.contextMenu.Active {
+		menuRendered := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		contentStartY, _, _ := modalMetrics(menuRendered, m.height)
+		itemStartY := contentStartY + 2 // skip title + empty line
+
+		hoveredItem := msg.Y - itemStartY
+		if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
+			m.contextMenu.CursorIdx = hoveredItem
+		}
+
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
+				item := m.contextMenu.Items[hoveredItem]
+				m.contextMenu.Active = false
+				return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+			}
+			m.contextMenu.Active = false
+		}
 		return m, nil
 	}
-	// Context menu: close on click, block all other mouse events
-	if m.contextMenu.Active {
-		if msg.Action == tea.MouseActionPress {
-			m.contextMenu.Active = false
+
+	// Y/N dialogs: click on [Y] or [N] buttons
+	if m.openPromptActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderOpenPromptDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3 // last content line before padding+border
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				} else {
+					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.cleanupConfirmActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderCleanupConfirmDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3
+
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				} else {
+					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+				}
+			}
+			// [d] toggle is 2 lines above Y/N (toggle + empty + Y/N)
+			if msg.Y == ynY-2 {
+				return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+			}
+		}
+		return m, nil
+	}
+
+	if m.deleteConfirmActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderDeleteConfirmDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3
+
+			if !m.deleteDangerous && msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return confirmDelete(m)
+				} else {
+					return cancelDelete(m)
+				}
+			}
+			// Remote toggle: 2 lines above Y/N (simple) or 4 lines above bottom hint (dangerous)
+			toggleY := ynY - 2
+			if m.deleteDangerous {
+				toggleY = ynY - 4
+			}
+			if msg.Y == toggleY {
+				if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+					repo := m.repos[m.deleteRepoIdx]
+					if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+						if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+							m.deleteRemoteBranch = !m.deleteRemoteBranch
+							return m, nil
+						}
+					}
+				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.modal.Active {
+		modal := m.modal.View(m.width, m.height)
+		contentStartY, _, _ := modalMetrics(modal, m.height)
+
+		switch m.modal.Step {
+		case ui.ModalSelectRepos:
+			repoStartY := contentStartY + 4 // title(1) + empty(1) + description(1) + empty(1)
+			hoveredRepo := msg.Y - repoStartY
+			if hoveredRepo >= 0 && hoveredRepo < len(m.modal.Repos) {
+				m.modal.CursorIdx = hoveredRepo
+			}
+
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				clickedRepo := msg.Y - repoStartY
+				if clickedRepo >= 0 && clickedRepo < len(m.modal.Repos) {
+					m.modal.CursorIdx = clickedRepo
+					if m.modal.Selected[clickedRepo] {
+						delete(m.modal.Selected, clickedRepo)
+					} else {
+						m.modal.Selected[clickedRepo] = true
+					}
+				}
+			}
+
+		case ui.ModalEnterBranch:
+			// Branch list mouse handling
+			branchStartY := contentStartY + m.modal.BranchListContentOffset()
+			visible := ui.BranchListMaxVisible
+			total := len(m.modal.FilteredBranches)
+			if total < visible {
+				visible = total
+			}
+			maxScroll := total - visible
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+
+			modalW := lipgloss.Width(modal)
+			modalLeft := (m.width - modalW) / 2
+			contentLeft := modalLeft + 3 // border(1) + padding(2)
+
+			hasScrollbar := total > visible
+			// List width matches render: fullW(54) - 3(gap+scroll+pad) = 51, or 54 if no scrollbar
+			listW := 54
+			if hasScrollbar {
+				listW = 54 - 3
+			}
+			listRight := contentLeft + listW - 1
+			scrollbarX := contentLeft + listW + 1 // after the 1-char space gap
+
+			rowInList := msg.Y - branchStartY
+			onScrollbar := hasScrollbar && msg.X >= scrollbarX && msg.X <= scrollbarX+1
+			inList := msg.X >= contentLeft && msg.X <= listRight && rowInList >= 0 && rowInList < visible
+
+			// Scrollbar interaction
+			m.modal.ScrollbarHovered = false
+			if onScrollbar && rowInList >= 0 && rowInList < visible {
+				isDrag := msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft
+				isHeldMotion := msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonLeft
+				isDragging := (isDrag || isHeldMotion) && maxScroll > 0
+
+				// Show thick thumb when hovering the thumb OR actively dragging
+				if isDragging {
+					m.modal.ScrollbarHovered = true
+				} else {
+					thumbLen := visible * visible / total
+					if thumbLen < 1 {
+						thumbLen = 1
+					}
+					if thumbLen > visible {
+						thumbLen = visible
+					}
+					thumbStart := 0
+					trackSpace := visible - thumbLen
+					if maxScroll > 0 && trackSpace > 0 {
+						thumbStart = m.modal.BranchScroll * trackSpace / maxScroll
+					}
+					if rowInList >= thumbStart && rowInList < thumbStart+thumbLen {
+						m.modal.ScrollbarHovered = true
+					}
+				}
+
+				if isDragging {
+					if visible > 1 {
+						m.modal.BranchScroll = rowInList * maxScroll / (visible - 1)
+					}
+					if m.modal.BranchScroll > maxScroll {
+						m.modal.BranchScroll = maxScroll
+					}
+				}
+			} else if inList {
+				// Hover: highlight branch items
+				m.modal.BranchHovered = m.modal.BranchScroll + rowInList
+
+				// Click: fill input with branch name
+				if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+					idx := m.modal.BranchScroll + rowInList
+					if idx < total {
+						m.modal.Input.SetValue(m.modal.FilteredBranches[idx].Name)
+						m.modal.Input.CursorEnd()
+						m.modal.FilterBranches()
+					}
+				}
+			} else {
+				m.modal.BranchHovered = -1
+			}
+
+			// Mouse wheel: scroll branch list
+			if msg.Action == tea.MouseActionPress {
+				if msg.Button == tea.MouseButtonWheelUp && m.modal.BranchScroll > 0 {
+					m.modal.BranchScroll--
+				}
+				if msg.Button == tea.MouseButtonWheelDown && m.modal.BranchScroll < maxScroll {
+					m.modal.BranchScroll++
+				}
+			}
+
+		case ui.ModalConfirm:
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				var cmd tea.Cmd
+				m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				return m, cmd
+			}
+		}
+		return m, nil
+	}
+
+	if m.renameActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if m.renameWTIdx >= 0 && renameHasRemote(m) {
+				modal := m.renderRenameDialog()
+				_, modalTop, modalH := modalMetrics(modal, m.height)
+				toggleY := modalTop + modalH - 3 - 2 // 2 lines above bottom hint
+				if msg.Y == toggleY {
+					m.renameRemoteBranch = !m.renameRemoteBranch
+					return m, nil
+				}
+			}
 		}
 		return m, nil
 	}
@@ -518,13 +801,58 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Action {
 	case tea.MouseActionMotion:
 		m.hoveredBtn = ui.BtnNone
+		wasVersionHovered := m.versionHovered
+		prevHoveredUsage := m.hoveredUsage
+		m.versionHovered = false
+		m.hoveredUsage = -1
+		wasUpdateBadgeHovered := m.updateBadgeHovered
+		m.updateBadgeHovered = false
 
-		// Check footer buttons (footer is at fixed screen position)
+		// Check version label hover (fixed screen position in header)
+		vx, vy, vw := ui.VersionHitZone()
+		if y == vy && x >= vx && x < vx+vw {
+			m.versionHovered = true
+			m.recomputeLayout()
+			return m, nil
+		}
+
+		// Check update badge hover
+		if m.updateAvailVersion != "" {
+			bx, by, bw := ui.UpdateBadgeHitZone()
+			if y == by && x >= bx && x < bx+bw {
+				m.updateBadgeHovered = true
+			}
+		}
+		if wasUpdateBadgeHovered != m.updateBadgeHovered {
+			m.recomputeLayout()
+		}
+
+		// Check click usage toggle hover (fixed screen position in header)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
+		if y == usageY {
+			for _, z := range usageZones {
+				if x >= z.X && x < z.X+z.W {
+					m.hoveredUsage = z.Usage
+					break
+				}
+			}
+		}
+
+		// Recompute header if any header hover state changed
+		if wasVersionHovered != m.versionHovered || prevHoveredUsage != m.hoveredUsage {
+			m.recomputeLayout()
+		}
+
+		// Check footer buttons (footer is at fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
-		if y >= screenFooterY && screenFooterY > 0 {
+		if y == screenFooterY && screenFooterY > 0 {
 			m.focusedCard = -1
 			m.focusedWT = -1
-			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			if len(m.repos) > 0 {
+				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			} else {
+				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
 			return m, nil
 		}
 
@@ -536,6 +864,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.hoveredBtn = btn
 		}
 
+		// History suggestion hover (empty state)
+		prevHistory := m.hoveredHistory
+		m.hoveredHistory = ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		if prevHistory != m.hoveredHistory {
+			m.recomputeLayout()
+		}
+
 		// Detect inline buttons when hovering repo header or worktree (suppress during loading)
 		// Skip for migration cards — they don't have inline context buttons
 		isMigrationCard := repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].NeedsMigration
@@ -544,6 +879,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
 				m.hoveredBtn = inlineBtn
+			}
+		}
+
+		// Check create button hover (virtual Y + X bounds, only when repos exist)
+		if len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+			cbX, cbW := ui.CreateBtnHitZone(m.width)
+			if x >= cbX && x < cbX+cbW {
+				m.hoveredBtn = ui.BtnCreateWT
 			}
 		}
 
@@ -573,27 +916,79 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check footer at click position (fixed screen position)
+		// Check footer at click position (fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
-		if y >= screenFooterY && screenFooterY > 0 {
-			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+		if y == screenFooterY && screenFooterY > 0 {
+			if len(m.repos) > 0 {
+				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			} else {
+				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
 		}
 
-		// Check create button (virtual Y)
+		// Check create button (virtual Y + X bounds)
 		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
-			m.hoveredBtn = ui.BtnCreateWT
+			cbX, cbW := ui.CreateBtnHitZone(m.width)
+			if x >= cbX && x < cbX+cbW {
+				m.hoveredBtn = ui.BtnCreateWT
+			}
+		}
+
+		// Check version label click (fixed screen position in header)
+		vx, vy, vw := ui.VersionHitZone()
+		if y == vy && x >= vx && x < vx+vw {
+			url := ui.ReleaseURL()
+			cmd := exec.Command("open", url)
+			_ = cmd.Start()
+			m.statusMsg = "Opened release page"
+			return m, clearStatusCmd()
+		}
+
+		// Check "(Update Available)" badge click — triggers update
+		if m.updateAvailVersion != "" {
+			bx, by, bw := ui.UpdateBadgeHitZone()
+			if y == by && x >= bx && x < bx+bw {
+				m.statusMsg = "Updating..."
+				m.updateAvailVersion = ""
+				m.updateBadgeHovered = false
+				m.recomputeLayout()
+				return m, doUpdateCmd()
+			}
+		}
+
+		// Check click usage toggle click (fixed screen position in header)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
+		if y == usageY {
+			for _, z := range usageZones {
+				if x >= z.X && x < z.X+z.W && z.Usage != m.clickUsage {
+					m.clickUsage = z.Usage
+					m.statusMsg = fmt.Sprintf("Click usage: %s", m.clickUsage)
+					m.recomputeLayout()
+					return m, clearStatusCmd()
+				}
+			}
+		}
+
+		// History suggestion click (empty state)
+		histIdx := ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		if histIdx >= 0 {
+			suggestions := config.GetHistorySuggestions(m.config.WorkDir)
+			if histIdx < len(suggestions) {
+				m.RelaunchDir = suggestions[histIdx].Path
+				return m, tea.Quit
+			}
 		}
 
 		if m.loading {
 			return m, nil
 		}
 
-		// Footer buttons
-		if m.hoveredBtn == ui.BtnRefreshAll {
+		// Footer buttons (refresh/cleanup only when repos exist)
+		if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
 			logFn, startCmd := m.beginLoading("Refreshing all repos...")
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
-		if m.hoveredBtn == ui.BtnCleanupMerged {
+		if m.hoveredBtn == ui.BtnCleanupMerged && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false
 			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
@@ -614,9 +1009,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Create button
-		if m.hoveredBtn == ui.BtnCreateWT {
-			m.modal = ui.NewModal(m.repos)
+		// Create button (only when repos exist)
+		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}
 
@@ -652,6 +1047,20 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		// Click on repo header (not on button) — open main repo
+		if m.focusedCard >= 0 && m.focusedWT == -2 && m.hoveredBtn == ui.BtnNone {
+			repo := m.repos[m.focusedCard]
+			if repo.Path != "" {
+				err := opener.OpenRepo(repo.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
+				} else {
+					m.statusMsg = fmt.Sprintf("Opened %s in %s", repo.Name, m.clickUsage)
+				}
+				return m, clearStatusCmd()
+			}
 		}
 
 		// Click on worktree (not on button) — open it
@@ -699,10 +1108,13 @@ func (m Model) View() string {
 	sections = append(sections, m.headerView)
 
 	// --- Scrollable content area ---
+	hasRepos := len(m.repos) > 0
 	var scrollable []string
 	scrollable = append(scrollable, m.gridResult.View)
-	scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
-	scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+	if hasRepos {
+		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
+		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+	}
 	scrollContent := strings.Join(scrollable, "\n")
 
 	// Apply vertical scroll: slice visible lines from the scrollable content
@@ -738,8 +1150,12 @@ func (m Model) View() string {
 
 	sections = append(sections, strings.Join(visibleLines, "\n"))
 
-	// Footer — fixed at bottom
-	sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+	// Footer — fixed at bottom (minimal when no repos)
+	if hasRepos {
+		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+	} else {
+		sections = append(sections, ui.RenderFooterMinimal(m.width, m.hoveredBtn))
+	}
 
 	// Log panel (fills remaining space below footer)
 	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
@@ -756,35 +1172,34 @@ func (m Model) View() string {
 	content := strings.Join(sections, "\n")
 
 	// --- Overlay dialogs (rendered on top of content) ---
+	placeDialog := func(modal string) string {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	}
 
 	// Context menu
 	if m.contextMenu.Active {
-		dialog := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		dialog := ui.RenderContextMenuPlaced(m.contextMenu, m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
 	}
 
 	// Rename dialog
 	if m.renameActive {
-		dialog := m.renderRenameDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderRenameDialog()), m.width, m.height)
 	}
 
 	// Open workspace prompt
 	if m.openPromptActive {
-		dialog := m.renderOpenPromptDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
 	}
 
 	// Cleanup confirmation
 	if m.cleanupConfirmActive {
-		dialog := m.renderCleanupConfirmDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderCleanupConfirmDialog()), m.width, m.height)
 	}
 
 	// Delete confirmation
 	if m.deleteConfirmActive {
-		dialog := m.renderDeleteConfirmDialog()
-		return paintBlack(dialog, m.width, m.height)
+		return paintBlack(placeDialog(m.renderDeleteConfirmDialog()), m.width, m.height)
 	}
 
 	// Settings
@@ -795,7 +1210,7 @@ func (m Model) View() string {
 
 	// Create worktree modal
 	if m.modal.Active {
-		dialog := m.modal.View(m.width, m.height)
+		dialog := m.modal.ViewPlaced(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
 	}
 
@@ -841,8 +1256,7 @@ func (m Model) renderRenameDialog() string {
 	content += "\n"
 	content += dimStyle.Render("enter confirm • esc cancel")
 
-	modal := ui.ModalStyle.Width(50).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(50).Render(content)
 }
 
 func (m Model) renderOpenPromptDialog() string {
@@ -857,8 +1271,7 @@ func (m Model) renderOpenPromptDialog() string {
 	content += "\n" + dimStyle.Render("Open workspace in IDE?") + "\n\n"
 	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 
-	modal := ui.ModalStyle.Width(50).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(50).Render(content)
 }
 
 // deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
@@ -951,8 +1364,7 @@ func (m Model) renderDeleteConfirmDialog() string {
 		content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 	}
 
-	modal := ui.ModalStyle.Width(56).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(56).Render(content)
 }
 
 func (m Model) renderCleanupConfirmDialog() string {
@@ -973,8 +1385,7 @@ func (m Model) renderCleanupConfirmDialog() string {
 	content += "\n"
 	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
 
-	modal := ui.ModalStyle.Width(56).Render(content)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, modal)
+	return ui.ModalStyle.Width(56).Render(content)
 }
 
 // getCardScreenX computes the screen X position of a card by its repo index.
@@ -1102,9 +1513,9 @@ func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch string, repoIdx i
 	}
 }
 
-func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch string, repoIdx, wtIdx int) tea.Cmd {
+func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager string, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.RebaseWorktree(wtPath, mainBranch, logFn)
+		err := git.RebaseWorktree(wtPath, mainBranch, pkgManager, logFn)
 		return RebaseDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
@@ -1112,6 +1523,13 @@ func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch string, repoIdx, wtIdx int)
 func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteRemote, logFn)
+		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+	}
+}
+
+func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+	return func() tea.Msg {
+		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteRemote, logFn)
 		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
@@ -1186,6 +1604,13 @@ func updateCheckCmd(autoUpdate bool) tea.Cmd {
 		} else {
 			r = update.Check()
 		}
+		return UpdateCheckMsg{Result: r}
+	}
+}
+
+func doUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		r := update.Update()
 		return UpdateCheckMsg{Result: r}
 	}
 }

@@ -1,12 +1,33 @@
 package ui
 
 import (
+	"fmt"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/version"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+// VersionHitZone returns the screen coordinates of the version label in the header.
+// The banner has 6 lines, version is next, with Margin(1, MarginH, 0, MarginH).
+func VersionHitZone() (x, y, w int) {
+	versionText := "v" + version.Version
+	return MarginH, 1 + len(ltsBanner), len(versionText)
+}
+
+// ReleaseURL returns the GitHub releases URL for the current version.
+func ReleaseURL() string {
+	return fmt.Sprintf("https://github.com/led-slzr/lts/releases/tag/v%s", version.Version)
+}
+
+// UpdateBadgeHitZone returns the screen coordinates of the "(Update Available)" badge.
+// It sits right after the version text on the same line.
+func UpdateBadgeHitZone() (x, y, w int) {
+	versionW := len("v" + version.Version) // plain ASCII, len = visual width
+	badgeW := len(" (Update Available)")
+	return MarginH + versionW, 1 + len(ltsBanner), badgeW
+}
 
 // Big block-letter LTS title
 var ltsBanner = []string{
@@ -57,11 +78,103 @@ func RenderSpinner(frame int) string {
 	return result.String()
 }
 
+// ClickUsageZone represents a clickable region for a click usage mode.
+type ClickUsageZone struct {
+	X     int
+	W     int
+	Usage opener.ClickUsage
+}
+
+// headerLayout holds the computed positions shared between rendering and hit testing.
+type headerLayout struct {
+	BannerWidth  int
+	RightBlockX  int // screen X where the right block starts
+	Gap          int
+}
+
+// computeHeaderLayout is the single source of truth for header positioning.
+func computeHeaderLayout(termWidth int, aiCliLabel string, updateAvailable ...string) headerLayout {
+	bannerStyle := lipgloss.NewStyle().
+		Foreground(ColorDarkGreen).
+		Background(ColorBlack).
+		Bold(true)
+
+	var bannerLines []string
+	for _, line := range ltsBanner {
+		bannerLines = append(bannerLines, bannerStyle.Render(line))
+	}
+	versionLine := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v" + version.Version)
+	if len(updateAvailable) > 0 && updateAvailable[0] != "" {
+		versionLine += lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Bold(true).Render(" (Update Available)")
+	}
+	bannerLines = append(bannerLines, versionLine)
+	bannerWidth := lipgloss.Width(strings.Join(bannerLines, "\n"))
+
+	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1)
+	statusLine := renderStatusLine("", false, 0)
+	rightBlock := usageStr + "\n" + statusLine
+	rightWidth := lipgloss.Width(rightBlock)
+
+	availableWidth := termWidth - (MarginH * 2)
+	gap := availableWidth - bannerWidth - rightWidth
+	if gap < 2 {
+		gap = 2
+	}
+
+	return headerLayout{
+		BannerWidth: bannerWidth,
+		RightBlockX: MarginH + bannerWidth + gap,
+		Gap:         gap,
+	}
+}
+
+// ClickUsageHitZones returns the screen coordinates of each click usage tab.
+func ClickUsageHitZones(termWidth int, aiCliLabel string, updateAvailable ...string) (y int, zones []ClickUsageZone) {
+	if aiCliLabel == "" {
+		aiCliLabel = "AI CLI"
+	}
+
+	ua := ""
+	if len(updateAvailable) > 0 {
+		ua = updateAvailable[0]
+	}
+	layout := computeHeaderLayout(termWidth, aiCliLabel, ua)
+
+	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("Click Usage:")) + 1 // +1 for space after label
+
+	modes := []struct {
+		usage opener.ClickUsage
+		name  string
+	}{
+		{opener.ClickIDE, "IDE"},
+		{opener.ClickAICli, aiCliLabel},
+		{opener.ClickTerminal, "Terminal"},
+	}
+
+	y = 2 // 1 (header top margin) + 1 (rightBlock marginTop)
+	curX := layout.RightBlockX + labelW
+	var result []ClickUsageZone
+	for i, m := range modes {
+		w := lipgloss.Width(ClickUsageActiveStyle.Render(m.name))
+		result = append(result, ClickUsageZone{X: curX, W: w, Usage: m.usage})
+		curX += w
+		if i < len(modes)-1 {
+			curX += lipgloss.Width(BranchDimStyle.Render("│"))
+		}
+	}
+
+	return y, result
+}
+
 // HeaderOpts configures header rendering.
 type HeaderOpts struct {
-	Loading   bool
-	Frame     int
-	StatusMsg string
+	Loading            bool
+	Frame              int
+	StatusMsg          string
+	VersionHovered     bool
+	HoveredUsage       opener.ClickUsage // -1 = none hovered
+	UpdateAvailable    string            // non-empty = version available (e.g. "2.6.1")
+	UpdateBadgeHovered bool
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
@@ -81,28 +194,51 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 		bannerLines = append(bannerLines, bannerStyle.Render(line))
 	}
 	// Version tag below banner
-	versionStyle := lipgloss.NewStyle().
-		Foreground(ColorDim).
-		Background(ColorBlack)
-	bannerLines = append(bannerLines, versionStyle.Render("v"+version.Version))
+	var versionRendered string
+	if o.VersionHovered {
+		versionRendered = lipgloss.NewStyle().
+			Foreground(ColorWhite).
+			Background(ColorBlack).
+			Bold(true).
+			Underline(true).
+			Render("v" + version.Version)
+	} else {
+		versionRendered = lipgloss.NewStyle().
+			Foreground(ColorDim).
+			Background(ColorBlack).
+			Render("v" + version.Version)
+	}
+	// Append "(Update Available)" badge if applicable
+	if o.UpdateAvailable != "" {
+		var badge string
+		if o.UpdateBadgeHovered {
+			badge = lipgloss.NewStyle().
+				Foreground(ColorWhite).
+				Background(ColorDarkGreen).
+				Bold(true).
+				Render(" (Update Available)")
+		} else {
+			badge = lipgloss.NewStyle().
+				Foreground(ColorDarkGreen).
+				Background(ColorBlack).
+				Bold(true).
+				Render(" (Update Available)")
+		}
+		versionRendered += badge
+	}
+	bannerLines = append(bannerLines, versionRendered)
 	banner := strings.Join(bannerLines, "\n")
 
 	// Render click usage toggle
-	usageStr := renderClickUsage(activeUsage, aiCliLabel)
+	usageStr := renderClickUsage(activeUsage, aiCliLabel, o.HoveredUsage)
 
 	// Render status line below usage
 	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
 	rightBlock := usageStr + "\n" + statusLine
 
 	// Position: banner center-left, usage+status top-right
-	bannerWidth := lipgloss.Width(banner)
-	rightWidth := lipgloss.Width(rightBlock)
-
-	availableWidth := width - (MarginH * 2)
-	gap := availableWidth - bannerWidth - rightWidth
-	if gap < 2 {
-		gap = 2
-	}
+	layout := computeHeaderLayout(width, aiCliLabel, o.UpdateAvailable)
+	gap := layout.Gap
 
 	// Place right block aligned to top of banner
 	rightPadded := lipgloss.NewStyle().
@@ -136,12 +272,19 @@ func renderStatusLine(status string, loading bool, frame int) string {
 	return line
 }
 
-func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
+func renderClickUsage(active opener.ClickUsage, aiCliLabel string, hoveredUsage opener.ClickUsage) string {
 	label := ClickUsageLabelStyle.Render("Click Usage:")
 
 	if aiCliLabel == "" {
 		aiCliLabel = "AI CLI"
 	}
+
+	hoveredStyle := lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBlack).
+		Bold(true).
+		Underline(true).
+		Padding(0, 1)
 
 	modes := []struct {
 		usage opener.ClickUsage
@@ -160,6 +303,8 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
 		var rendered string
 		if m.usage == active {
 			rendered = ClickUsageActiveStyle.Render(m.name)
+		} else if m.usage == hoveredUsage {
+			rendered = hoveredStyle.Render(m.name)
 		} else {
 			rendered = ClickUsageInactiveStyle.Render(m.name)
 		}
@@ -169,8 +314,8 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
 		}
 	}
 
-	tabHint := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("  ← Tab")
-	parts = append(parts, tabHint)
+	tabKey := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Render("(tab)")
+	parts = append(parts, " ", tabKey)
 
 	return strings.Join(parts, "")
 }
