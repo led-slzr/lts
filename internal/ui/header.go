@@ -1,12 +1,25 @@
 package ui
 
 import (
+	"fmt"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/version"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
+
+// VersionHitZone returns the screen coordinates of the version label in the header.
+// The banner has 6 lines, version is next, with Margin(1, MarginH, 0, MarginH).
+func VersionHitZone() (x, y, w int) {
+	versionText := "v" + version.Version
+	return MarginH, 1 + len(ltsBanner), len(versionText)
+}
+
+// ReleaseURL returns the GitHub releases URL for the current version.
+func ReleaseURL() string {
+	return fmt.Sprintf("https://github.com/led-slzr/lts/releases/tag/v%s", version.Version)
+}
 
 // Big block-letter LTS title
 var ltsBanner = []string{
@@ -59,9 +72,10 @@ func RenderSpinner(frame int) string {
 
 // HeaderOpts configures header rendering.
 type HeaderOpts struct {
-	Loading   bool
-	Frame     int
-	StatusMsg string
+	Loading        bool
+	Frame          int
+	StatusMsg      string
+	VersionHovered bool
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
@@ -81,10 +95,21 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 		bannerLines = append(bannerLines, bannerStyle.Render(line))
 	}
 	// Version tag below banner
-	versionStyle := lipgloss.NewStyle().
-		Foreground(ColorDim).
-		Background(ColorBlack)
-	bannerLines = append(bannerLines, versionStyle.Render("v"+version.Version))
+	var versionRendered string
+	if o.VersionHovered {
+		versionRendered = lipgloss.NewStyle().
+			Foreground(ColorWhite).
+			Background(ColorBlack).
+			Bold(true).
+			Underline(true).
+			Render("v" + version.Version)
+	} else {
+		versionRendered = lipgloss.NewStyle().
+			Foreground(ColorDim).
+			Background(ColorBlack).
+			Render("v" + version.Version)
+	}
+	bannerLines = append(bannerLines, versionRendered)
 	banner := strings.Join(bannerLines, "\n")
 
 	// Render click usage toggle

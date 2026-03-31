@@ -7,6 +7,7 @@ import (
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -72,6 +73,9 @@ type Model struct {
 	cleanupConfirmActive bool
 	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
 
+	// Version hover
+	versionHovered bool
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
@@ -111,9 +115,10 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel(), ui.HeaderOpts{
-		Loading:   m.loading,
-		Frame:     m.loaderFrame,
-		StatusMsg: m.statusMsg,
+		Loading:        m.loading,
+		Frame:          m.loaderFrame,
+		StatusMsg:      m.statusMsg,
+		VersionHovered: m.versionHovered,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
@@ -518,6 +523,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	switch msg.Action {
 	case tea.MouseActionMotion:
 		m.hoveredBtn = ui.BtnNone
+		wasVersionHovered := m.versionHovered
+		m.versionHovered = false
+
+		// Check version label hover (fixed screen position in header)
+		vx, vy, vw := ui.VersionHitZone()
+		if y == vy && x >= vx && x < vx+vw {
+			m.versionHovered = true
+			m.recomputeLayout()
+			return m, nil
+		}
+		if wasVersionHovered {
+			m.recomputeLayout()
+		}
 
 		// Check footer buttons (footer is at fixed screen position)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
@@ -582,6 +600,16 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Check create button (virtual Y)
 		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			m.hoveredBtn = ui.BtnCreateWT
+		}
+
+		// Check version label click (fixed screen position in header)
+		vx, vy, vw := ui.VersionHitZone()
+		if y == vy && x >= vx && x < vx+vw {
+			url := ui.ReleaseURL()
+			cmd := exec.Command("open", url)
+			_ = cmd.Start()
+			m.statusMsg = "Opened release page"
+			return m, clearStatusCmd()
 		}
 
 		if m.loading {
