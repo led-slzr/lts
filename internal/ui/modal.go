@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"lts-revamp/internal/git"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -33,6 +34,14 @@ type ModalModel struct {
 	PlanSingle  bool   // true if single-repo mode
 	PlanLTSDir  string // e.g. "core-lts" or "core-erp-ui-lts"
 	PlanWTNames []string // planned worktree folder names
+
+	// Branch suggestions (populated when entering ModalEnterBranch)
+	AllBranches      []git.BranchInfo // all branches from selected repos
+	FilteredBranches []git.BranchInfo // filtered by current input text
+	BranchScroll     int              // scroll offset in branch list
+	BranchHovered    int              // hovered branch index (-1 = none)
+	ScrollbarHovered bool             // true when mouse is over the scrollbar thumb
+	ScriptDir        string           // for loading branches
 }
 
 // Messages
@@ -43,19 +52,21 @@ type ModalCreateMsg struct {
 
 type ModalCancelMsg struct{}
 
-func NewModal(repos []git.Repo) ModalModel {
+func NewModal(repos []git.Repo, scriptDir string) ModalModel {
 	ti := textinput.New()
-	ti.Placeholder = "e.g. fix/login-bug"
+	ti.Placeholder = "type or pick a branch below"
 	ti.CharLimit = 100
-	ti.Width = 40
+	ti.Width = 50
 
 	return ModalModel{
-		Active:    true,
-		Step:      ModalSelectRepos,
-		Repos:     repos,
-		Selected:  make(map[int]bool),
-		CursorIdx: 0,
-		Input:     ti,
+		Active:        true,
+		Step:          ModalSelectRepos,
+		Repos:         repos,
+		Selected:      make(map[int]bool),
+		CursorIdx:     0,
+		Input:         ti,
+		BranchHovered: -1,
+		ScriptDir:     scriptDir,
 	}
 }
 
@@ -95,9 +106,36 @@ func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 	}
 
 	if m.Step == ModalEnterBranch {
-		var cmd tea.Cmd
-		m.Input, cmd = m.Input.Update(msg)
-		return m, cmd
+		// Only forward real key messages to the text input.
+		// Mouse events can leak as raw ANSI/SGR sequences through tea.KeyMsg.
+		if keyMsg, isKey := msg.(tea.KeyMsg); isKey {
+			// Allow known control keys
+			switch keyMsg.Type {
+			case tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight,
+				tea.KeyHome, tea.KeyEnd, tea.KeyCtrlA, tea.KeyCtrlE,
+				tea.KeyCtrlW, tea.KeyCtrlU, tea.KeyCtrlK:
+				var cmd tea.Cmd
+				m.Input, cmd = m.Input.Update(msg)
+				m.FilterBranches()
+				return m, cmd
+			case tea.KeyRunes:
+				// Only allow characters valid in git branch names.
+				// This blocks mouse escape sequences that leak as runes
+				// (containing [, <, >, ;, digits mixed with M, etc.)
+				for _, r := range keyMsg.Runes {
+					if !isValidBranchChar(r) {
+						return m, nil
+					}
+				}
+				var cmd tea.Cmd
+				m.Input, cmd = m.Input.Update(msg)
+				m.FilterBranches()
+				return m, cmd
+			}
+			// Block everything else (escape sequences, mouse leaks, etc.)
+			return m, nil
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -112,6 +150,7 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 		m.Step = ModalEnterBranch
 		m.Input.Focus()
+		m.loadBranches()
 		return m, textinput.Blink
 
 	case ModalEnterBranch:
@@ -137,6 +176,79 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// isValidBranchChar returns true if the rune is valid in a git branch name.
+// This excludes characters used in mouse escape sequences ([, <, >, ;).
+func isValidBranchChar(r rune) bool {
+	if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+		return true
+	}
+	switch r {
+	case '/', '-', '_', '.', '+', '@', '{', '}', '#', '%', '!', '~':
+		return true
+	}
+	return false
+}
+
+func (m *ModalModel) loadBranches() {
+	var repoPaths []string
+	for idx := range m.Selected {
+		repo := m.Repos[idx]
+		if repo.Path != "" {
+			repoPaths = append(repoPaths, repo.Path)
+		} else if repo.IsMonorepo {
+			// For monorepo, use constituent repo paths
+			for _, rn := range repo.RepoNames {
+				p := filepath.Join(m.ScriptDir, rn)
+				repoPaths = append(repoPaths, p)
+			}
+		}
+	}
+	m.AllBranches = git.GetBranchesWithDates(repoPaths)
+	m.FilterBranches()
+}
+
+func (m *ModalModel) FilterBranches() {
+	query := strings.ToLower(strings.TrimSpace(m.Input.Value()))
+	if query == "" {
+		m.FilteredBranches = m.AllBranches
+	} else {
+		m.FilteredBranches = nil
+		for _, b := range m.AllBranches {
+			if strings.Contains(strings.ToLower(b.Name), query) {
+				m.FilteredBranches = append(m.FilteredBranches, b)
+			}
+		}
+	}
+	// Reset scroll if filter changed
+	if m.BranchScroll > len(m.FilteredBranches) {
+		m.BranchScroll = 0
+	}
+}
+
+// BranchListMaxVisible is the max number of branch suggestions shown at once.
+const BranchListMaxVisible = 8
+
+// BranchListContentOffset returns the number of content lines before the branch list starts
+// inside the ModalEnterBranch view. This must match the rendering order.
+func (m *ModalModel) BranchListContentOffset() int {
+	offset := 0
+	offset += 2 // title + empty
+	selectedCount := len(m.Selected)
+	offset += 1 // "Repository: xxx" or "Repositories (N): ..."
+	offset += 2 // empty + "Branch name:"
+	offset += 2 // empty + input field
+	if m.Error != "" {
+		offset += 2 // empty + error
+	}
+	offset += 1 // empty line before branch list
+	// Scroll-up indicator
+	if m.BranchScroll > 0 {
+		offset += 1
+	}
+	_ = selectedCount
+	return offset
 }
 
 func (m *ModalModel) computePlan() {
@@ -247,15 +359,144 @@ func (m ModalModel) View(width, height int) string {
 		} else {
 			content += dimStyle.Render(fmt.Sprintf("Repositories (%d): ", len(selectedNames)))
 			content += cyanStyle.Render(strings.Join(selectedNames, ", ")) + "\n"
-			content += dimStyle.Render("Same branch will be created across all repos") + "\n"
 		}
 
-		content += "\n" + dimStyle.Render("Enter branch name:") + "\n\n"
+		content += "\n" + dimStyle.Render("Branch name:") + "\n\n"
 		content += m.Input.View() + "\n"
 		if m.Error != "" {
 			content += "\n" + errorStyle.Render(m.Error)
 		}
-		content += "\n" + dimStyle.Render("enter confirm • esc cancel")
+
+		// Branch suggestions list
+		if len(m.FilteredBranches) > 0 {
+			content += "\n"
+
+			localTag := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
+			remoteTag := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
+			dateStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Italic(true)
+			hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+			normalStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack)
+			normalDimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+
+			visible := BranchListMaxVisible
+			total := len(m.FilteredBranches)
+			if total < visible {
+				visible = total
+			}
+			endIdx := m.BranchScroll + visible
+			if endIdx > total {
+				endIdx = total
+			}
+
+			// Scroll indicator top
+			if m.BranchScroll > 0 {
+				content += dimStyle.Render(fmt.Sprintf("  ↑ %d more", m.BranchScroll)) + "\n"
+			}
+
+			// Layout: branch list column + scrollbar column (if scrollable)
+			// Full content width: modal(60) - border(2) - padding(4) = 54
+			hasScrollbar := total > visible
+			fullW := 54
+			listW := fullW
+			if hasScrollbar {
+				listW = fullW - 3 // 1 space gap + 1 scrollbar + 1 padding
+			}
+
+			// Build branch list rows
+			var listLines []string
+			for i := m.BranchScroll; i < endIdx; i++ {
+				b := m.FilteredBranches[i]
+				isHovered := i == m.BranchHovered
+
+				var tag string
+				if b.IsLocal {
+					tag = localTag.Render("local")
+				} else {
+					tag = remoteTag.Render("remote")
+				}
+				date := dateStyle.Render("(" + b.Date + ")")
+				suffix := " " + tag + " " + date
+				suffixW := lipgloss.Width(suffix)
+
+				prefix := "  "
+				if isHovered {
+					prefix = "▸ "
+				}
+				maxNameW := listW - len(prefix) - suffixW
+				name := b.Name
+				if len(name) > maxNameW && maxNameW > 3 {
+					name = name[:maxNameW-1] + "…"
+				}
+
+				var row string
+				if isHovered {
+					row = hoverStyle.Render(prefix+name) + suffix
+				} else {
+					ns := normalStyle
+					if !b.IsLocal {
+						ns = normalDimStyle
+					}
+					row = ns.Render(prefix+name) + suffix
+				}
+
+				// Pad to fixed list width
+				rowW := lipgloss.Width(row)
+				if rowW < listW {
+					row += strings.Repeat(" ", listW-rowW)
+				}
+				listLines = append(listLines, row)
+			}
+
+			if hasScrollbar {
+				// Build scrollbar column
+				thumbLen := visible * visible / total
+				if thumbLen < 1 {
+					thumbLen = 1
+				}
+				if thumbLen > visible {
+					thumbLen = visible
+				}
+				maxScroll := total - visible
+				thumbStart := 0
+				trackSpace := visible - thumbLen
+				if maxScroll > 0 && trackSpace > 0 {
+					thumbStart = m.BranchScroll * trackSpace / maxScroll
+				}
+
+				trackChar := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("│")
+				thumbChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true).Render("┃")
+				thumbHoverChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorDarkGreen).Bold(true).Render("█")
+
+				var scrollLines []string
+				for idx := 0; idx < visible; idx++ {
+					if idx >= thumbStart && idx < thumbStart+thumbLen {
+						if m.ScrollbarHovered {
+							scrollLines = append(scrollLines, thumbHoverChar)
+						} else {
+							scrollLines = append(scrollLines, thumbChar)
+						}
+					} else {
+						scrollLines = append(scrollLines, trackChar)
+					}
+				}
+
+				listCol := strings.Join(listLines, "\n")
+				scrollCol := strings.Join(scrollLines, "\n")
+				content += lipgloss.JoinHorizontal(lipgloss.Top, listCol, " ", scrollCol) + "\n"
+			} else {
+				content += strings.Join(listLines, "\n") + "\n"
+			}
+
+			// Branch count
+			if total > 0 {
+				countInfo := fmt.Sprintf("%d/%d", min(endIdx, total), total)
+				content += dimStyle.Render("  "+countInfo+" branches") + "\n"
+			}
+		} else if len(m.AllBranches) > 0 {
+			content += "\n" + dimStyle.Render("  No matching branches") + "\n"
+		}
+
+		content += "\n" + dimStyle.Render("enter confirm • click branch to fill • esc cancel")
 
 	case ModalConfirm:
 		content = titleStyle.Render("Create Worktree") + "\n\n"
@@ -276,7 +517,11 @@ func (m ModalModel) View(width, height int) string {
 		content += "\n" + dimStyle.Render("enter create • esc cancel")
 	}
 
-	return ModalStyle.Render(content)
+	style := ModalStyle
+	if m.Step == ModalEnterBranch {
+		style = style.Width(60) // wider for branch list with dates
+	}
+	return style.Render(content)
 }
 
 // ViewPlaced renders the modal centered on screen.

@@ -67,7 +67,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "n":
 		if !m.loading {
-			m.modal = ui.NewModal(m.repos)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}
 

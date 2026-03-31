@@ -114,6 +114,96 @@ func generateUniqueName(baseName, parentDir string) string {
 	return name
 }
 
+// BranchInfo holds a branch name with its source and last commit date.
+type BranchInfo struct {
+	Name     string
+	IsLocal  bool // true = local, false = remote-only
+	Date     string // formatted date string (e.g. "2025-03-28")
+	UnixTime int64  // for sorting by recency
+}
+
+// GetBranchesWithDates returns all branches (local + remote-only) for the selected repos,
+// sorted: local first, then remote, each group sorted by most recent commit.
+// Deduplicates: if a branch exists both locally and remotely, it's shown as local.
+func GetBranchesWithDates(repoPaths []string) []BranchInfo {
+	seen := make(map[string]*BranchInfo)
+
+	for _, repoPath := range repoPaths {
+		// Local branches with date
+		out, err := RunGit(repoPath, "for-each-ref",
+			"--sort=-committerdate",
+			"--format=%(refname:short)\t%(committerdate:unix)\t%(committerdate:relative)",
+			"refs/heads/")
+		if err == nil && out != "" {
+			for _, line := range strings.Split(out, "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+				if len(parts) < 3 || parts[0] == "" {
+					continue
+				}
+				name := parts[0]
+				if name == "main" || name == "master" {
+					continue
+				}
+				if _, exists := seen[name]; !exists {
+					var unix int64
+					fmt.Sscanf(parts[1], "%d", &unix)
+					seen[name] = &BranchInfo{
+						Name:     name,
+						IsLocal:  true,
+						Date:     parts[2],
+						UnixTime: unix,
+					}
+				}
+			}
+		}
+
+		// Remote branches
+		rOut, err := RunGit(repoPath, "for-each-ref",
+			"--sort=-committerdate",
+			"--format=%(refname:short)\t%(committerdate:unix)\t%(committerdate:relative)",
+			"refs/remotes/origin/")
+		if err == nil && rOut != "" {
+			for _, line := range strings.Split(rOut, "\n") {
+				parts := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+				if len(parts) < 3 || parts[0] == "" {
+					continue
+				}
+				name := strings.TrimPrefix(parts[0], "origin/")
+				if name == "main" || name == "master" || name == "HEAD" {
+					continue
+				}
+				if _, exists := seen[name]; !exists {
+					var unix int64
+					fmt.Sscanf(parts[1], "%d", &unix)
+					seen[name] = &BranchInfo{
+						Name:     name,
+						IsLocal:  false,
+						Date:     parts[2],
+						UnixTime: unix,
+					}
+				}
+			}
+		}
+	}
+
+	// Collect and sort: local first (by recency), then remote (by recency)
+	var local, remote []BranchInfo
+	for _, b := range seen {
+		if b.IsLocal {
+			local = append(local, *b)
+		} else {
+			remote = append(remote, *b)
+		}
+	}
+	sort.Slice(local, func(i, j int) bool { return local[i].UnixTime > local[j].UnixTime })
+	sort.Slice(remote, func(i, j int) bool { return remote[i].UnixTime > remote[j].UnixTime })
+
+	result := make([]BranchInfo, 0, len(local)+len(remote))
+	result = append(result, local...)
+	result = append(result, remote...)
+	return result
+}
+
 // GetExistingBranches returns local and remote-only branches for a repo.
 func GetExistingBranches(repoPath string) (local []string, remoteOnly []string) {
 	// Local branches (exclude main/master)

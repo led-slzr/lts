@@ -593,23 +593,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if m.modal.Active {
 		modal := m.modal.View(m.width, m.height)
-		// modal.View already calls lipgloss.Place, so extract the inner modal height
-		// by computing from content: ModalStyle has border(1)+padding(1) each side
-		// Simpler: measure content lines + chrome
 		contentStartY, _, _ := modalMetrics(modal, m.height)
 
-		if m.modal.Step == ui.ModalSelectRepos {
+		switch m.modal.Step {
+		case ui.ModalSelectRepos:
 			repoStartY := contentStartY + 4 // title(1) + empty(1) + description(1) + empty(1)
 			hoveredRepo := msg.Y - repoStartY
 			if hoveredRepo >= 0 && hoveredRepo < len(m.modal.Repos) {
 				m.modal.CursorIdx = hoveredRepo
 			}
-		}
 
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			switch m.modal.Step {
-			case ui.ModalSelectRepos:
-				repoStartY := contentStartY + 4
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 				clickedRepo := msg.Y - repoStartY
 				if clickedRepo >= 0 && clickedRepo < len(m.modal.Repos) {
 					m.modal.CursorIdx = clickedRepo
@@ -619,7 +613,103 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						m.modal.Selected[clickedRepo] = true
 					}
 				}
-			case ui.ModalConfirm:
+			}
+
+		case ui.ModalEnterBranch:
+			// Branch list mouse handling
+			branchStartY := contentStartY + m.modal.BranchListContentOffset()
+			visible := ui.BranchListMaxVisible
+			total := len(m.modal.FilteredBranches)
+			if total < visible {
+				visible = total
+			}
+			maxScroll := total - visible
+			if maxScroll < 0 {
+				maxScroll = 0
+			}
+
+			modalW := lipgloss.Width(modal)
+			modalLeft := (m.width - modalW) / 2
+			contentLeft := modalLeft + 3 // border(1) + padding(2)
+
+			hasScrollbar := total > visible
+			// List width matches render: fullW(54) - 3(gap+scroll+pad) = 51, or 54 if no scrollbar
+			listW := 54
+			if hasScrollbar {
+				listW = 54 - 3
+			}
+			listRight := contentLeft + listW - 1
+			scrollbarX := contentLeft + listW + 1 // after the 1-char space gap
+
+			rowInList := msg.Y - branchStartY
+			onScrollbar := hasScrollbar && msg.X >= scrollbarX && msg.X <= scrollbarX+1
+			inList := msg.X >= contentLeft && msg.X <= listRight && rowInList >= 0 && rowInList < visible
+
+			// Scrollbar interaction
+			m.modal.ScrollbarHovered = false
+			if onScrollbar && rowInList >= 0 && rowInList < visible {
+				isDrag := msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft
+				isHeldMotion := msg.Action == tea.MouseActionMotion && msg.Button == tea.MouseButtonLeft
+				isDragging := (isDrag || isHeldMotion) && maxScroll > 0
+
+				// Show thick thumb when hovering the thumb OR actively dragging
+				if isDragging {
+					m.modal.ScrollbarHovered = true
+				} else {
+					thumbLen := visible * visible / total
+					if thumbLen < 1 {
+						thumbLen = 1
+					}
+					if thumbLen > visible {
+						thumbLen = visible
+					}
+					thumbStart := 0
+					trackSpace := visible - thumbLen
+					if maxScroll > 0 && trackSpace > 0 {
+						thumbStart = m.modal.BranchScroll * trackSpace / maxScroll
+					}
+					if rowInList >= thumbStart && rowInList < thumbStart+thumbLen {
+						m.modal.ScrollbarHovered = true
+					}
+				}
+
+				if isDragging {
+					if visible > 1 {
+						m.modal.BranchScroll = rowInList * maxScroll / (visible - 1)
+					}
+					if m.modal.BranchScroll > maxScroll {
+						m.modal.BranchScroll = maxScroll
+					}
+				}
+			} else if inList {
+				// Hover: highlight branch items
+				m.modal.BranchHovered = m.modal.BranchScroll + rowInList
+
+				// Click: fill input with branch name
+				if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+					idx := m.modal.BranchScroll + rowInList
+					if idx < total {
+						m.modal.Input.SetValue(m.modal.FilteredBranches[idx].Name)
+						m.modal.Input.CursorEnd()
+						m.modal.FilterBranches()
+					}
+				}
+			} else {
+				m.modal.BranchHovered = -1
+			}
+
+			// Mouse wheel: scroll branch list
+			if msg.Action == tea.MouseActionPress {
+				if msg.Button == tea.MouseButtonWheelUp && m.modal.BranchScroll > 0 {
+					m.modal.BranchScroll--
+				}
+				if msg.Button == tea.MouseButtonWheelDown && m.modal.BranchScroll < maxScroll {
+					m.modal.BranchScroll++
+				}
+			}
+
+		case ui.ModalConfirm:
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 				var cmd tea.Cmd
 				m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
 				return m, cmd
@@ -837,7 +927,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 		// Create button
 		if m.hoveredBtn == ui.BtnCreateWT {
-			m.modal = ui.NewModal(m.repos)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}
 
