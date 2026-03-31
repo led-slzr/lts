@@ -33,6 +33,21 @@ func (c ClickUsage) Next() ClickUsage {
 	return (c + 1) % 3
 }
 
+// OpenRepo opens the main repo path using the specified click usage mode.
+// For IDE mode, it opens the directory directly without searching for workspace files.
+func OpenRepo(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
+	switch mode {
+	case ClickIDE:
+		cmd := exec.Command(ideCommand, path)
+		return cmd.Start()
+	case ClickAICli:
+		return openAICli(path, aiCliCommand)
+	case ClickTerminal:
+		return openTerminal(path, terminal)
+	}
+	return nil
+}
+
 // OpenWorktree opens a worktree path using the specified click usage mode.
 func OpenWorktree(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
 	switch mode {

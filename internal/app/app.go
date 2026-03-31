@@ -654,6 +654,20 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Click on repo header (not on button) — open main repo
+		if m.focusedCard >= 0 && m.focusedWT == -2 && m.hoveredBtn == ui.BtnNone {
+			repo := m.repos[m.focusedCard]
+			if repo.Path != "" {
+				err := opener.OpenRepo(repo.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				if err != nil {
+					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
+				} else {
+					m.statusMsg = fmt.Sprintf("Opened %s in %s", repo.Name, m.clickUsage)
+				}
+				return m, clearStatusCmd()
+			}
+		}
+
 		// Click on worktree (not on button) — open it
 		if m.focusedCard >= 0 && m.focusedWT >= 0 && m.hoveredBtn == ui.BtnNone {
 			repo := m.repos[m.focusedCard]
