@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"syscall"
 
 	"lts-revamp/internal/app"
 	"lts-revamp/internal/config"
@@ -56,9 +57,25 @@ func main() {
 		tea.WithMouseAllMotion(),
 	)
 
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Check if we need to relaunch in a different directory
+	if m, ok := finalModel.(app.Model); ok && m.RelaunchDir != "" {
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not find executable: %v\n", err)
+			os.Exit(1)
+		}
+		// Replace the current process with a new LTS instance
+		err = syscall.Exec(exe, []string{exe, "--dir", m.RelaunchDir}, os.Environ())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: could not relaunch: %v\n", err)
+			os.Exit(1)
+		}
 	}
 }
 

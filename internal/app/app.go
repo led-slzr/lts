@@ -77,6 +77,12 @@ type Model struct {
 	versionHovered bool
 	hoveredUsage   opener.ClickUsage // -1 = none
 
+	// History suggestion hover (empty state)
+	hoveredHistory int // -1 = none
+
+	// Relaunch: set to a directory path to relaunch LTS there after quit
+	RelaunchDir string
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
@@ -93,12 +99,15 @@ func NewModel(cfg config.Config) Model {
 	di.CharLimit = 6
 	di.Width = 10
 
+	ui.CurrentWorkDir = cfg.WorkDir
+
 	return Model{
 		config:           cfg,
 		focusedCard:      -1,
 		focusedWT:        -1,
 		hoveredBtn:       ui.BtnNone,
 		hoveredUsage:     -1,
+		hoveredHistory:   -1,
 		renameInput:      ti,
 		deleteTypedInput: di,
 		initialLoad:      true,
@@ -128,18 +137,21 @@ func (m *Model) recomputeLayout() {
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
-	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn)
+	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory)
 	gridH := lipgloss.Height(m.gridResult.View)
 	yPos += gridH
 
-	// Status legend
-	legend := ui.RenderStatusLegend(m.width)
-	yPos += lipgloss.Height(legend)
+	// Status legend and create button (only when repos exist)
+	if len(m.repos) > 0 {
+		legend := ui.RenderStatusLegend(m.width)
+		yPos += lipgloss.Height(legend)
 
-	// Create button
-	m.createBtnY = yPos
-	createBtn := ui.RenderCreateButton(m.width, false)
-	yPos += lipgloss.Height(createBtn)
+		m.createBtnY = yPos
+		createBtn := ui.RenderCreateButton(m.width, false)
+		yPos += lipgloss.Height(createBtn)
+	} else {
+		m.createBtnY = 0
+	}
 
 	// Total scrollable content height (everything between header and footer)
 	m.contentHeight = yPos - m.headerH
@@ -275,6 +287,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.config.InitLocalForRepos(repoNames)
+		// Save to history if repos were found
+		if len(m.repos) > 0 {
+			go config.SaveHistory(m.config.WorkDir, len(m.repos))
+		}
 		m.recomputeLayout()
 		return m, nil
 
@@ -801,7 +817,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if y == screenFooterY && screenFooterY > 0 {
 			m.focusedCard = -1
 			m.focusedWT = -1
-			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			if len(m.repos) > 0 {
+				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			} else {
+				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
 			return m, nil
 		}
 
@@ -811,6 +831,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.focusedWT = wtIdx
 		if btn != ui.BtnNone {
 			m.hoveredBtn = btn
+		}
+
+		// History suggestion hover (empty state)
+		prevHistory := m.hoveredHistory
+		m.hoveredHistory = ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		if prevHistory != m.hoveredHistory {
+			m.recomputeLayout()
 		}
 
 		// Detect inline buttons when hovering repo header or worktree (suppress during loading)
@@ -824,8 +851,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check create button hover (virtual Y + X bounds)
-		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+		// Check create button hover (virtual Y + X bounds, only when repos exist)
+		if len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			cbX, cbW := ui.CreateBtnHitZone(m.width)
 			if x >= cbX && x < cbX+cbW {
 				m.hoveredBtn = ui.BtnCreateWT
@@ -861,7 +888,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Check footer at click position (fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
 		if y == screenFooterY && screenFooterY > 0 {
-			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			if len(m.repos) > 0 {
+				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+			} else {
+				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
 		}
 
 		// Check create button (virtual Y + X bounds)
@@ -895,16 +926,26 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// History suggestion click (empty state)
+		histIdx := ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		if histIdx >= 0 {
+			suggestions := config.GetHistorySuggestions(m.config.WorkDir)
+			if histIdx < len(suggestions) {
+				m.RelaunchDir = suggestions[histIdx].Path
+				return m, tea.Quit
+			}
+		}
+
 		if m.loading {
 			return m, nil
 		}
 
-		// Footer buttons
-		if m.hoveredBtn == ui.BtnRefreshAll {
+		// Footer buttons (refresh/cleanup only when repos exist)
+		if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
 			logFn, startCmd := m.beginLoading("Refreshing all repos...")
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
-		if m.hoveredBtn == ui.BtnCleanupMerged {
+		if m.hoveredBtn == ui.BtnCleanupMerged && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false
 			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
@@ -925,8 +966,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Create button
-		if m.hoveredBtn == ui.BtnCreateWT {
+		// Create button (only when repos exist)
+		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
 			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}
@@ -1024,10 +1065,13 @@ func (m Model) View() string {
 	sections = append(sections, m.headerView)
 
 	// --- Scrollable content area ---
+	hasRepos := len(m.repos) > 0
 	var scrollable []string
 	scrollable = append(scrollable, m.gridResult.View)
-	scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
-	scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+	if hasRepos {
+		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
+		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+	}
 	scrollContent := strings.Join(scrollable, "\n")
 
 	// Apply vertical scroll: slice visible lines from the scrollable content
@@ -1063,8 +1107,12 @@ func (m Model) View() string {
 
 	sections = append(sections, strings.Join(visibleLines, "\n"))
 
-	// Footer — fixed at bottom
-	sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+	// Footer — fixed at bottom (minimal when no repos)
+	if hasRepos {
+		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+	} else {
+		sections = append(sections, ui.RenderFooterMinimal(m.width, m.hoveredBtn))
+	}
 
 	// Log panel (fills remaining space below footer)
 	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {

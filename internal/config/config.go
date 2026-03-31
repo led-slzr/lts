@@ -317,6 +317,85 @@ func parseKeyValue(f *os.File) map[string]string {
 	return kv
 }
 
+// HistoryPath returns ~/.config/lts/history
+func HistoryPath() string {
+	return filepath.Join(GlobalConfigDir(), "history")
+}
+
+// HistoryEntry represents a previously-used LTS directory.
+type HistoryEntry struct {
+	Path     string
+	RepoCount int
+}
+
+// SaveHistory records that this directory has repos (called when repos are found).
+func SaveHistory(workDir string, repoCount int) {
+	entries := LoadHistory()
+
+	// Update or add entry
+	found := false
+	for i, e := range entries {
+		if e.Path == workDir {
+			entries[i].RepoCount = repoCount
+			found = true
+			break
+		}
+	}
+	if !found {
+		entries = append(entries, HistoryEntry{Path: workDir, RepoCount: repoCount})
+	}
+
+	// Write back
+	var lines []string
+	for _, e := range entries {
+		if e.RepoCount > 0 {
+			lines = append(lines, fmt.Sprintf("%s\t%d", e.Path, e.RepoCount))
+		}
+	}
+	os.MkdirAll(GlobalConfigDir(), 0755)
+	os.WriteFile(HistoryPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
+}
+
+// LoadHistory returns all previously-used LTS directories.
+func LoadHistory() []HistoryEntry {
+	data, err := os.ReadFile(HistoryPath())
+	if err != nil {
+		return nil
+	}
+	var entries []HistoryEntry
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 2)
+		path := parts[0]
+		count := 0
+		if len(parts) > 1 {
+			count, _ = strconv.Atoi(parts[1])
+		}
+		entries = append(entries, HistoryEntry{Path: path, RepoCount: count})
+	}
+	return entries
+}
+
+// GetHistorySuggestions returns history entries that are NOT the current workDir
+// and whose directories still exist on disk.
+func GetHistorySuggestions(currentDir string) []HistoryEntry {
+	entries := LoadHistory()
+	var suggestions []HistoryEntry
+	for _, e := range entries {
+		if e.Path == currentDir || e.RepoCount == 0 {
+			continue
+		}
+		// Verify directory still exists
+		if info, err := os.Stat(e.Path); err == nil && info.IsDir() {
+			suggestions = append(suggestions, e)
+		}
+	}
+	return suggestions
+}
+
 // migrateOldConfig reads the old lts.conf and migrates to new format.
 func migrateOldConfig(oldPath string, cfg *Config) {
 	f, err := os.Open(oldPath)

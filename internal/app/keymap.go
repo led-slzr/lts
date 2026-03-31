@@ -52,13 +52,13 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		if !m.loading {
+		if !m.loading && len(m.repos) > 0 {
 			logFn, startCmd := m.beginLoading("Refreshing all repos...")
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
 		}
 
 	case "c":
-		if !m.loading {
+		if !m.loading && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false
 			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
@@ -66,7 +66,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	case "n":
-		if !m.loading {
+		if !m.loading && len(m.repos) > 0 {
 			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
 			return m, textinput.Blink
 		}

@@ -136,6 +136,53 @@ func RenderFooter(width int, hoveredBtn HoverButton) string {
 		Render(footer)
 }
 
+// RenderFooterMinimal renders a minimal footer with only Settings and Exit.
+func RenderFooterMinimal(width int, hoveredBtn HoverButton) string {
+	keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBtnBg)
+
+	renderBtn := func(b footerButton, hovered bool) string {
+		if hovered {
+			return ButtonHoverStyle.Render(b.Key + " " + b.Label)
+		}
+		return keyStyle.Render(b.Key) + ButtonStyle.Render(" "+b.Label)
+	}
+
+	right := renderBtn(footerRight[0], hoveredBtn == footerRight[0].Btn) + "  " +
+		renderBtn(footerRight[1], hoveredBtn == footerRight[1].Btn)
+
+	return lipgloss.NewStyle().
+		Width(width - (MarginH * 2)).
+		Align(lipgloss.Right).
+		Margin(0, MarginH).
+		Render(right)
+}
+
+// FooterMinimalHitZones computes positions for the minimal footer (Settings + Exit only).
+func FooterMinimalHitZones(width int) []FooterButtonInfo {
+	settingsW := lipgloss.Width(ButtonStyle.Render(footerRight[0].Key + " " + footerRight[0].Label))
+	exitW := lipgloss.Width(ButtonStyle.Render(footerRight[1].Key + " " + footerRight[1].Label))
+
+	// Right-aligned: total = settingsW + 2(gap) + exitW
+	totalW := settingsW + 2 + exitW
+	availW := width - (MarginH * 2)
+	startX := MarginH + availW - totalW
+
+	return []FooterButtonInfo{
+		{X: startX, W: settingsW, Btn: footerRight[0].Btn},
+		{X: startX + settingsW + 2, W: exitW, Btn: footerRight[1].Btn},
+	}
+}
+
+// GetFooterMinimalButtonAtX returns which button is at the given X in minimal footer.
+func GetFooterMinimalButtonAtX(x, width int) HoverButton {
+	for _, info := range FooterMinimalHitZones(width) {
+		if x >= info.X && x < info.X+info.W {
+			return info.Btn
+		}
+	}
+	return BtnNone
+}
+
 // CreateBtnHitZone returns the X position and width of the centered create button.
 func CreateBtnHitZone(termWidth int) (x, w int) {
 	btnW := lipgloss.Width(CreateBtnStyle.Render("n Create Worktree"))
