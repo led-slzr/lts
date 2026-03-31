@@ -1332,9 +1332,9 @@ func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch string, repoIdx i
 	}
 }
 
-func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch string, repoIdx, wtIdx int) tea.Cmd {
+func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager string, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.RebaseWorktree(wtPath, mainBranch, logFn)
+		err := git.RebaseWorktree(wtPath, mainBranch, pkgManager, logFn)
 		return RebaseDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }

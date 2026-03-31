@@ -165,7 +165,7 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[wtIdx]
 			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, repoIdx, wtIdx))
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.Global.PackageManager, repoIdx, wtIdx))
 		}
 
 	case ui.BtnRename:

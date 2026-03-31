@@ -978,8 +978,8 @@ func cleanEmptyLTSDirs(dir string) {
 	}
 }
 
-// RebaseWorktree rebases a worktree onto its main branch.
-func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
+// RebaseWorktree rebases a worktree onto its main branch and runs package install after.
+func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1031,6 +1031,23 @@ func RebaseWorktree(wtPath, mainBranch string, logFn ...LogFunc) error {
 	}
 
 	log(ctx, "Rebase complete", false)
+
+	// Run package install if configured and package.json exists
+	if pkgManager != "" {
+		if _, err := os.Stat(filepath.Join(wtPath, "package.json")); err == nil {
+			if _, lookErr := exec.LookPath(pkgManager); lookErr == nil {
+				log(ctx, "Installing dependencies with "+pkgManager, false)
+				cmd := exec.Command(pkgManager, "install", "--silent")
+				cmd.Dir = wtPath
+				if installErr := cmd.Run(); installErr != nil {
+					log(ctx, pkgManager+" install completed with warnings", true)
+				} else {
+					log(ctx, "Dependencies installed", false)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
