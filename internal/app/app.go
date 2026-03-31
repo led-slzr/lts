@@ -474,6 +474,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// modalContentY returns the Y coordinate of the first content line inside a centered modal,
+// and the modal height. Modal has DoubleBorder (1 top) + Padding (1 top) = 2 lines offset.
+func modalContentY(screenHeight, modalHeight int) int {
+	modalTop := (screenHeight - modalHeight) / 2
+	return modalTop + 2 // border(1) + padding(1)
+}
+
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.settings.Active {
 		var cmd tea.Cmd
@@ -481,13 +488,170 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.syncSettingsConfig()
 		return m, cmd
 	}
-	if m.modal.Active || m.renameActive || m.deleteConfirmActive || m.openPromptActive || m.cleanupConfirmActive {
+
+	// Context menu: hover to highlight, click to execute, click elsewhere to close
+	if m.contextMenu.Active {
+		menuRendered := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
+		menuH := lipgloss.Height(menuRendered)
+		contentStartY := modalContentY(m.height, menuH)
+		itemStartY := contentStartY + 2 // skip title + empty line
+
+		hoveredItem := msg.Y - itemStartY
+		if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
+			m.contextMenu.CursorIdx = hoveredItem
+		}
+
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
+				item := m.contextMenu.Items[hoveredItem]
+				m.contextMenu.Active = false
+				return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+			}
+			m.contextMenu.Active = false
+		}
 		return m, nil
 	}
-	// Context menu: close on click, block all other mouse events
-	if m.contextMenu.Active {
-		if msg.Action == tea.MouseActionPress {
-			m.contextMenu.Active = false
+
+	// Y/N dialogs: click on [Y] or [N] buttons
+	if m.openPromptActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			rendered := m.renderOpenPromptDialog()
+			modalH := lipgloss.Height(rendered)
+			// Last content Y = modalTop + modalH - border(1) - padding(1) - 1
+			ynY := (m.height-modalH)/2 + modalH - 3
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					// Left half = Yes
+					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				} else {
+					// Right half = No
+					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.cleanupConfirmActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			rendered := m.renderCleanupConfirmDialog()
+			modalH := lipgloss.Height(rendered)
+			modalTop := (m.height - modalH) / 2
+			ynY := modalTop + modalH - 3
+
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				} else {
+					return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+				}
+			}
+			// Click on [d] toggle line (remote branch toggle)
+			// It's 2 lines above the Y/N line (toggle + empty line + Y/N)
+			toggleY := ynY - 2
+			if msg.Y == toggleY {
+				return handleCleanupConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+			}
+		}
+		return m, nil
+	}
+
+	if m.deleteConfirmActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			rendered := m.renderDeleteConfirmDialog()
+			modalH := lipgloss.Height(rendered)
+			modalTop := (m.height - modalH) / 2
+			ynY := modalTop + modalH - 3
+
+			if !m.deleteDangerous && msg.Y == ynY {
+				// Simple Y/N mode
+				modalLeft := (m.width - lipgloss.Width(rendered)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return confirmDelete(m)
+				} else {
+					return cancelDelete(m)
+				}
+			}
+			// Click on remote toggle line
+			// Find it relative to bottom: toggle is 2 lines above Y/N (or 2 above input in dangerous mode)
+			toggleY := ynY - 2
+			if !m.deleteDangerous {
+				toggleY = ynY - 2
+			} else {
+				// In dangerous mode: bottom lines are "Type DELETE:" + input + "enter confirm"
+				// toggle is further up
+				toggleY = ynY - 4
+			}
+			if msg.Y == toggleY {
+				if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+					repo := m.repos[m.deleteRepoIdx]
+					if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+						if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+							m.deleteRemoteBranch = !m.deleteRemoteBranch
+							return m, nil
+						}
+					}
+				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.modal.Active {
+		rendered := m.modal.View(m.width, m.height)
+		modalH := lipgloss.Height(rendered)
+		contentStartY := modalContentY(m.height, modalH)
+
+		if m.modal.Step == ui.ModalSelectRepos {
+			// Content: title(1) + empty(1) + description(1) + empty(1) + repos...
+			repoStartY := contentStartY + 4
+			hoveredRepo := msg.Y - repoStartY
+			if hoveredRepo >= 0 && hoveredRepo < len(m.modal.Repos) {
+				m.modal.CursorIdx = hoveredRepo
+			}
+		}
+
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			switch m.modal.Step {
+			case ui.ModalSelectRepos:
+				repoStartY := contentStartY + 4
+				clickedRepo := msg.Y - repoStartY
+				if clickedRepo >= 0 && clickedRepo < len(m.modal.Repos) {
+					m.modal.CursorIdx = clickedRepo
+					if m.modal.Selected[clickedRepo] {
+						delete(m.modal.Selected, clickedRepo)
+					} else {
+						m.modal.Selected[clickedRepo] = true
+					}
+				}
+			case ui.ModalConfirm:
+				var cmd tea.Cmd
+				m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				return m, cmd
+			}
+		}
+		return m, nil
+	}
+
+	if m.renameActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			// Click on remote toggle
+			if m.renameWTIdx >= 0 && renameHasRemote(m) {
+				rendered := m.renderRenameDialog()
+				modalH := lipgloss.Height(rendered)
+				modalTop := (m.height - modalH) / 2
+				// Toggle line is 2 lines above the bottom hint line
+				toggleY := modalTop + modalH - 3 - 2
+				if msg.Y == toggleY {
+					m.renameRemoteBranch = !m.renameRemoteBranch
+					return m, nil
+				}
+			}
 		}
 		return m, nil
 	}
