@@ -269,8 +269,8 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string, hoveredUsage 
 		}
 	}
 
-	tabHint := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("  ← Tab/Click")
-	parts = append(parts, tabHint)
+	tabKey := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Render("(tab)")
+	parts = append(parts, " ", tabKey)
 
 	return strings.Join(parts, "")
 }
