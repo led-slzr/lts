@@ -216,6 +216,9 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 			wt := repo.Worktrees[m.deleteWTIdx]
 			logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
 			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
+			if repo.IsMonorepo {
+				return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteRemoteBranch, ri, wi))
+			}
 			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi))
 		}
 	}

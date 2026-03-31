@@ -1200,6 +1200,13 @@ func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteRemote 
 	}
 }
 
+func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+	return func() tea.Msg {
+		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteRemote, logFn)
+		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+	}
+}
+
 func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		log := &git.CreateLog{Stream: logFn}
