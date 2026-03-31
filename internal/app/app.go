@@ -555,9 +555,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout()
 		}
 
-		// Check footer buttons (footer is at fixed screen position)
+		// Check footer buttons (footer is at fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
-		if y >= screenFooterY && screenFooterY > 0 {
+		if y == screenFooterY && screenFooterY > 0 {
 			m.focusedCard = -1
 			m.focusedWT = -1
 			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
@@ -617,9 +617,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check footer at click position (fixed screen position)
+		// Check footer at click position (fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
-		if y >= screenFooterY && screenFooterY > 0 {
+		if y == screenFooterY && screenFooterY > 0 {
 			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
 		}
 
