@@ -21,6 +21,14 @@ func ReleaseURL() string {
 	return fmt.Sprintf("https://github.com/led-slzr/lts/releases/tag/v%s", version.Version)
 }
 
+// UpdateBadgeHitZone returns the screen coordinates of the "(Update Available)" badge.
+// It sits right after the version text on the same line.
+func UpdateBadgeHitZone() (x, y, w int) {
+	versionW := len("v" + version.Version) // plain ASCII, len = visual width
+	badgeW := len(" (Update Available)")
+	return MarginH + versionW, 1 + len(ltsBanner), badgeW
+}
+
 // Big block-letter LTS title
 var ltsBanner = []string{
 	"██╗     ████████╗███████╗",
@@ -85,7 +93,7 @@ type headerLayout struct {
 }
 
 // computeHeaderLayout is the single source of truth for header positioning.
-func computeHeaderLayout(termWidth int, aiCliLabel string) headerLayout {
+func computeHeaderLayout(termWidth int, aiCliLabel string, updateAvailable ...string) headerLayout {
 	bannerStyle := lipgloss.NewStyle().
 		Foreground(ColorDarkGreen).
 		Background(ColorBlack).
@@ -95,7 +103,11 @@ func computeHeaderLayout(termWidth int, aiCliLabel string) headerLayout {
 	for _, line := range ltsBanner {
 		bannerLines = append(bannerLines, bannerStyle.Render(line))
 	}
-	bannerLines = append(bannerLines, lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v"+version.Version))
+	versionLine := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v" + version.Version)
+	if len(updateAvailable) > 0 && updateAvailable[0] != "" {
+		versionLine += lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Bold(true).Render(" (Update Available)")
+	}
+	bannerLines = append(bannerLines, versionLine)
 	bannerWidth := lipgloss.Width(strings.Join(bannerLines, "\n"))
 
 	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1)
@@ -117,12 +129,16 @@ func computeHeaderLayout(termWidth int, aiCliLabel string) headerLayout {
 }
 
 // ClickUsageHitZones returns the screen coordinates of each click usage tab.
-func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickUsageZone) {
+func ClickUsageHitZones(termWidth int, aiCliLabel string, updateAvailable ...string) (y int, zones []ClickUsageZone) {
 	if aiCliLabel == "" {
 		aiCliLabel = "AI CLI"
 	}
 
-	layout := computeHeaderLayout(termWidth, aiCliLabel)
+	ua := ""
+	if len(updateAvailable) > 0 {
+		ua = updateAvailable[0]
+	}
+	layout := computeHeaderLayout(termWidth, aiCliLabel, ua)
 
 	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("Click Usage:")) + 1 // +1 for space after label
 
@@ -152,11 +168,13 @@ func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickU
 
 // HeaderOpts configures header rendering.
 type HeaderOpts struct {
-	Loading        bool
-	Frame          int
-	StatusMsg      string
-	VersionHovered bool
-	HoveredUsage   opener.ClickUsage // -1 = none hovered
+	Loading            bool
+	Frame              int
+	StatusMsg          string
+	VersionHovered     bool
+	HoveredUsage       opener.ClickUsage // -1 = none hovered
+	UpdateAvailable    string            // non-empty = version available (e.g. "2.6.1")
+	UpdateBadgeHovered bool
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
@@ -190,6 +208,24 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 			Background(ColorBlack).
 			Render("v" + version.Version)
 	}
+	// Append "(Update Available)" badge if applicable
+	if o.UpdateAvailable != "" {
+		var badge string
+		if o.UpdateBadgeHovered {
+			badge = lipgloss.NewStyle().
+				Foreground(ColorWhite).
+				Background(ColorDarkGreen).
+				Bold(true).
+				Render(" (Update Available)")
+		} else {
+			badge = lipgloss.NewStyle().
+				Foreground(ColorDarkGreen).
+				Background(ColorBlack).
+				Bold(true).
+				Render(" (Update Available)")
+		}
+		versionRendered += badge
+	}
 	bannerLines = append(bannerLines, versionRendered)
 	banner := strings.Join(bannerLines, "\n")
 
@@ -201,7 +237,7 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 	rightBlock := usageStr + "\n" + statusLine
 
 	// Position: banner center-left, usage+status top-right
-	layout := computeHeaderLayout(width, aiCliLabel)
+	layout := computeHeaderLayout(width, aiCliLabel, o.UpdateAvailable)
 	gap := layout.Gap
 
 	// Place right block aligned to top of banner

@@ -74,8 +74,10 @@ type Model struct {
 	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
 
 	// Header hover states
-	versionHovered bool
-	hoveredUsage   opener.ClickUsage // -1 = none
+	versionHovered     bool
+	hoveredUsage       opener.ClickUsage // -1 = none
+	updateAvailVersion string             // non-empty when update available but not auto-installed
+	updateBadgeHovered bool
 
 	// History suggestion hover (empty state)
 	hoveredHistory int // -1 = none
@@ -126,11 +128,13 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel(), ui.HeaderOpts{
-		Loading:        m.loading,
-		Frame:          m.loaderFrame,
-		StatusMsg:      m.statusMsg,
-		VersionHovered: m.versionHovered,
-		HoveredUsage:   m.hoveredUsage,
+		Loading:            m.loading,
+		Frame:              m.loaderFrame,
+		StatusMsg:          m.statusMsg,
+		VersionHovered:     m.versionHovered,
+		HoveredUsage:       m.hoveredUsage,
+		UpdateAvailable:    m.updateAvailVersion,
+		UpdateBadgeHovered: m.updateBadgeHovered,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
@@ -452,17 +456,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.config.SetLastUpdateCheck(time.Now().Unix())
 		r := msg.Result
 		if r.Err != nil {
-			// Silently ignore update check errors — don't disrupt the user
-			return m, nil
+			if r.LatestVersion == "" {
+				// Silently ignore startup check errors (no version info)
+				return m, nil
+			}
+			// Update failed — restore badge for retry
+			m.updateAvailVersion = r.LatestVersion
+			m.statusMsg = "Update failed: " + r.Err.Error()
+			m.statusGen++
+			m.recomputeLayout()
+			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		if r.Updated {
+			m.updateAvailVersion = "" // clear badge
+			m.updateBadgeHovered = false
 			m.statusMsg = fmt.Sprintf("Updated to v%s — restart to apply", r.LatestVersion)
 			m.statusGen++
 			m.recomputeLayout()
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		if r.UpdateAvail {
-			m.statusMsg = fmt.Sprintf("New version available: v%s (current: v%s)", r.LatestVersion, r.CurrentVersion)
+			// Only show persistent badge when auto-update is disabled
+			if !m.config.Global.AutoUpdate {
+				m.updateAvailVersion = r.LatestVersion
+			}
+			m.statusMsg = fmt.Sprintf("New version available: v%s", r.LatestVersion)
 			m.statusGen++
 			m.recomputeLayout()
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
@@ -787,6 +805,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		prevHoveredUsage := m.hoveredUsage
 		m.versionHovered = false
 		m.hoveredUsage = -1
+		wasUpdateBadgeHovered := m.updateBadgeHovered
+		m.updateBadgeHovered = false
 
 		// Check version label hover (fixed screen position in header)
 		vx, vy, vw := ui.VersionHitZone()
@@ -796,8 +816,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Check update badge hover
+		if m.updateAvailVersion != "" {
+			bx, by, bw := ui.UpdateBadgeHitZone()
+			if y == by && x >= bx && x < bx+bw {
+				m.updateBadgeHovered = true
+			}
+		}
+		if wasUpdateBadgeHovered != m.updateBadgeHovered {
+			m.recomputeLayout()
+		}
+
 		// Check click usage toggle hover (fixed screen position in header)
-		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel())
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
 		if y == usageY {
 			for _, z := range usageZones {
 				if x >= z.X && x < z.X+z.W {
@@ -913,8 +944,20 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, clearStatusCmd()
 		}
 
+		// Check "(Update Available)" badge click — triggers update
+		if m.updateAvailVersion != "" {
+			bx, by, bw := ui.UpdateBadgeHitZone()
+			if y == by && x >= bx && x < bx+bw {
+				m.statusMsg = "Updating..."
+				m.updateAvailVersion = ""
+				m.updateBadgeHovered = false
+				m.recomputeLayout()
+				return m, doUpdateCmd()
+			}
+		}
+
 		// Check click usage toggle click (fixed screen position in header)
-		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel())
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
 		if y == usageY {
 			for _, z := range usageZones {
 				if x >= z.X && x < z.X+z.W && z.Usage != m.clickUsage {
@@ -1561,6 +1604,13 @@ func updateCheckCmd(autoUpdate bool) tea.Cmd {
 		} else {
 			r = update.Check()
 		}
+		return UpdateCheckMsg{Result: r}
+	}
+}
+
+func doUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		r := update.Update()
 		return UpdateCheckMsg{Result: r}
 	}
 }
