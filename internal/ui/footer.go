@@ -6,12 +6,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// FooterButtonInfo holds rendered button text and its width for hit testing.
+// FooterButtonInfo holds position info for hit testing a footer button.
 type FooterButtonInfo struct {
-	Label string
-	X     int // start X position (screen coords)
-	W     int // width
-	Btn   HoverButton
+	X   int // start X position (screen coords)
+	W   int // width
+	Btn HoverButton
 }
 
 // RenderFooter renders footer and returns button positions for hit testing.
@@ -42,35 +41,38 @@ func RenderFooter(width int, hoveredBtn HoverButton) string {
 		Render(footer)
 }
 
+// FooterHitZones computes the screen X positions and widths of all footer buttons.
+// Matches the layout logic in RenderFooter exactly.
+func FooterHitZones(width int) []FooterButtonInfo {
+	refreshW := lipgloss.Width("r Refresh All") + 2  // +2 for ButtonStyle padding
+	cleanupW := lipgloss.Width("c Cleanup Merged") + 2
+	settingsW := lipgloss.Width("s Settings") + 2
+	exitW := lipgloss.Width("q Exit") + 2
+
+	leftW := refreshW + 2 + cleanupW // 2 = gap between left buttons
+	rightW := settingsW + 2 + exitW
+
+	availWidth := width - (MarginH * 2)
+	gap := availWidth - leftW - rightW
+	if gap < 2 {
+		gap = 2
+	}
+
+	return []FooterButtonInfo{
+		{X: MarginH, W: refreshW, Btn: BtnRefreshAll},
+		{X: MarginH + refreshW + 2, W: cleanupW, Btn: BtnCleanupMerged},
+		{X: MarginH + leftW + gap, W: settingsW, Btn: BtnSettings},
+		{X: MarginH + leftW + gap + settingsW + 2, W: exitW, Btn: BtnExit},
+	}
+}
+
 // GetFooterButtonAtX returns which button is at the given X coordinate.
 func GetFooterButtonAtX(x, width int) HoverButton {
-	// Button widths: "[key] Label" + padding(2)
-	refreshW := 17 // "[r] Refresh All" + padding
-	cleanupW := 20 // "[c] Cleanup Merged" + padding
-	settingsW := 14 // "[s] Settings" + padding
-	exitW := 10    // "[q] Exit" + padding
-
-	// Left buttons
-	x1 := MarginH
-	if x >= x1 && x < x1+refreshW {
-		return BtnRefreshAll
+	for _, info := range FooterHitZones(width) {
+		if x >= info.X && x < info.X+info.W {
+			return info.Btn
+		}
 	}
-	x2 := x1 + refreshW + 2
-	if x >= x2 && x < x2+cleanupW {
-		return BtnCleanupMerged
-	}
-
-	// Right buttons
-	availWidth := width - (MarginH * 2)
-	rightStart := MarginH + availWidth - settingsW - 2 - exitW
-	if x >= rightStart && x < rightStart+settingsW {
-		return BtnSettings
-	}
-	exitStart := rightStart + settingsW + 2
-	if x >= exitStart && x < exitStart+exitW {
-		return BtnExit
-	}
-
 	return BtnNone
 }
 
@@ -86,6 +88,14 @@ func renderFooterBtnWithKey(key, label string, hovered bool, keyNormal, keyHover
 		return ButtonHoverStyle.Render(key + " " + label)
 	}
 	return keyNormal.Render(key) + ButtonStyle.Render(" " + label)
+}
+
+// CreateBtnHitZone returns the X position and width of the centered create button.
+func CreateBtnHitZone(termWidth int) (x, w int) {
+	btnW := lipgloss.Width(CreateBtnStyle.Render("n Create Worktree"))
+	availW := termWidth - (MarginH * 2)
+	btnX := MarginH + (availW-btnW)/2
+	return btnX, btnW
 }
 
 func RenderCreateButton(width int, hovered bool) string {

@@ -73,8 +73,9 @@ type Model struct {
 	cleanupConfirmActive bool
 	cleanupRemoteBranch  bool // true = also delete remote branches during cleanup
 
-	// Version hover
+	// Header hover states
 	versionHovered bool
+	hoveredUsage   opener.ClickUsage // -1 = none
 
 	// Log panel
 	logPanel ui.LogPanelModel
@@ -97,6 +98,7 @@ func NewModel(cfg config.Config) Model {
 		focusedCard:      -1,
 		focusedWT:        -1,
 		hoveredBtn:       ui.BtnNone,
+		hoveredUsage:     -1,
 		renameInput:      ti,
 		deleteTypedInput: di,
 		initialLoad:      true,
@@ -119,6 +121,7 @@ func (m *Model) recomputeLayout() {
 		Frame:          m.loaderFrame,
 		StatusMsg:      m.statusMsg,
 		VersionHovered: m.versionHovered,
+		HoveredUsage:   m.hoveredUsage,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
@@ -524,7 +527,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseActionMotion:
 		m.hoveredBtn = ui.BtnNone
 		wasVersionHovered := m.versionHovered
+		prevHoveredUsage := m.hoveredUsage
 		m.versionHovered = false
+		m.hoveredUsage = -1
 
 		// Check version label hover (fixed screen position in header)
 		vx, vy, vw := ui.VersionHitZone()
@@ -533,7 +538,20 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout()
 			return m, nil
 		}
-		if wasVersionHovered {
+
+		// Check click usage toggle hover (fixed screen position in header)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel())
+		if y == usageY {
+			for _, z := range usageZones {
+				if x >= z.X && x < z.X+z.W {
+					m.hoveredUsage = z.Usage
+					break
+				}
+			}
+		}
+
+		// Recompute header if any header hover state changed
+		if wasVersionHovered != m.versionHovered || prevHoveredUsage != m.hoveredUsage {
 			m.recomputeLayout()
 		}
 
@@ -562,6 +580,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
 				m.hoveredBtn = inlineBtn
+			}
+		}
+
+		// Check create button hover (virtual Y + X bounds)
+		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+			cbX, cbW := ui.CreateBtnHitZone(m.width)
+			if x >= cbX && x < cbX+cbW {
+				m.hoveredBtn = ui.BtnCreateWT
 			}
 		}
 
@@ -597,9 +623,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
 		}
 
-		// Check create button (virtual Y)
+		// Check create button (virtual Y + X bounds)
 		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
-			m.hoveredBtn = ui.BtnCreateWT
+			cbX, cbW := ui.CreateBtnHitZone(m.width)
+			if x >= cbX && x < cbX+cbW {
+				m.hoveredBtn = ui.BtnCreateWT
+			}
 		}
 
 		// Check version label click (fixed screen position in header)
@@ -610,6 +639,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			_ = cmd.Start()
 			m.statusMsg = "Opened release page"
 			return m, clearStatusCmd()
+		}
+
+		// Check click usage toggle click (fixed screen position in header)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel())
+		if y == usageY {
+			for _, z := range usageZones {
+				if x >= z.X && x < z.X+z.W && z.Usage != m.clickUsage {
+					m.clickUsage = z.Usage
+					m.statusMsg = fmt.Sprintf("Click usage: %s", m.clickUsage)
+					m.recomputeLayout()
+					return m, clearStatusCmd()
+				}
+			}
 		}
 
 		if m.loading {

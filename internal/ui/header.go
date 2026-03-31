@@ -70,12 +70,78 @@ func RenderSpinner(frame int) string {
 	return result.String()
 }
 
+// ClickUsageZone represents a clickable region for a click usage mode.
+type ClickUsageZone struct {
+	X     int
+	W     int
+	Usage opener.ClickUsage
+}
+
+// ClickUsageHitZones returns the screen coordinates of each click usage tab.
+// The right block is positioned at: MarginH + bannerWidth + gap.
+// The usage line is at Y = 2 (1 header margin + 1 rightBlock marginTop).
+func ClickUsageHitZones(termWidth int, aiCliLabel string) (y int, zones []ClickUsageZone) {
+	if aiCliLabel == "" {
+		aiCliLabel = "AI CLI"
+	}
+
+	bannerStyle := lipgloss.NewStyle().
+		Foreground(ColorDarkGreen).
+		Background(ColorBlack).
+		Bold(true)
+	bannerWidth := lipgloss.Width(bannerStyle.Render(ltsBanner[0]))
+
+	// Build the usage line to measure each part's width
+	labelText := "Click Usage:"
+	labelW := lipgloss.Width(ClickUsageLabelStyle.Render(labelText)) + 1 // +1 for space after label
+
+	modes := []struct {
+		usage opener.ClickUsage
+		name  string
+	}{
+		{opener.ClickIDE, "IDE"},
+		{opener.ClickAICli, aiCliLabel},
+		{opener.ClickTerminal, "Terminal"},
+	}
+
+	// Measure full right block width to compute gap
+	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1) // active mode doesn't affect width
+	statusLine := renderStatusLine("", false, 0)
+	rightBlock := usageStr + "\n" + statusLine
+	rightWidth := lipgloss.Width(rightBlock)
+
+	availableWidth := termWidth - (MarginH * 2)
+	gap := availableWidth - bannerWidth - rightWidth
+	if gap < 2 {
+		gap = 2
+	}
+
+	// Right block starts at this X
+	rightBlockX := MarginH + bannerWidth + gap
+	y = 2 // 1 (header top margin) + 1 (rightBlock marginTop)
+
+	// Walk through the usage line parts to compute X positions
+	curX := rightBlockX + labelW
+	var result []ClickUsageZone
+	for i, m := range modes {
+		w := lipgloss.Width(ClickUsageActiveStyle.Render(m.name)) // padded width
+		result = append(result, ClickUsageZone{X: curX, W: w, Usage: m.usage})
+		curX += w
+		if i < len(modes)-1 {
+			curX += lipgloss.Width(BranchDimStyle.Render("│")) // separator
+		}
+	}
+
+	return y, result
+}
+
 // HeaderOpts configures header rendering.
 type HeaderOpts struct {
 	Loading        bool
 	Frame          int
 	StatusMsg      string
 	VersionHovered bool
+	HoveredUsage   opener.ClickUsage // -1 = none hovered
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
@@ -113,7 +179,7 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 	banner := strings.Join(bannerLines, "\n")
 
 	// Render click usage toggle
-	usageStr := renderClickUsage(activeUsage, aiCliLabel)
+	usageStr := renderClickUsage(activeUsage, aiCliLabel, o.HoveredUsage)
 
 	// Render status line below usage
 	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
@@ -161,12 +227,19 @@ func renderStatusLine(status string, loading bool, frame int) string {
 	return line
 }
 
-func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
+func renderClickUsage(active opener.ClickUsage, aiCliLabel string, hoveredUsage opener.ClickUsage) string {
 	label := ClickUsageLabelStyle.Render("Click Usage:")
 
 	if aiCliLabel == "" {
 		aiCliLabel = "AI CLI"
 	}
+
+	hoveredStyle := lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBlack).
+		Bold(true).
+		Underline(true).
+		Padding(0, 1)
 
 	modes := []struct {
 		usage opener.ClickUsage
@@ -185,6 +258,8 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
 		var rendered string
 		if m.usage == active {
 			rendered = ClickUsageActiveStyle.Render(m.name)
+		} else if m.usage == hoveredUsage {
+			rendered = hoveredStyle.Render(m.name)
 		} else {
 			rendered = ClickUsageInactiveStyle.Render(m.name)
 		}
@@ -194,7 +269,7 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string) string {
 		}
 	}
 
-	tabHint := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("  ← Tab")
+	tabHint := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("  ← Tab/Click")
 	parts = append(parts, tabHint)
 
 	return strings.Join(parts, "")

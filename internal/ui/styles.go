@@ -165,7 +165,7 @@ var (
 				Bold(true).
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(ColorWhite).
-				BorderBackground(ColorDarkGreen).
+				BorderBackground(ColorBlack).
 				Padding(0, 2)
 
 	// Empty state
