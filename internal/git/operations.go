@@ -724,6 +724,7 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 
 	var folders []string
 	var repoTasks []string
+	firstFolder := ""
 	for _, pair := range repoWTPairs {
 		parts := strings.SplitN(pair, ":", 2)
 		if len(parts) < 2 {
@@ -731,6 +732,9 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 		}
 		repo, wt := parts[0], parts[1]
 		folderName := repo + " - " + suffix
+		if firstFolder == "" {
+			firstFolder = folderName
+		}
 		folders = append(folders, fmt.Sprintf(`    { "name": "%s", "path": "%s" }`, folderName, wt))
 
 		repoTasks = append(repoTasks, fmt.Sprintf(`      {
@@ -743,13 +747,29 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
       }`, repo, repo, suffix, folderName))
 	}
 
-	allTasks := []string{fmt.Sprintf(`      {
+	// Set cwd to the branch subdirectory (parent of all repo folders) so the
+	// AI CLI opens in e.g. feat-login/ rather than inside a single repo folder.
+	var aiTask string
+	if firstFolder != "" {
+		aiTask = fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "%s",
+        "options": { "cwd": "${workspaceFolder:%s}/.." },
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "new" }
+      }`, aiLabel, aiCliCmd, firstFolder)
+	} else {
+		aiTask = fmt.Sprintf(`      {
         "label": "%s",
         "type": "shell",
         "command": "%s",
         "runOptions": { "runOn": "folderOpen" },
         "presentation": { "reveal": "always", "panel": "new" }
-      }`, aiLabel, aiCliCmd)}
+      }`, aiLabel, aiCliCmd)
+	}
+
+	allTasks := []string{aiTask}
 	allTasks = append(allTasks, repoTasks...)
 
 	content := fmt.Sprintf(`{
