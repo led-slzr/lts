@@ -105,13 +105,23 @@ func GetFooterButtonAtX(x, width int) HoverButton {
 	return BtnNone
 }
 
+// IsOperationBtn returns true for buttons that trigger operations
+// and should be disabled during loading.
+func IsOperationBtn(btn HoverButton) bool {
+	return btn == BtnRefreshAll || btn == BtnCleanupMerged || btn == BtnCreateWT || btn == BtnMigrate
+}
+
 // RenderFooter renders footer using the shared layout computation.
-func RenderFooter(width int, hoveredBtn HoverButton) string {
+func RenderFooter(width int, hoveredBtn HoverButton, loading bool) string {
 	keyStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBtnBg)
+	disabledStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBtnBg).Padding(0, 1)
 
 	_, _, gap := computeFooterLayout(width)
 
 	renderBtn := func(b footerButton, hovered bool) string {
+		if loading && IsOperationBtn(b.Btn) {
+			return disabledStyle.Render(b.Key + " " + b.Label)
+		}
 		if hovered {
 			return ButtonHoverStyle.Render(b.Key + " " + b.Label)
 		}
@@ -191,9 +201,11 @@ func CreateBtnHitZone(termWidth int) (x, w int) {
 	return btnX, btnW
 }
 
-func RenderCreateButton(width int, hovered bool) string {
+func RenderCreateButton(width int, hovered bool, loading bool) string {
 	var btn string
-	if hovered {
+	if loading {
+		btn = CreateBtnStyle.Foreground(ColorDim).BorderForeground(ColorDim).Render("n Create Worktree")
+	} else if hovered {
 		btn = CreateBtnHoverStyle.Render("n Create Worktree")
 	} else {
 		keyStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)

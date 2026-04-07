@@ -151,7 +151,7 @@ func (m *Model) recomputeLayout() {
 		yPos += lipgloss.Height(legend)
 
 		m.createBtnY = yPos
-		createBtn := ui.RenderCreateButton(m.width, false)
+		createBtn := ui.RenderCreateButton(m.width, false, m.loading)
 		yPos += lipgloss.Height(createBtn)
 	} else {
 		m.createBtnY = 0
@@ -848,10 +848,17 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if y == screenFooterY && screenFooterY > 0 {
 			m.focusedCard = -1
 			m.focusedWT = -1
+			var btn ui.HoverButton
 			if len(m.repos) > 0 {
-				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+				btn = ui.GetFooterButtonAtX(x, m.width)
 			} else {
-				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+				btn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
+			// Suppress hover on operation buttons during loading
+			if m.loading && ui.IsOperationBtn(btn) {
+				m.hoveredBtn = ui.BtnNone
+			} else {
+				m.hoveredBtn = btn
 			}
 			return m, nil
 		}
@@ -860,7 +867,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
-		if btn != ui.BtnNone {
+		if btn != ui.BtnNone && !(m.loading && ui.IsOperationBtn(btn)) {
 			m.hoveredBtn = btn
 		}
 
@@ -882,8 +889,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check create button hover (virtual Y + X bounds, only when repos exist)
-		if len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+		// Check create button hover (virtual Y + X bounds, only when repos exist; suppress during loading)
+		if !m.loading && len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			cbX, cbW := ui.CreateBtnHitZone(m.width)
 			if x >= cbX && x < cbX+cbW {
 				m.hoveredBtn = ui.BtnCreateWT
@@ -901,7 +908,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
-		if btn != ui.BtnNone {
+		if btn != ui.BtnNone && !(m.loading && ui.IsOperationBtn(btn)) {
 			m.hoveredBtn = btn
 		}
 
@@ -919,15 +926,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Check footer at click position (fixed screen position, 1 line tall)
 		screenFooterY := m.headerH + m.contentHeight - m.scrollY
 		if y == screenFooterY && screenFooterY > 0 {
+			var btn ui.HoverButton
 			if len(m.repos) > 0 {
-				m.hoveredBtn = ui.GetFooterButtonAtX(x, m.width)
+				btn = ui.GetFooterButtonAtX(x, m.width)
 			} else {
-				m.hoveredBtn = ui.GetFooterMinimalButtonAtX(x, m.width)
+				btn = ui.GetFooterMinimalButtonAtX(x, m.width)
+			}
+			if !(m.loading && ui.IsOperationBtn(btn)) {
+				m.hoveredBtn = btn
 			}
 		}
 
-		// Check create button (virtual Y + X bounds)
-		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+		// Check create button (virtual Y + X bounds; suppress during loading)
+		if !m.loading && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			cbX, cbW := ui.CreateBtnHitZone(m.width)
 			if x >= cbX && x < cbX+cbW {
 				m.hoveredBtn = ui.BtnCreateWT
@@ -1113,7 +1124,7 @@ func (m Model) View() string {
 	scrollable = append(scrollable, m.gridResult.View)
 	if hasRepos {
 		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
-		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT))
+		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT, m.loading))
 	}
 	scrollContent := strings.Join(scrollable, "\n")
 
@@ -1152,7 +1163,7 @@ func (m Model) View() string {
 
 	// Footer — fixed at bottom (minimal when no repos)
 	if hasRepos {
-		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn))
+		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn, m.loading))
 	} else {
 		sections = append(sections, ui.RenderFooterMinimal(m.width, m.hoveredBtn))
 	}
