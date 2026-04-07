@@ -1542,7 +1542,7 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg
 			basis = cfg.GetRepoBasisBranch(repoNames[0])
 		}
 		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basis,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, log)
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, log)
 		if err != nil {
 			logFn("create", "Failed: "+err.Error(), true)
 		} else {
@@ -1562,7 +1562,7 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cm
 func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
 		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
@@ -1573,7 +1573,7 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
 		_, err := git.RenameMonorepoWorktrees(cfg.WorkDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
@@ -1586,7 +1586,7 @@ func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd 
 		repoName := filepath.Base(repoPath)
 		basis := cfg.GetRepoBasisBranch(repoName)
 		result, err := git.MigrateToWorktree(repoPath, cfg.WorkDir, basis,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, logFn)
+			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
 		if err != nil {
 			logFn("migrate", "Failed: "+err.Error(), true)
 		} else {

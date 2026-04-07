@@ -314,7 +314,7 @@ func CheckOngoingOperations(repoPath string) error {
 
 // CreateSingleRepoWorktree creates a worktree for a single repository.
 // This matches mode_create_worktrees from lts.sh (for 1 worktree).
-func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand string, log *CreateLog) (*CreateResult, error) {
+func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	ltsDir := repoName + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
@@ -371,7 +371,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
 	result.WorkspaceFile = wsFile
 
 	return result, nil
@@ -379,7 +379,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 // CreateMonorepoWorktrees creates worktrees across multiple repos with the same branch.
 // This matches mode_create_monorepo_worktrees from lts.sh.
-func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch, pkgManager, aiCliCommand string, log *CreateLog) ([]*CreateResult, error) {
+func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
 	if len(repoNames) == 0 {
 		return nil, fmt.Errorf("no repositories selected")
 	}
@@ -387,7 +387,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	// Single repo shortcut — use standard naming
 	if len(repoNames) == 1 {
 		repoPath := filepath.Join(scriptDir, repoNames[0])
-		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, log)
+		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand, openEnvInIDE, log)
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +498,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	writeReposMetadata(ltsPath, sorted)
 
 	// Generate monorepo workspace (only workspace file for monorepo setups)
-	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand)
+	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand, ideCommand, openEnvInIDE)
 	for _, r := range results {
 		r.WorkspaceFile = wsFile
 	}
@@ -542,6 +542,40 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 	log.Add("Creating new branch " + branch + " from " + mainBranch)
 	_, err := RunGit(repoPath, "worktree", "add", "-b", branch, wtPath, mainBranch)
 	return err
+}
+
+// findEnvFiles returns relative paths of all .env* files under root,
+// skipping node_modules, .git, dist, build directories.
+func findEnvFiles(root string) []string {
+	var files []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == "node_modules" || base == ".git" || base == "dist" || base == "build" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(info.Name(), ".env") {
+			rel, _ := filepath.Rel(root, path)
+			files = append(files, rel)
+		}
+		return nil
+	})
+	return files
+}
+
+// shellQuotePaths single-quotes each path for safe shell interpolation,
+// escaping any embedded single quotes.
+func shellQuotePaths(paths []string) string {
+	quoted := make([]string, len(paths))
+	for i, p := range paths {
+		quoted[i] = "'" + strings.ReplaceAll(p, "'", "'\\''") + "'"
+	}
+	return strings.Join(quoted, " ")
 }
 
 // copyEnvFilesRecursive copies .env* files preserving directory structure.
@@ -643,7 +677,7 @@ func runPackageInstall(wtPath, pkgManager string, log *CreateLog) {
 	}
 }
 
-func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) string {
+func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd, ideCmd string, openEnv bool) string {
 	wsPath := filepath.Join(ltsPath, wtName+".code-workspace")
 	pmLabel := strings.ToUpper(pkgMgr)
 
@@ -662,6 +696,44 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) strin
 		aiCliCmd = "claude"
 	}
 
+	var tasks []string
+	tasks = append(tasks,
+		fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "%s",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "new" }
+      }`, aiLabel, aiCliCmd),
+		fmt.Sprintf(`      {
+        "label": "%s",
+        "type": "shell",
+        "command": "echo '' && echo '📦 %s Terminal' && echo '' && exec $SHELL",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
+      }`, pmLabel, pmLabel),
+		`      {
+        "label": "Git",
+        "type": "shell",
+        "command": "git status; echo '' && exec $SHELL",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
+      }`)
+
+	// Auto-open .env files
+	if openEnv && ideCmd != "" {
+		wtPath := filepath.Join(ltsPath, wtName)
+		if envFiles := findEnvFiles(wtPath); len(envFiles) > 0 {
+			tasks = append(tasks, fmt.Sprintf(`      {
+        "label": "Open .env",
+        "type": "shell",
+        "command": "%s %s",
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "never", "close": true }
+      }`, ideCmd, shellQuotePaths(envFiles)))
+		}
+	}
+
 	content := fmt.Sprintf(`{
   "folders": [
     { "path": "%s" }
@@ -672,31 +744,11 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) strin
   "tasks": {
     "version": "2.0.0",
     "tasks": [
-      {
-        "label": "%s",
-        "type": "shell",
-        "command": "%s",
-        "runOptions": { "runOn": "folderOpen" },
-        "presentation": { "reveal": "always", "panel": "new" }
-      },
-      {
-        "label": "%s",
-        "type": "shell",
-        "command": "echo '' && echo '📦 %s Terminal' && echo '' && exec $SHELL",
-        "runOptions": { "runOn": "folderOpen" },
-        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
-      },
-      {
-        "label": "Git",
-        "type": "shell",
-        "command": "git status; echo '' && exec $SHELL",
-        "runOptions": { "runOn": "folderOpen" },
-        "presentation": { "reveal": "always", "panel": "dedicated", "group": "lts" }
-      }
+%s
     ]
   }
 }
-`, wtName, aiLabel, aiCliCmd, pmLabel, pmLabel)
+`, wtName, strings.Join(tasks, ",\n"))
 
 	os.WriteFile(wsPath, []byte(content), 0644)
 	return wsPath
@@ -704,7 +756,7 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd string) strin
 
 // generateMonorepoWorkspace creates a workspace for multi-repo monorepo-like worktrees.
 // Includes: all repo folders, AI CLI task at parent dir, and one terminal per repo.
-func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string, aiCliCmd string) string {
+func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []string, aiCliCmd, ideCmd string, openEnv bool) string {
 	wsPath := filepath.Join(branchSubdirPath, "monorepo-"+suffix+".code-workspace")
 
 	// Derive AI CLI label from command
@@ -771,6 +823,36 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 
 	allTasks := []string{aiTask}
 	allTasks = append(allTasks, repoTasks...)
+
+	// Auto-open .env files across all repo worktrees
+	if openEnv && ideCmd != "" {
+		var allEnvPaths []string
+		for _, pair := range repoWTPairs {
+			parts := strings.SplitN(pair, ":", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			wt := parts[1]
+			wtPath := filepath.Join(branchSubdirPath, wt)
+			for _, f := range findEnvFiles(wtPath) {
+				allEnvPaths = append(allEnvPaths, filepath.Join(wt, f))
+			}
+		}
+		if len(allEnvPaths) > 0 {
+			envCwd := ""
+			if firstFolder != "" {
+				envCwd = fmt.Sprintf(`
+        "options": { "cwd": "${workspaceFolder:%s}/.." },`, firstFolder)
+			}
+			allTasks = append(allTasks, fmt.Sprintf(`      {
+        "label": "Open .env",
+        "type": "shell",
+        "command": "%s %s",%s
+        "runOptions": { "runOn": "folderOpen" },
+        "presentation": { "reveal": "never", "close": true }
+      }`, ideCmd, shellQuotePaths(allEnvPaths), envCwd))
+		}
+	}
 
 	content := fmt.Sprintf(`{
   "folders": [
@@ -1168,7 +1250,7 @@ type RenameResult struct {
 
 // RenameWorktree fully renames a worktree: branch, directory, workspace file, and optionally remote.
 // repoPath is the bare/main repo, wtPath is the current worktree directory.
-func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd string, logFn ...LogFunc) (*RenameResult, error) {
+func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd, ideCmd string, openEnvInIDE bool, logFn ...LogFunc) (*RenameResult, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1219,7 +1301,7 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 		os.Remove(oldWsFile)
 	}
 	log(ctx, "Generating new workspace file", false)
-	generateIndividualWorkspace(ltsDir, newWtName, pkgMgr, aiCliCmd)
+	generateIndividualWorkspace(ltsDir, newWtName, pkgMgr, aiCliCmd, ideCmd, openEnvInIDE)
 
 	// 4. Handle remote branch if requested
 	if renameRemote && oldBranch != "" && !IsProtectedBranch(oldBranch) {
@@ -1250,7 +1332,7 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 // branchSubdirPath is the branch subdirectory containing all repo worktrees (e.g. .../core-erp-ui-lts/core-erp-ui-feat-login/).
 // scriptDir is the root working directory where repos live.
 // repoNames are the constituent repo names (e.g. ["core", "erp-ui"]).
-func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd string, logFn ...LogFunc) (*RenameResult, error) {
+func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, pkgMgr, aiCliCmd, ideCmd string, openEnvInIDE bool, logFn ...LogFunc) (*RenameResult, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1342,7 +1424,7 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 			os.Remove(oldWsFile)
 		}
 		// Generate new individual workspace
-		generateIndividualWorkspace(branchSubdirPath, newWtName, pkgMgr, aiCliCmd)
+		generateIndividualWorkspace(branchSubdirPath, newWtName, pkgMgr, aiCliCmd, ideCmd, openEnvInIDE)
 
 		repoWTPairs = append(repoWTPairs, wt.repoName+":"+newWtName)
 	}
@@ -1355,7 +1437,7 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 		os.Remove(oldMonoWs)
 	}
 	log(ctx, "Generating new monorepo workspace", false)
-	generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs, aiCliCmd)
+	generateMonorepoWorkspace(branchSubdirPath, newBranchDirName, repoWTPairs, aiCliCmd, ideCmd, openEnvInIDE)
 
 	// 4. Rename the branch subdirectory itself
 	newBranchSubdirPath := filepath.Join(ltsPath, newBranchDirName)
@@ -1470,7 +1552,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 //
 // Every failure path restores the original state or tells the user exactly
 // where their data is (commits on the branch, uncommitted work in git stash list).
-func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliCommand string, logFn LogFunc) (*CreateResult, error) {
+func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, logFn LogFunc) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	ctx := repoName
 
@@ -1628,7 +1710,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
 
 	logFn(ctx, "Migration complete — "+currentBranch+" is now an LTS worktree", false)
 
