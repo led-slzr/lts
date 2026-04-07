@@ -1456,8 +1456,11 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 
 	// Get current branch
 	currentBranch, err := RunGit(repoPath, "branch", "--show-current")
-	if err != nil || currentBranch == "" {
+	if err != nil {
 		return nil, fmt.Errorf("could not detect current branch in %s", repoName)
+	}
+	if currentBranch == "" {
+		return nil, fmt.Errorf("%s is in detached HEAD — check out a branch first, then retry", repoName)
 	}
 	logFn(ctx, "Current branch: "+currentBranch, false)
 
