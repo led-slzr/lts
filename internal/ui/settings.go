@@ -94,6 +94,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 		SettingsItem{Section: "Global", Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
 			Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+		SettingsItem{Section: "Global", Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
+			Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
 	)
 
 	// Local settings per repo
@@ -285,6 +287,8 @@ func (s *SettingsModel) previousValue(item SettingsItem) string {
 			return boolToStr(s.Config.Global.CheckForUpdates)
 		case "AUTO_UPDATE_NEW_RELEASE":
 			return boolToStr(s.Config.Global.AutoUpdate)
+		case "OPEN_ENV_IDE":
+			return boolToStr(s.Config.Global.OpenEnvInIDE)
 		}
 	} else {
 		key := strings.ToUpper(item.RepoName)
@@ -345,6 +349,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.CheckForUpdates = item.Value == "true"
 		case "AUTO_UPDATE_NEW_RELEASE":
 			s.Config.Global.AutoUpdate = item.Value == "true"
+		case "OPEN_ENV_IDE":
+			s.Config.Global.OpenEnvInIDE = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {

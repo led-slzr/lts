@@ -226,7 +226,22 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 // branch that should be migrated to an LTS worktree.
 func checkMigrationNeeded(repoPath, mainBranch string) (needsMigration bool, branch, reason string) {
 	currentBranch, err := RunGit(repoPath, "branch", "--show-current")
-	if err != nil || currentBranch == "" {
+	if err != nil {
+		return false, "", ""
+	}
+
+	// Detached HEAD: check for uncommitted changes that need rescuing
+	if currentBranch == "" {
+		porcelain, _ := RunGit(repoPath, "status", "--porcelain")
+		porcelain = strings.TrimSpace(porcelain)
+		if porcelain != "" {
+			count := len(strings.Split(porcelain, "\n"))
+			detachedLabel := "HEAD (detached)"
+			if count == 1 {
+				return true, detachedLabel, "1 uncommitted file"
+			}
+			return true, detachedLabel, fmt.Sprintf("%d uncommitted files", count)
+		}
 		return false, "", ""
 	}
 
@@ -270,8 +285,14 @@ func checkMigrationNeeded(repoPath, mainBranch string) (needsMigration bool, bra
 			}
 		}
 	} else {
-		// No remote tracking — count commits ahead of main
-		aheadStr, _ := RunGit(repoPath, "rev-list", "--count", mainBranch+"..HEAD")
+		// No remote tracking — count commits ahead of main branch.
+		// Verify main branch exists first; if not, count all commits on HEAD.
+		refSpec := mainBranch + "..HEAD"
+		if _, err := RunGit(repoPath, "rev-parse", "--verify", "refs/heads/"+mainBranch); err != nil {
+			// Main branch doesn't exist locally — count all commits as local
+			refSpec = "HEAD"
+		}
+		aheadStr, _ := RunGit(repoPath, "rev-list", "--count", refSpec)
 		ahead := 0
 		fmt.Sscanf(aheadStr, "%d", &ahead)
 		if ahead > 0 {

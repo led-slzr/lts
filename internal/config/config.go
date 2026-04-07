@@ -20,6 +20,7 @@ type GlobalConfig struct {
 	Terminal        string // ghostty, iterm, terminal, wezterm, alacritty
 	CheckForUpdates bool   // daily check for new releases
 	AutoUpdate      bool   // automatically install new releases in background
+	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
 	LastUpdateCheck int64  // unix timestamp of last update check
 }
 
@@ -45,6 +46,7 @@ func DefaultGlobal() GlobalConfig {
 		Terminal:        "terminal",
 		CheckForUpdates: true,
 		AutoUpdate:      true,
+		OpenEnvInIDE:    true,
 		LastUpdateCheck: 0,
 	}
 }
@@ -204,6 +206,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("TERMINAL=\"%s\"", c.Global.Terminal),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
+		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -265,6 +268,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["AUTO_UPDATE_NEW_RELEASE"]; ok {
 		g.AutoUpdate = v != "false"
+	}
+	if v, ok := kv["OPEN_ENV_IDE"]; ok {
+		g.OpenEnvInIDE = v != "false"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
