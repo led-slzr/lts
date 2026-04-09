@@ -544,33 +544,8 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 	return err
 }
 
-// findEnvFiles returns relative paths of all .env* files under root,
-// skipping node_modules, .git, dist, build directories.
-func findEnvFiles(root string) []string {
-	var files []string
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() {
-			base := filepath.Base(path)
-			if base == "node_modules" || base == ".git" || base == "dist" || base == "build" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(info.Name(), ".env") {
-			rel, _ := filepath.Rel(root, path)
-			files = append(files, rel)
-		}
-		return nil
-	})
-	return files
-}
-
 // findExactEnvFiles returns relative paths of files named exactly ".env" under root,
 // skipping node_modules, .git, dist, build directories.
-// Unlike findEnvFiles, this does NOT match .env.example, .env.local, etc.
 func findExactEnvFiles(root string) []string {
 	var files []string
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
