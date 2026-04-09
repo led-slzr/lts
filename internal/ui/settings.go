@@ -18,6 +18,7 @@ const (
 	SettingText                       // free text input
 	SettingDisplay                    // read-only
 	SettingBool                       // toggle true/false
+	SettingAction                     // action button — triggers a command on Enter
 )
 
 type SettingsItem struct {
@@ -54,6 +55,9 @@ type SettingsModel struct {
 type SettingsSavedMsg struct{}
 type SettingsSaveClearMsg struct {
 	Gen int // only clear if this matches current generation
+}
+type SettingsActionMsg struct {
+	Action string // e.g. "CHECK_FOR_UPDATE_ACTION"
 }
 
 func boolToStr(b bool) string {
@@ -123,6 +127,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
 			SettingsItem{Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
 				Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
+			SettingsItem{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION",
+				Value: "Press enter to check", Kind: SettingAction},
 		)
 	} else {
 		// Worktrees tab: per-repo local settings
@@ -236,6 +242,9 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 				item.Value = "true"
 			}
 			return s, s.applyChange(*item)
+		case SettingAction:
+			action := item.Key
+			return s, func() tea.Msg { return SettingsActionMsg{Action: action} }
 		}
 	}
 	return s, nil
@@ -549,6 +558,8 @@ func (s SettingsModel) View(width, height int) string {
 			}
 		case SettingDisplay:
 			valueFmt = dimStyle.Render(item.Value)
+		case SettingAction:
+			valueFmt = dimStyle.Render(item.Value)
 		}
 
 		cursor := "  "
@@ -561,6 +572,8 @@ func (s SettingsModel) View(width, height int) string {
 				line += editStyle.Render("  ⏎ edit")
 			} else if item.Kind == SettingBool {
 				line += editStyle.Render("  ⏎ toggle")
+			} else if item.Kind == SettingAction {
+				line += editStyle.Render("  ⏎ run")
 			}
 			lines = append(lines, line)
 		} else {

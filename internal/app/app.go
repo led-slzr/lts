@@ -251,6 +251,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resultModel.recomputeLayout()
 		return resultModel, cmd
 
+	case ui.SettingsActionMsg:
+		switch msg.Action {
+		case "CHECK_FOR_UPDATE_ACTION":
+			m.statusMsg = "Checking for updates..."
+			m.statusGen++
+			m.recomputeLayout()
+			return m, updateCheckCmd(false)
+		}
+		return m, nil
+
 	case ui.SettingsSavedMsg:
 		// Setting changed — reload repos to reflect new config immediately
 		m.recomputeLayout()
@@ -486,7 +496,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout()
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
-		return m, nil
+		// No update available
+		m.statusMsg = "Already on latest version (v" + r.CurrentVersion + ")"
+		m.statusGen++
+		m.recomputeLayout()
+		return m, clearStatusAfter(m.statusGen, 5*time.Second)
 
 	case ui.ModalCreateMsg:
 		if len(msg.RepoNames) > 0 {
