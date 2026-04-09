@@ -544,9 +544,9 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 	return err
 }
 
-// findEnvFiles returns relative paths of all .env* files under root,
+// findExactEnvFiles returns relative paths of files named exactly ".env" under root,
 // skipping node_modules, .git, dist, build directories.
-func findEnvFiles(root string) []string {
+func findExactEnvFiles(root string) []string {
 	var files []string
 	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -559,7 +559,7 @@ func findEnvFiles(root string) []string {
 			}
 			return nil
 		}
-		if strings.HasPrefix(info.Name(), ".env") {
+		if info.Name() == ".env" {
 			rel, _ := filepath.Rel(root, path)
 			files = append(files, rel)
 		}
@@ -723,7 +723,7 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd, ideCmd strin
 	// Auto-open .env files
 	if openEnv && ideCmd != "" {
 		wtPath := filepath.Join(ltsPath, wtName)
-		if envFiles := findEnvFiles(wtPath); len(envFiles) > 0 {
+		if envFiles := findExactEnvFiles(wtPath); len(envFiles) > 0 {
 			tasks = append(tasks, fmt.Sprintf(`      {
         "label": "Open .env",
         "type": "shell",
@@ -834,7 +834,7 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 			}
 			wt := parts[1]
 			wtPath := filepath.Join(branchSubdirPath, wt)
-			for _, f := range findEnvFiles(wtPath) {
+			for _, f := range findExactEnvFiles(wtPath) {
 				allEnvPaths = append(allEnvPaths, filepath.Join(wt, f))
 			}
 		}
@@ -992,7 +992,7 @@ func resolveWorktreeRepo(wtPath string) string {
 
 // DeleteMonorepoWorktree removes all repo worktrees inside a monorepo branch subdir,
 // cleans up workspace files, and removes the branch subdir.
-func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, logFn ...LogFunc) error {
+func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1044,8 +1044,10 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 		// Delete the branch in this repo
 		if repoPath != "" && branch != "" && !IsProtectedBranch(branch) {
-			log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
-			RunGit(repoPath, "branch", "-D", branch)
+			if deleteLocal {
+				log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
+				RunGit(repoPath, "branch", "-D", branch)
+			}
 
 			if deleteRemote {
 				log(ctx, "Deleting remote branch in "+filepath.Base(repoPath), false)
@@ -1065,7 +1067,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 }
 
 // DeleteWorktree removes a worktree, its workspace file, and optionally its branch.
-func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool, logFn ...LogFunc) error {
+func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1113,7 +1115,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool, logFn ..
 		}
 	}
 
-	if branch != "" && !IsProtectedBranch(branch) {
+	if deleteLocal && branch != "" && !IsProtectedBranch(branch) {
 		log(ctx, "Deleting local branch", false)
 		RunGit(repoPath, "branch", "-D", branch)
 	}
@@ -1513,7 +1515,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 			if wt.Status == StatusMergedCleanable {
 				if repo.IsMonorepo {
 					log(wt.Branch, "Cleaning merged monorepo worktree in "+repo.Name, false)
-					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, deleteRemote, log)
+					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
 					} else {
@@ -1524,7 +1526,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 						continue
 					}
 					log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
-					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, deleteRemote, log)
+					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
 					} else {

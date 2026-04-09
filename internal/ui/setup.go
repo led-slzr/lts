@@ -91,11 +91,12 @@ func NewSetup() SetupModel {
 				Question:  "Auto-refresh interval for repos?",
 				ConfigKey: "AUTO_REFRESH",
 				Options: []setupOption{
+					{Label: "Off (manual only)", Value: "OFF"},
+					{Label: "Every 15 minutes", Value: "15M"},
 					{Label: "Every 30 minutes", Value: "30M"},
 					{Label: "Every hour", Value: "1H"},
 					{Label: "Every 6 hours", Value: "6H"},
 					{Label: "Every 24 hours", Value: "24H"},
-					{Label: "Every 15 minutes", Value: "15M"},
 				},
 			},
 			{
