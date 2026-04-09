@@ -568,6 +568,31 @@ func findEnvFiles(root string) []string {
 	return files
 }
 
+// findExactEnvFiles returns relative paths of files named exactly ".env" under root,
+// skipping node_modules, .git, dist, build directories.
+// Unlike findEnvFiles, this does NOT match .env.example, .env.local, etc.
+func findExactEnvFiles(root string) []string {
+	var files []string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			base := filepath.Base(path)
+			if base == "node_modules" || base == ".git" || base == "dist" || base == "build" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.Name() == ".env" {
+			rel, _ := filepath.Rel(root, path)
+			files = append(files, rel)
+		}
+		return nil
+	})
+	return files
+}
+
 // shellQuotePaths single-quotes each path for safe shell interpolation,
 // escaping any embedded single quotes.
 func shellQuotePaths(paths []string) string {
@@ -723,7 +748,7 @@ func generateIndividualWorkspace(ltsPath, wtName, pkgMgr, aiCliCmd, ideCmd strin
 	// Auto-open .env files
 	if openEnv && ideCmd != "" {
 		wtPath := filepath.Join(ltsPath, wtName)
-		if envFiles := findEnvFiles(wtPath); len(envFiles) > 0 {
+		if envFiles := findExactEnvFiles(wtPath); len(envFiles) > 0 {
 			tasks = append(tasks, fmt.Sprintf(`      {
         "label": "Open .env",
         "type": "shell",
@@ -834,7 +859,7 @@ func generateMonorepoWorkspace(branchSubdirPath, suffix string, repoWTPairs []st
 			}
 			wt := parts[1]
 			wtPath := filepath.Join(branchSubdirPath, wt)
-			for _, f := range findEnvFiles(wtPath) {
+			for _, f := range findExactEnvFiles(wtPath) {
 				allEnvPaths = append(allEnvPaths, filepath.Join(wt, f))
 			}
 		}
