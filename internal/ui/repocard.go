@@ -114,7 +114,7 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 	}
 
 	if isHeaderHovered {
-		triggerBtn := renderInlineBtn("[▸]", hoveredBtn == BtnContextMenu)
+		triggerBtn := renderInlineBtn("[⋮]", hoveredBtn == BtnContextMenu)
 		header = rightAlignButtons(header, triggerBtn, iw)
 	}
 
@@ -149,7 +149,7 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 				hoverDisplay += " " + changedBadge
 			}
 			branchStyled = WTHighlightStyle.Render(hoverDisplay)
-			triggerBtn := renderInlineBtn("[▸]", hoveredBtn == BtnContextMenu)
+			triggerBtn := renderInlineBtn("[⋮]", hoveredBtn == BtnContextMenu)
 			textPart := TreeCharStyle.Render(treeChar) + branchStyled
 			line = rightAlignButtons(textPart, triggerBtn, iw)
 		} else {
