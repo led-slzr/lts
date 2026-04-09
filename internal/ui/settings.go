@@ -22,10 +22,10 @@ const (
 )
 
 type SettingsItem struct {
-	Section  string   // empty for General, "Local (repo)" for Worktrees
-	Label    string   // display label
-	Key      string   // config key
-	Value    string   // current value
+	Section  string // empty for General, "Local (repo)" for Worktrees
+	Label    string // display label
+	Key      string // config key
+	Value    string // current value
 	Kind     SettingKind
 	Options  []string // for Enum kind
 	RepoName string   // empty for global, repo name for local
@@ -46,9 +46,10 @@ type SettingsModel struct {
 	saveGen    int    // generation counter for save status clear timer
 
 	// Tabs
-	ActiveTab int      // 0 = General, 1 = Worktrees
-	TabNames  []string // ["General", "Worktrees"]
-	RepoNames []string // stored for rebuilding items on tab switch
+	ActiveTab  int      // 0 = General, 1 = Worktrees
+	HoveredTab int      // -1 = none, 0 = General, 1 = Worktrees
+	TabNames   []string // ["General", "Worktrees"]
+	RepoNames  []string // stored for rebuilding items on tab switch
 }
 
 // Messages
@@ -89,12 +90,13 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	ti.Width = 40
 
 	s := SettingsModel{
-		Active:    true,
-		Config:    cfg,
-		EditInput: ti,
-		ActiveTab: 0,
-		TabNames:  []string{"General", "Worktrees"},
-		RepoNames: repoNames,
+		Active:     true,
+		Config:     cfg,
+		EditInput:  ti,
+		ActiveTab:  0,
+		HoveredTab: -1,
+		TabNames:   []string{"General", "Worktrees"},
+		RepoNames:  repoNames,
 	}
 	s.buildItems(repoNames)
 	return s
@@ -157,6 +159,10 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		}
 		return s.handleNavKey(msg)
 	case tea.MouseMsg:
+		// Tab hover detection
+		if msg.Action == tea.MouseActionMotion {
+			s.HoveredTab = s.hitTestTab(msg.X, msg.Y)
+		}
 		// Tab click detection
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			if tabIdx := s.hitTestTab(msg.X, msg.Y); tabIdx >= 0 && tabIdx != s.ActiveTab {
@@ -435,8 +441,8 @@ func (s *SettingsModel) modalMetrics() (modalWidth, modalLeft, contentLeft, cont
 	// Estimate modal height for vertical centering
 	// Content: title(1) + blank(1) + tabbar(1) + separator(1) + blank(1) + items + footer
 	contentLines := 5 + len(s.Items) + 3 // rough estimate
-	modalContentH := contentLines + 2     // padding top + bottom
-	renderedH := modalContentH + 2        // border top + bottom
+	modalContentH := contentLines + 2    // padding top + bottom
+	renderedH := modalContentH + 2       // border top + bottom
 	if renderedH > h {
 		renderedH = h
 	}
@@ -503,13 +509,15 @@ func (s SettingsModel) View(width, height int) string {
 	for i, name := range s.TabNames {
 		if i == s.ActiveTab {
 			tabParts = append(tabParts, activeTabStyle.Render(" [ "+name+" ] "))
+		} else if i == s.HoveredTab {
+			tabParts = append(tabParts, inactiveTabStyle.Underline(true).Render("   "+name+"   "))
 		} else {
 			tabParts = append(tabParts, inactiveTabStyle.Render("   "+name+"   "))
 		}
 	}
-	tabBar := strings.Join(tabParts, sepStyle.Render("│")) + tabHintStyle.Render("  (tab)")
+	tabBar := strings.Join(tabParts, sepStyle.Render("│")) + tabHintStyle.Render("  (tab | click)")
 	lines = append(lines, tabBar)
-	lines = append(lines, dimStyle.Render(strings.Repeat("─", 40)))
+	lines = append(lines, dimStyle.Render(strings.Repeat("─", 30)))
 	lines = append(lines, "")
 
 	// Items
