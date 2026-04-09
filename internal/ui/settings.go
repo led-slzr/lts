@@ -113,7 +113,7 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Options: []string{"pnpm", "npm", "yarn", "bun"}},
 			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
-				Options: []string{"15M", "30M", "1H", "6H", "12H", "24H"}},
+				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
 			SettingsItem{Label: "Terminal", Key: "TERMINAL",
 				Value: s.Config.Global.Terminal, Kind: SettingEnum,
 				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},

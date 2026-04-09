@@ -42,7 +42,7 @@ func DefaultGlobal() GlobalConfig {
 		IDECommand:      "windsurf",
 		AICliCommand:    "claude",
 		PackageManager:  "pnpm",
-		AutoRefresh:     "24H",
+		AutoRefresh:     "OFF",
 		Terminal:        "terminal",
 		CheckForUpdates: true,
 		AutoUpdate:      true,
