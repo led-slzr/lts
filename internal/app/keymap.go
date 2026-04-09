@@ -80,6 +80,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 		m.settings = ui.NewSettings(&m.config, repoNames)
 		m.settings.ViewHeight = m.height
+		m.settings.ViewWidth = m.width
 		return m, nil
 
 	case "l":

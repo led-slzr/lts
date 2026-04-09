@@ -21,7 +21,7 @@ const (
 )
 
 type SettingsItem struct {
-	Section  string   // "Global" or "Local"
+	Section  string   // empty for General, "Local (repo)" for Worktrees
 	Label    string   // display label
 	Key      string   // config key
 	Value    string   // current value
@@ -41,7 +41,13 @@ type SettingsModel struct {
 	SaveError  string // shown if save fails
 	SaveStatus string // shown on successful save
 	ViewHeight int    // last known terminal height for scroll calc
+	ViewWidth  int    // last known terminal width for tab hit-test
 	saveGen    int    // generation counter for save status clear timer
+
+	// Tabs
+	ActiveTab int      // 0 = General, 1 = Worktrees
+	TabNames  []string // ["General", "Worktrees"]
+	RepoNames []string // stored for rebuilding items on tab switch
 }
 
 // Messages
@@ -57,6 +63,22 @@ func boolToStr(b bool) string {
 	return "false"
 }
 
+func formatLastRefresh(ts int64) string {
+	if ts <= 0 {
+		return "never"
+	}
+	t := time.Unix(ts, 0)
+	dur := time.Since(t)
+	if dur < time.Minute {
+		return "just now"
+	} else if dur < time.Hour {
+		return fmt.Sprintf("%dm ago", int(dur.Minutes()))
+	} else if dur < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(dur.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(dur.Hours()/24))
+}
+
 func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	ti := textinput.New()
 	ti.CharLimit = 100
@@ -66,6 +88,9 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 		Active:    true,
 		Config:    cfg,
 		EditInput: ti,
+		ActiveTab: 0,
+		TabNames:  []string{"General", "Worktrees"},
+		RepoNames: repoNames,
 	}
 	s.buildItems(repoNames)
 	return s
@@ -73,61 +98,48 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 
 func (s *SettingsModel) buildItems(repoNames []string) {
 	s.Items = nil
+	s.RepoNames = repoNames
 
-	// Global settings
-	s.Items = append(s.Items,
-		SettingsItem{Section: "Global", Label: "IDE Command", Key: "IDE_COMMAND",
-			Value: s.Config.Global.IDECommand, Kind: SettingEnum,
-			Options: []string{"windsurf", "code", "cursor", "zed"}},
-		SettingsItem{Section: "Global", Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
-			Value: s.Config.Global.AICliCommand, Kind: SettingText},
-		SettingsItem{Section: "Global", Label: "Package Manager", Key: "PACKAGE_MANAGER",
-			Value: s.Config.Global.PackageManager, Kind: SettingEnum,
-			Options: []string{"pnpm", "npm", "yarn", "bun"}},
-		SettingsItem{Section: "Global", Label: "Auto Refresh", Key: "AUTO_REFRESH",
-			Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
-			Options: []string{"15M", "30M", "1H", "6H", "12H", "24H"}},
-		SettingsItem{Section: "Global", Label: "Terminal", Key: "TERMINAL",
-			Value: s.Config.Global.Terminal, Kind: SettingEnum,
-			Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
-		SettingsItem{Section: "Global", Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
-			Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
-		SettingsItem{Section: "Global", Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
-			Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
-		SettingsItem{Section: "Global", Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
-			Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
-	)
-
-	// Local settings per repo
-	for _, repo := range repoNames {
-		key := strings.ToUpper(repo)
-		rc, ok := s.Config.Local[key]
-		if !ok {
-			rc = config.DefaultRepoLocal()
-		}
-
-		// Last refresh as human-readable
-		lastRefreshStr := "never"
-		if rc.LastRefresh > 0 {
-			t := time.Unix(rc.LastRefresh, 0)
-			dur := time.Since(t)
-			if dur < time.Minute {
-				lastRefreshStr = "just now"
-			} else if dur < time.Hour {
-				lastRefreshStr = fmt.Sprintf("%dm ago", int(dur.Minutes()))
-			} else if dur < 24*time.Hour {
-				lastRefreshStr = fmt.Sprintf("%dh ago", int(dur.Hours()))
-			} else {
-				lastRefreshStr = fmt.Sprintf("%dd ago", int(dur.Hours()/24))
-			}
-		}
-
+	if s.ActiveTab == 0 {
+		// General settings — no section headers (the tab IS the section)
 		s.Items = append(s.Items,
-			SettingsItem{Section: "Local (" + repo + ")", Label: "Basis Branch", Key: "BASIS_BRANCH",
-				Value: rc.BasisBranch, Kind: SettingText, RepoName: repo},
-			SettingsItem{Section: "Local (" + repo + ")", Label: "Last Refresh", Key: "LAST_REFRESH",
-				Value: lastRefreshStr, Kind: SettingDisplay, RepoName: repo},
+			SettingsItem{Label: "IDE Command", Key: "IDE_COMMAND",
+				Value: s.Config.Global.IDECommand, Kind: SettingEnum,
+				Options: []string{"windsurf", "code", "cursor", "zed"}},
+			SettingsItem{Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
+				Value: s.Config.Global.AICliCommand, Kind: SettingText},
+			SettingsItem{Label: "Package Manager", Key: "PACKAGE_MANAGER",
+				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
+				Options: []string{"pnpm", "npm", "yarn", "bun"}},
+			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
+				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
+				Options: []string{"15M", "30M", "1H", "6H", "12H", "24H"}},
+			SettingsItem{Label: "Terminal", Key: "TERMINAL",
+				Value: s.Config.Global.Terminal, Kind: SettingEnum,
+				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
+			SettingsItem{Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
+				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
+			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
+				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
+				Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
 		)
+	} else {
+		// Worktrees tab: per-repo local settings
+		for _, repo := range repoNames {
+			key := strings.ToUpper(repo)
+			rc, ok := s.Config.Local[key]
+			if !ok {
+				rc = config.DefaultRepoLocal()
+			}
+
+			s.Items = append(s.Items,
+				SettingsItem{Section: "Local (" + repo + ")", Label: "Basis Branch", Key: "BASIS_BRANCH",
+					Value: rc.BasisBranch, Kind: SettingText, RepoName: repo},
+				SettingsItem{Section: "Local (" + repo + ")", Label: "Last Refresh", Key: "LAST_REFRESH",
+					Value: formatLastRefresh(rc.LastRefresh), Kind: SettingDisplay, RepoName: repo},
+			)
+		}
 	}
 }
 
@@ -139,13 +151,25 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		}
 		return s.handleNavKey(msg)
 	case tea.MouseMsg:
+		// Tab click detection
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if tabIdx := s.hitTestTab(msg.X, msg.Y); tabIdx >= 0 && tabIdx != s.ActiveTab {
+				s.ActiveTab = tabIdx
+				s.CursorIdx = 0
+				s.Scroll = 0
+				s.Editing = false
+				s.SaveError = ""
+				s.SaveStatus = ""
+				s.buildItems(s.RepoNames)
+				return s, nil
+			}
+		}
 		if msg.Button == tea.MouseButtonWheelUp {
 			if s.Scroll > 0 {
 				s.Scroll--
 			}
 		} else if msg.Button == tea.MouseButtonWheelDown {
-			// Clamp to total content lines
-			maxScroll := len(s.Items) + len(s.Items)/2 // rough upper bound including headers
+			maxScroll := len(s.Items) + len(s.Items)/2
 			if s.Scroll < maxScroll {
 				s.Scroll++
 			}
@@ -170,22 +194,32 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 	case "esc", "q":
 		s.Active = false
 		return s, nil
+	case "tab":
+		s.ActiveTab = (s.ActiveTab + 1) % len(s.TabNames)
+		s.CursorIdx = 0
+		s.Scroll = 0
+		s.Editing = false
+		s.SaveError = ""
+		s.SaveStatus = ""
+		s.buildItems(s.RepoNames)
+		return s, nil
 	case "up", "k":
 		s.moveCursor(-1)
 	case "down", "j":
 		s.moveCursor(1)
 	case "enter", " ":
+		if len(s.Items) == 0 {
+			return s, nil
+		}
 		item := &s.Items[s.CursorIdx]
 		switch item.Kind {
 		case SettingEnum:
-			// Cycle to next option
 			for i, opt := range item.Options {
 				if opt == item.Value {
 					item.Value = item.Options[(i+1)%len(item.Options)]
 					return s, s.applyChange(*item)
 				}
 			}
-			// Current value not in options (custom) — cycle to first option
 			if len(item.Options) > 0 {
 				item.Value = item.Options[0]
 				return s, s.applyChange(*item)
@@ -208,6 +242,9 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 }
 
 func (s *SettingsModel) moveCursor(delta int) {
+	if len(s.Items) == 0 {
+		return
+	}
 	s.CursorIdx += delta
 	if s.CursorIdx < 0 {
 		s.CursorIdx = 0
@@ -215,29 +252,25 @@ func (s *SettingsModel) moveCursor(delta int) {
 	if s.CursorIdx >= len(s.Items) {
 		s.CursorIdx = len(s.Items) - 1
 	}
-	// Skip display-only items (loop to handle consecutive ones)
 	for s.Items[s.CursorIdx].Kind == SettingDisplay {
 		if delta > 0 && s.CursorIdx < len(s.Items)-1 {
 			s.CursorIdx++
 		} else if delta < 0 && s.CursorIdx > 0 {
 			s.CursorIdx--
 		} else {
-			break // at boundary, can't skip further
+			break
 		}
 	}
-	// Keep cursor visible within scroll window
 	s.ensureCursorVisible()
 }
 
-// ensureCursorVisible adjusts scroll so the cursor item is in the visible area.
 func (s *SettingsModel) ensureCursorVisible() {
-	// Match View's formula: border(2) + padding(2) + title(2) + indicators(2) + blank(1) + footer(2 worst case)
-	maxVisible := s.ViewHeight - 11
+	// border(2) + padding(2) + title(2) + tabs(3) + indicators(2) + blank(1) + footer(2)
+	maxVisible := s.ViewHeight - 14
 	if maxVisible < 5 {
 		maxVisible = 5
 	}
 
-	// Calculate the content line index for the current cursor
 	cursorLine := s.cursorContentLine()
 	if cursorLine < s.Scroll {
 		s.Scroll = cursorLine
@@ -250,7 +283,6 @@ func (s *SettingsModel) ensureCursorVisible() {
 	}
 }
 
-// cursorContentLine returns the line index in content for the current cursor.
 func (s *SettingsModel) cursorContentLine() int {
 	line := 0
 	lastSection := ""
@@ -259,17 +291,18 @@ func (s *SettingsModel) cursorContentLine() int {
 			if lastSection != "" {
 				line++ // blank line before new section
 			}
-			line++ // section header line
+			if s.Items[i].Section != "" {
+				line++ // section header line
+			}
 			lastSection = s.Items[i].Section
 		}
 		if i < s.CursorIdx {
-			line++ // the item line itself
+			line++
 		}
 	}
 	return line
 }
 
-// previousValue returns the current config value for a setting item (before edit).
 func (s *SettingsModel) previousValue(item SettingsItem) string {
 	if item.RepoName == "" {
 		switch item.Key {
@@ -323,17 +356,14 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	s.SaveError = ""
 	s.SaveStatus = ""
 
-	// Validate text inputs (AI CLI Command may be empty = disabled)
 	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" {
 		s.SaveError = item.Label + " cannot be empty"
-		// Restore previous value
 		s.Items[s.CursorIdx].Value = s.previousValue(item)
 		return nil
 	}
 
 	var saveErr error
 	if item.RepoName == "" {
-		// Global setting
 		switch item.Key {
 		case "IDE_COMMAND":
 			s.Config.Global.IDECommand = item.Value
@@ -354,7 +384,6 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {
-		// Local setting
 		switch item.Key {
 		case "BASIS_BRANCH":
 			saveErr = s.Config.SetRepoBasisBranch(item.RepoName, item.Value)
@@ -371,6 +400,71 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 		func() tea.Msg { return SettingsSavedMsg{} },
 		tea.Tick(2*time.Second, func(time.Time) tea.Msg { return SettingsSaveClearMsg{Gen: gen} }),
 	)
+}
+
+// modalMetrics computes the modal layout dimensions matching View().
+func (s *SettingsModel) modalMetrics() (modalWidth, modalLeft, contentLeft, contentTopY int) {
+	w := s.ViewWidth
+	h := s.ViewHeight
+	if w == 0 || h == 0 {
+		return 78, 0, 0, 0
+	}
+
+	modalWidth = 78
+	if w-4 < modalWidth {
+		modalWidth = w - 4
+	}
+	if modalWidth < 50 {
+		modalWidth = 50
+	}
+
+	// ModalStyle: DoubleBorder (1 char each side) + Padding(1, 2)
+	renderedW := modalWidth + 2 // border left + right
+	modalLeft = (w - renderedW) / 2
+	contentLeft = modalLeft + 1 + 2 // border + padding
+
+	// Estimate modal height for vertical centering
+	// Content: title(1) + blank(1) + tabbar(1) + separator(1) + blank(1) + items + footer
+	contentLines := 5 + len(s.Items) + 3 // rough estimate
+	modalContentH := contentLines + 2     // padding top + bottom
+	renderedH := modalContentH + 2        // border top + bottom
+	if renderedH > h {
+		renderedH = h
+	}
+	modalTopY := (h - renderedH) / 2
+	contentTopY = modalTopY + 1 + 1 // border + padding
+
+	return
+}
+
+// hitTestTab checks if the mouse click is on a tab and returns the tab index (-1 if none).
+func (s *SettingsModel) hitTestTab(mouseX, mouseY int) int {
+	_, _, contentLeft, contentTopY := s.modalMetrics()
+
+	// Tab bar is at content line 2 (title=0, blank=1, tabbar=2)
+	tabBarY := contentTopY + 2
+	if mouseY != tabBarY {
+		return -1
+	}
+
+	curX := contentLeft
+	for i, name := range s.TabNames {
+		var tabText string
+		if i == s.ActiveTab {
+			tabText = " [ " + name + " ] "
+		} else {
+			tabText = "   " + name + "   "
+		}
+		tabW := lipgloss.Width(tabText)
+		if mouseX >= curX && mouseX < curX+tabW {
+			return i
+		}
+		// Account for the separator "│" between tabs
+		if i < len(s.TabNames)-1 {
+			curX += tabW + 1 // +1 for "│"
+		}
+	}
+	return -1
 }
 
 func (s SettingsModel) View(width, height int) string {
@@ -390,10 +484,30 @@ func (s SettingsModel) View(width, height int) string {
 	lines = append(lines, titleStyle.Render("Settings"))
 	lines = append(lines, "")
 
+	// Tab bar
+	activeTabStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
+	inactiveTabStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	tabHintStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack)
+	sepStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+
+	var tabParts []string
+	for i, name := range s.TabNames {
+		if i == s.ActiveTab {
+			tabParts = append(tabParts, activeTabStyle.Render(" [ "+name+" ] "))
+		} else {
+			tabParts = append(tabParts, inactiveTabStyle.Render("   "+name+"   "))
+		}
+	}
+	tabBar := strings.Join(tabParts, sepStyle.Render("│")) + tabHintStyle.Render("  (tab)")
+	lines = append(lines, tabBar)
+	lines = append(lines, dimStyle.Render(strings.Repeat("─", 40)))
+	lines = append(lines, "")
+
+	// Items
 	lastSection := ""
 	for i, item := range s.Items {
-		// Section divider
-		if item.Section != lastSection {
+		// Section divider (only used in Worktrees tab)
+		if item.Section != "" && item.Section != lastSection {
 			if lastSection != "" {
 				lines = append(lines, "")
 			}
@@ -403,42 +517,38 @@ func (s SettingsModel) View(width, height int) string {
 
 		isCursor := i == s.CursorIdx
 		label := item.Label
-		value := item.Value
 
-		// Format value display
 		var valueFmt string
 		switch item.Kind {
 		case SettingEnum:
-			// Show all options with active highlighted
 			var opts []string
 			found := false
 			for _, opt := range item.Options {
-				if opt == value {
+				if opt == item.Value {
 					opts = append(opts, cyanStyle.Render("["+opt+"]"))
 					found = true
 				} else {
 					opts = append(opts, dimStyle.Render(opt))
 				}
 			}
-			// Show custom value if not in predefined options
-			if !found && value != "" {
-				opts = append([]string{cyanStyle.Render("[" + value + "]")}, opts...)
+			if !found && item.Value != "" {
+				opts = append([]string{cyanStyle.Render("[" + item.Value + "]")}, opts...)
 			}
 			valueFmt = strings.Join(opts, " ")
 		case SettingText:
 			if s.Editing && isCursor {
 				valueFmt = s.EditInput.View()
 			} else {
-				valueFmt = cyanStyle.Render(value)
+				valueFmt = cyanStyle.Render(item.Value)
 			}
 		case SettingBool:
-			if value == "true" {
+			if item.Value == "true" {
 				valueFmt = cyanStyle.Render("● enabled")
 			} else {
 				valueFmt = dimStyle.Render("○ disabled")
 			}
 		case SettingDisplay:
-			valueFmt = dimStyle.Render(value)
+			valueFmt = dimStyle.Render(item.Value)
 		}
 
 		cursor := "  "
@@ -459,6 +569,11 @@ func (s SettingsModel) View(width, height int) string {
 		}
 	}
 
+	// Empty state for Worktrees tab
+	if s.ActiveTab == 1 && len(s.Items) == 0 {
+		lines = append(lines, dimStyle.Render("  No worktrees configured"))
+	}
+
 	// Footer lines (always visible, not scrolled)
 	var footerLines []string
 	if s.SaveError != "" {
@@ -468,20 +583,19 @@ func (s SettingsModel) View(width, height int) string {
 		savedStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
 		footerLines = append(footerLines, savedStyle.Render("✓ "+s.SaveStatus))
 	}
-	footerLines = append(footerLines, dimStyle.Render("↑/↓ navigate • enter edit/cycle • esc close"))
+	footerLines = append(footerLines, dimStyle.Render("↑/↓ navigate • enter edit/cycle • tab switch • esc close"))
 
-	// Apply scroll: reserve space for modal chrome, title, scroll indicators, and footer
-	// Modal border (2) + padding (2) + title (2) + scroll indicators (2) + blank (1) = 9
-	maxVisible := height - 9 - len(footerLines)
+	// Apply scroll: reserve space for modal chrome, title, tabs, scroll indicators, and footer
+	// Modal border(2) + padding(2) + title(2) + tabs(3) + scroll indicators(2) + blank(1) = 12
+	maxVisible := height - 12 - len(footerLines)
 	if maxVisible < 5 {
 		maxVisible = 5
 	}
 
-	// Content lines are everything after the title
-	titleLines := lines[:2] // "Settings" + blank line
-	contentLines := lines[2:]
+	// Content lines: everything after title + blank + tabs + separator + blank
+	titleLines := lines[:5] // "Settings", blank, tab bar, separator, blank
+	contentLines := lines[5:]
 
-	// Apply scroll to content
 	if len(contentLines) > maxVisible {
 		end := s.Scroll + maxVisible
 		if end > len(contentLines) {
@@ -493,7 +607,6 @@ func (s SettingsModel) View(width, height int) string {
 		}
 		visibleContent := contentLines[s.Scroll:end]
 
-		// Show scroll indicators
 		var scrolledLines []string
 		scrolledLines = append(scrolledLines, titleLines...)
 		if s.Scroll > 0 {
@@ -513,7 +626,6 @@ func (s SettingsModel) View(width, height int) string {
 
 	content := strings.Join(lines, "\n")
 
-	// Responsive modal width: wide enough for enum options, but fits the terminal
 	modalWidth := 78
 	if width-4 < modalWidth {
 		modalWidth = width - 4

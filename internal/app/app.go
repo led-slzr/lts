@@ -215,6 +215,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.settings.ViewHeight = msg.Height
+		m.settings.ViewWidth = msg.Width
 		m.recomputeLayout()
 		return m, nil
 
@@ -1014,6 +1015,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			m.settings = ui.NewSettings(&m.config, repoNames)
 			m.settings.ViewHeight = m.height
+			m.settings.ViewWidth = m.width
 			return m, nil
 		}
 		if m.hoveredBtn == ui.BtnExit {
