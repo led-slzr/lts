@@ -621,14 +621,34 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return cancelDelete(m)
 				}
 			}
-			// Detect toggle clicks by scanning rendered lines from bottom
-			// Local branch toggle and remote toggle are rendered as consecutive lines
-			// before the Y/N or "Type DELETE" section
-			modalLines := lipgloss.Height(modal)
-			clickLine := msg.Y - modalTop
-			if clickLine >= 0 && clickLine < modalLines {
-				// Try toggling local branch (always present)
-				return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+			// Toggle lines are positioned above Y/N (or above "Type DELETE" in dangerous mode).
+			// Layout from bottom: blank + toggles. Local branch toggle is always present.
+			// Remote toggle appears only when remote exists and local branch is being deleted.
+			hasRemote := false
+			if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
+				repo := m.repos[m.deleteRepoIdx]
+				if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
+					hasRemote = deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch
+				}
+			}
+			// In non-dangerous mode: ynY-1 = blank, ynY-2 = last toggle
+			// In dangerous mode: ynY = hint line, ynY-2 = input, ynY-4 = "Type DELETE"
+			//   so toggles are further up
+			if !m.deleteDangerous {
+				if hasRemote {
+					// ynY-2 = remote toggle, ynY-3 = local toggle
+					if msg.Y == ynY-2 {
+						return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+					}
+					if msg.Y == ynY-3 {
+						return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+					}
+				} else {
+					// ynY-2 = local toggle only
+					if msg.Y == ynY-2 {
+						return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+					}
+				}
 			}
 		}
 		return m, nil
