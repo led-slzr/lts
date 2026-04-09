@@ -194,6 +194,7 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 			m.deleteWTIdx = wtIdx
 			m.deleteDangerous = dangerous
 			m.deleteRemoteBranch = false
+			m.deleteLocalBranch = true
 			if dangerous {
 				m.deleteTypedInput.SetValue("")
 				m.deleteTypedInput.Focus()
@@ -218,9 +219,9 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 			logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
 			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
 			if repo.IsMonorepo {
-				return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteRemoteBranch, ri, wi))
+				return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch, ri, wi))
 			}
-			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteRemoteBranch, ri, wi))
+			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteLocalBranch, m.deleteRemoteBranch, ri, wi))
 		}
 	}
 	m.statusMsg = ""
@@ -231,6 +232,7 @@ func cancelDelete(m Model) (Model, tea.Cmd) {
 	m.deleteConfirmActive = false
 	m.deleteDangerous = false
 	m.deleteRemoteBranch = false
+	m.deleteLocalBranch = false
 	m.statusMsg = ""
 	return m, nil
 }
@@ -266,12 +268,21 @@ func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
 			repo := m.repos[m.deleteRepoIdx]
 			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch {
 					m.deleteRemoteBranch = !m.deleteRemoteBranch
 					return m, nil
 				}
 			}
 		}
+	}
+
+	// Ctrl+b toggles local branch deletion (both modes)
+	if msg.String() == "ctrl+b" {
+		m.deleteLocalBranch = !m.deleteLocalBranch
+		if !m.deleteLocalBranch {
+			m.deleteRemoteBranch = false
+		}
+		return m, nil
 	}
 
 	if m.deleteDangerous {
@@ -289,13 +300,19 @@ func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	}
 
-	// Simple Y/N mode — d toggles remote deletion
+	// Simple Y/N mode — d toggles remote, b toggles local branch deletion
 	switch msg.String() {
+	case "b", "B":
+		m.deleteLocalBranch = !m.deleteLocalBranch
+		if !m.deleteLocalBranch {
+			m.deleteRemoteBranch = false
+		}
+		return m, nil
 	case "d", "D":
 		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
 			repo := m.repos[m.deleteRepoIdx]
 			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
+				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch {
 					m.deleteRemoteBranch = !m.deleteRemoteBranch
 					return m, nil
 				}

@@ -68,6 +68,7 @@ type Model struct {
 	deleteTypedInput    textinput.Model // for "type DELETE" confirmation
 	deleteDangerous     bool            // true = requires typing DELETE
 	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
+	deleteLocalBranch   bool            // true = also delete local branch
 
 	// Cleanup confirmation
 	cleanupConfirmActive bool
@@ -620,21 +621,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return cancelDelete(m)
 				}
 			}
-			// Remote toggle: 2 lines above Y/N (simple) or 4 lines above bottom hint (dangerous)
-			toggleY := ynY - 2
-			if m.deleteDangerous {
-				toggleY = ynY - 4
-			}
-			if msg.Y == toggleY {
-				if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-					repo := m.repos[m.deleteRepoIdx]
-					if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-						if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) {
-							m.deleteRemoteBranch = !m.deleteRemoteBranch
-							return m, nil
-						}
-					}
-				}
+			// Detect toggle clicks by scanning rendered lines from bottom
+			// Local branch toggle and remote toggle are rendered as consecutive lines
+			// before the Y/N or "Type DELETE" section
+			modalLines := lipgloss.Height(modal)
+			clickLine := msg.Y - modalTop
+			if clickLine >= 0 && clickLine < modalLines {
+				// Try toggling local branch (always present)
+				return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 			}
 		}
 		return m, nil
@@ -1353,7 +1347,11 @@ func (m Model) renderDeleteConfirmDialog() string {
 	}
 
 	content := titleStyle.Render("Delete Worktree") + "\n\n"
-	content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
+	if m.deleteLocalBranch {
+		content += dimStyle.Render("This will remove the worktree and delete the local branch:") + "\n\n"
+	} else {
+		content += dimStyle.Render("This will remove the worktree directory only:") + "\n\n"
+	}
 	content += whiteStyle.Render("  "+branchName) + "\n"
 
 	if hasWT {
@@ -1367,13 +1365,24 @@ func (m Model) renderDeleteConfirmDialog() string {
 			}
 		}
 
-		// Offer remote branch deletion toggle when remote exists
-		if deleteHasRemote(wt.Status) {
+		content += "\n"
+		// Local branch deletion toggle
+		branchToggleKey := "b"
+		if m.deleteDangerous {
+			branchToggleKey = "ctrl+b"
+		}
+		if m.deleteLocalBranch {
+			content += whiteStyle.Render("  ["+branchToggleKey+"] ✓ Also delete local branch") + "\n"
+		} else {
+			content += dimStyle.Render("  ["+branchToggleKey+"] Also delete local branch") + "\n"
+		}
+
+		// Offer remote branch deletion toggle when remote exists and local branch is being deleted
+		if deleteHasRemote(wt.Status) && m.deleteLocalBranch {
 			toggleKey := "d"
 			if m.deleteDangerous {
 				toggleKey = "ctrl+d"
 			}
-			content += "\n"
 			if m.deleteRemoteBranch {
 				content += whiteStyle.Render("  ["+toggleKey+"] ✓ Also delete remote branch") + "\n"
 			} else {
@@ -1547,16 +1556,16 @@ func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager string, repoIdx
 	}
 }
 
-func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteRemote, logFn)
+		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)
 		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }
 
-func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
-		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteRemote, logFn)
+		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteLocal, deleteRemote, logFn)
 		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
 	}
 }

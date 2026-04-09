@@ -1017,7 +1017,7 @@ func resolveWorktreeRepo(wtPath string) string {
 
 // DeleteMonorepoWorktree removes all repo worktrees inside a monorepo branch subdir,
 // cleans up workspace files, and removes the branch subdir.
-func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []string, deleteRemote bool, logFn ...LogFunc) error {
+func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1069,8 +1069,10 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 		// Delete the branch in this repo
 		if repoPath != "" && branch != "" && !IsProtectedBranch(branch) {
-			log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
-			RunGit(repoPath, "branch", "-D", branch)
+			if deleteLocal {
+				log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
+				RunGit(repoPath, "branch", "-D", branch)
+			}
 
 			if deleteRemote {
 				log(ctx, "Deleting remote branch in "+filepath.Base(repoPath), false)
@@ -1090,7 +1092,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 }
 
 // DeleteWorktree removes a worktree, its workspace file, and optionally its branch.
-func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool, logFn ...LogFunc) error {
+func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, logFn ...LogFunc) error {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1138,7 +1140,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteRemote bool, logFn ..
 		}
 	}
 
-	if branch != "" && !IsProtectedBranch(branch) {
+	if deleteLocal && branch != "" && !IsProtectedBranch(branch) {
 		log(ctx, "Deleting local branch", false)
 		RunGit(repoPath, "branch", "-D", branch)
 	}
@@ -1538,7 +1540,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 			if wt.Status == StatusMergedCleanable {
 				if repo.IsMonorepo {
 					log(wt.Branch, "Cleaning merged monorepo worktree in "+repo.Name, false)
-					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, deleteRemote, log)
+					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
 					} else {
@@ -1549,7 +1551,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 						continue
 					}
 					log(wt.Branch, "Cleaning merged worktree in "+repo.Name, false)
-					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, deleteRemote, log)
+					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
 					} else {
