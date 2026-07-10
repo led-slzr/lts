@@ -316,14 +316,15 @@ func (m *ModalModel) computePlan() {
 		selectedNames = append(selectedNames, m.Repos[idx].Name)
 	}
 
-	suffix := git.ExtractSuffix(m.Branch)
-	safeSuffix := git.SanitizeForFilename(suffix)
+	// Mirror the names the create operations actually use (BranchToDirName),
+	// so the confirmation shows the real directories.
+	branchDir := git.BranchToDirName(m.Branch)
 
 	if len(selectedNames) == 1 {
 		m.PlanSingle = true
 		repo := selectedNames[0]
 		m.PlanLTSDir = repo + "-lts"
-		m.PlanWTNames = []string{repo + "-" + safeSuffix}
+		m.PlanWTNames = []string{branchDir}
 		m.PlanRepos = []string{repo}
 	} else {
 		m.PlanSingle = false
@@ -333,11 +334,10 @@ func (m *ModalModel) computePlan() {
 		ltsPrefix := strings.Join(sorted, "-")
 		// The branch subdir is common to every worktree — show it as part of
 		// the directory so the per-repo rows stay short (they carry toggles).
-		branchSubdir := ltsPrefix + "-" + safeSuffix
-		m.PlanLTSDir = ltsPrefix + "-lts/" + branchSubdir
+		m.PlanLTSDir = ltsPrefix + "-lts/" + branchDir
 		var names []string
 		for _, repo := range sorted {
-			names = append(names, repo+"-"+safeSuffix)
+			names = append(names, repo+"-"+branchDir)
 		}
 		m.PlanWTNames = names
 		m.PlanRepos = sorted
