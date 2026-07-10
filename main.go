@@ -17,7 +17,7 @@ func main() {
 	// Handle --version flag
 	for _, arg := range os.Args[1:] {
 		if arg == "--version" || arg == "-v" {
-			fmt.Println(version.Full)
+			fmt.Println(version.Full())
 			os.Exit(0)
 		}
 	}

@@ -12,7 +12,7 @@ import (
 // VersionHitZone returns the screen coordinates of the version label in the header.
 // The banner has 6 lines, version is next, with Margin(1, MarginH, 0, MarginH).
 func VersionHitZone() (x, y, w int) {
-	versionText := "v" + version.Version
+	versionText := "v" + version.Display()
 	return MarginH, 1 + len(ltsBanner), len(versionText)
 }
 
@@ -24,7 +24,7 @@ func ReleaseURL() string {
 // UpdateBadgeHitZone returns the screen coordinates of the "(Update Available)" badge.
 // It sits right after the version text on the same line.
 func UpdateBadgeHitZone() (x, y, w int) {
-	versionW := len("v" + version.Version) // plain ASCII, len = visual width
+	versionW := len("v" + version.Display()) // plain ASCII, len = visual width
 	badgeW := len(" (Update Available)")
 	return MarginH + versionW, 1 + len(ltsBanner), badgeW
 }
@@ -141,7 +141,7 @@ func computeHeaderLayout(termWidth int, labels UsageLabels, updateAvailable ...s
 	for _, line := range ltsBanner {
 		bannerLines = append(bannerLines, bannerStyle.Render(line))
 	}
-	versionLine := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v" + version.Version)
+	versionLine := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("v" + version.Display())
 	if len(updateAvailable) > 0 && updateAvailable[0] != "" {
 		versionLine += lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Bold(true).Render(" (Update Available)")
 	}
@@ -228,12 +228,12 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 			Background(ColorBlack).
 			Bold(true).
 			Underline(true).
-			Render("v" + version.Version)
+			Render("v" + version.Display())
 	} else {
 		versionRendered = lipgloss.NewStyle().
 			Foreground(ColorDim).
 			Background(ColorBlack).
-			Render("v" + version.Version)
+			Render("v" + version.Display())
 	}
 	// Append "(Update Available)" badge if applicable
 	if o.UpdateAvailable != "" {

@@ -3,5 +3,27 @@ package version
 const (
 	Version = "2.7.0"
 	Name    = "LTS"
-	Full    = Name + " v" + Version
 )
+
+// Source identifies the build channel. Official release binaries are stamped
+// via -ldflags "-X lts-revamp/internal/version.Source=release" (see
+// .goreleaser.yaml); anything built by hand from a clone stays "dev".
+var Source = "dev"
+
+// IsDev reports whether this binary was built outside the release pipeline.
+func IsDev() bool {
+	return Source != "release"
+}
+
+// Display returns the version with a dev marker when applicable, e.g. "2.7.0 (dev)".
+func Display() string {
+	if IsDev() {
+		return Version + " (dev)"
+	}
+	return Version
+}
+
+// Full returns e.g. "LTS v2.7.0 (dev)".
+func Full() string {
+	return Name + " v" + Display()
+}

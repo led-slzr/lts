@@ -7,6 +7,7 @@ import (
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
+	"lts-revamp/internal/version"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -219,7 +220,9 @@ func (m Model) Init() tea.Cmd {
 		loaderTickCmd(),
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
-		cmds = append(cmds, updateCheckCmd(m.config.Global.AutoUpdate))
+		// Dev builds never auto-replace themselves with the official binary —
+		// they check only and surface the update badge for an explicit click.
+		cmds = append(cmds, updateCheckCmd(m.config.Global.AutoUpdate && !version.IsDev()))
 	}
 	return tea.Batch(cmds...)
 }
@@ -506,8 +509,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearStatusAfter(m.statusGen, 10*time.Second)
 		}
 		if r.UpdateAvail {
-			// Only show persistent badge when auto-update is disabled
-			if !m.config.Global.AutoUpdate {
+			// Show the persistent badge when auto-update won't handle it:
+			// auto-update disabled, or a dev build (which never auto-replaces)
+			if !m.config.Global.AutoUpdate || version.IsDev() {
 				m.updateAvailVersion = r.LatestVersion
 			}
 			m.statusMsg = fmt.Sprintf("New version available: v%s", r.LatestVersion)
