@@ -1655,11 +1655,7 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		log := &git.CreateLog{Stream: logFn}
-		basis := "main"
-		if len(repoNames) == 1 {
-			basis = cfg.GetRepoBasisBranch(repoNames[0])
-		}
-		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basis,
+		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basisResolver(cfg),
 			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, log)
 		if err != nil {
 			logFn("create", "Failed: "+err.Error(), true)

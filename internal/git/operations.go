@@ -379,7 +379,8 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 // CreateMonorepoWorktrees creates worktrees across multiple repos with the same branch.
 // This matches mode_create_monorepo_worktrees from lts.sh.
-func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
+// Each repo uses its own configured basis branch via getBasis.
+func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
 	if len(repoNames) == 0 {
 		return nil, fmt.Errorf("no repositories selected")
 	}
@@ -387,7 +388,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 	// Single repo shortcut — use standard naming
 	if len(repoNames) == 1 {
 		repoPath := filepath.Join(scriptDir, repoNames[0])
-		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand, openEnvInIDE, log)
+		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), pkgManager, aiCliCommand, ideCommand, openEnvInIDE, log)
 		if err != nil {
 			return nil, err
 		}
@@ -421,6 +422,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 	for _, repoName := range sorted {
 		repoPath := filepath.Join(scriptDir, repoName)
+		basisBranch := getBasis(repoName)
 
 		log.Context = repoName
 		log.Add("Processing")
