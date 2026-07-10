@@ -29,8 +29,9 @@ type GlobalConfig struct {
 
 // RepoLocalConfig holds per-repo settings.
 type RepoLocalConfig struct {
-	BasisBranch string // main, dev, master, etc.
-	LastRefresh int64  // unix timestamp
+	BasisBranch    string // main, dev, master, etc.
+	PackageManager string // per-repo override; empty = use global default
+	LastRefresh    int64  // unix timestamp
 }
 
 // Config is the merged configuration used by the app.
@@ -172,6 +173,29 @@ func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
 	return c.SaveLocal()
 }
 
+// GetRepoPackageManager returns the repo's package manager override,
+// or the global default when unset.
+func (c *Config) GetRepoPackageManager(repoName string) string {
+	key := strings.ToUpper(repoName)
+	if rc, ok := c.Local[key]; ok && rc.PackageManager != "" {
+		return rc.PackageManager
+	}
+	return c.Global.PackageManager
+}
+
+// SetRepoPackageManager updates a repo's package manager override and saves.
+// Empty means "use the global default".
+func (c *Config) SetRepoPackageManager(repoName, pm string) error {
+	key := strings.ToUpper(repoName)
+	rc := c.Local[key]
+	rc.PackageManager = pm
+	if rc.BasisBranch == "" {
+		rc.BasisBranch = "main"
+	}
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
 	c.Global.LastUpdateCheck = ts
@@ -252,6 +276,9 @@ func (c *Config) SaveLocal() error {
 	for _, key := range keys {
 		rc := c.Local[key]
 		lines = append(lines, fmt.Sprintf("%s_BASIS_BRANCH=\"%s\"", key, rc.BasisBranch))
+		if rc.PackageManager != "" {
+			lines = append(lines, fmt.Sprintf("%s_PACKAGE_MANAGER=\"%s\"", key, rc.PackageManager))
+		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
 	return os.WriteFile(LocalConfigPath(c.WorkDir), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -328,6 +355,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			repo := strings.TrimSuffix(k, "_BASIS_BRANCH")
 			rc := local[repo]
 			rc.BasisBranch = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_PACKAGE_MANAGER") {
+			repo := strings.TrimSuffix(k, "_PACKAGE_MANAGER")
+			rc := local[repo]
+			rc.PackageManager = v
 			local[repo] = rc
 		} else if strings.HasSuffix(k, "_LAST_REFRESH") {
 			repo := strings.TrimSuffix(k, "_LAST_REFRESH")

@@ -10,7 +10,7 @@ import (
 )
 
 func TestBranchListRefreshesFromFetch(t *testing.T) {
-	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", "pnpm", true)
+	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", func(string) string { return "pnpm" }, true)
 	mm.Selected[0] = true
 	mm.Step = ui.ModalEnterBranch
 	mm.FetchingBranches = true
@@ -38,7 +38,7 @@ func TestBranchListRefreshesFromFetch(t *testing.T) {
 }
 
 func TestEnteringBranchStepStartsFetch(t *testing.T) {
-	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", "pnpm", true)
+	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", func(string) string { return "pnpm" }, true)
 	mm.Selected[0] = true
 	var cmd tea.Cmd
 	mm, cmd = mm.Update(tea.KeyMsg{Type: tea.KeyEnter})

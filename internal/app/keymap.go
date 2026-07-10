@@ -68,7 +68,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "n":
 		if !m.loading && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.Global.PackageManager, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -167,7 +167,7 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
 			wt := repo.Worktrees[wtIdx]
 			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.Global.PackageManager, repoIdx, wtIdx))
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), repoIdx, wtIdx))
 		}
 
 	case ui.BtnRename:

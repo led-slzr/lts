@@ -1091,7 +1091,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 		// Create button (only when repos exist)
 		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.Global.PackageManager, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -1687,7 +1687,7 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 // workspaceOpts assembles the create-time options from config.
 func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 	return git.WorkspaceOptions{
-		PkgManager:   func(string) string { return cfg.Global.PackageManager },
+		PkgManager:   cfg.GetRepoPackageManager,
 		AICliCommand: cfg.Global.AICliCommand,
 		IDECommand:   cfg.Global.IDECommand,
 		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
@@ -1719,8 +1719,9 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cm
 
 func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
 	return func() tea.Msg {
+		pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
 		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
+			pm, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}

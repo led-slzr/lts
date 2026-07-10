@@ -26,3 +26,38 @@ func TestUsageLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestRepoPackageManagerOverride(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+
+	if got := c.GetRepoPackageManager("core"); got != "pnpm" {
+		t.Errorf("expected global default pnpm, got %q", got)
+	}
+	if err := c.SetRepoPackageManager("core", "bun"); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.GetRepoPackageManager("core"); got != "bun" {
+		t.Errorf("expected override bun, got %q", got)
+	}
+
+	// survives a reload from disk
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].PackageManager != "bun" {
+		t.Errorf("expected persisted override, got %+v", reloaded["CORE"])
+	}
+
+	// empty resets to the global default and drops the key from disk
+	if err := c.SetRepoPackageManager("core", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.GetRepoPackageManager("core"); got != "pnpm" {
+		t.Errorf("expected fallback to pnpm after reset, got %q", got)
+	}
+	reloaded = map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].PackageManager != "" {
+		t.Errorf("expected no persisted override after reset, got %q", reloaded["CORE"].PackageManager)
+	}
+}

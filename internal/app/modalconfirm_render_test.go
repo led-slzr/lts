@@ -26,7 +26,7 @@ func TestConfirmRowsOffsetMatchesRender(t *testing.T) {
 			for i, n := range tc.repos {
 				repos[i] = git.Repo{Name: n, Path: "/x/" + n}
 			}
-			mm := ui.NewModal(repos, "/x", "pnpm", true)
+			mm := ui.NewModal(repos, "/x", func(string) string { return "pnpm" }, true)
 			for i := range tc.repos {
 				mm.Selected[i] = true
 			}
@@ -75,7 +75,7 @@ func TestConfirmRowsOffsetMatchesRender(t *testing.T) {
 
 // Without a configured package manager the confirm step shows no toggles.
 func TestConfirmNoTogglesWithoutPackageManager(t *testing.T) {
-	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", "", true)
+	mm := ui.NewModal([]git.Repo{{Name: "core", Path: "/x/core"}}, "/x", nil, true)
 	mm.Selected[0] = true
 	mm.Input.SetValue("feat/test")
 	mm.Step = ui.ModalEnterBranch

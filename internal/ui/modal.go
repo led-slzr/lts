@@ -37,10 +37,10 @@ type ModalModel struct {
 	PlanRepos   []string // repo name per plan row (aligned with PlanWTNames)
 
 	// Per-repo package-install toggles shown in the confirm step
-	InstallDeps    map[string]bool // repo name → run package install
-	InstallDefault bool            // initial toggle value (from settings)
-	PkgManager     string          // for display; empty hides the toggles
-	ConfirmCursor  int             // focused plan row in the confirm step
+	InstallDeps    map[string]bool     // repo name → run package install
+	InstallDefault bool                // initial toggle value (from settings)
+	PkgFor         func(string) string // repo name → package manager (for display)
+	ConfirmCursor  int                 // focused plan row in the confirm step
 
 	// Branch suggestions (populated when entering ModalEnterBranch)
 	AllBranches      []git.BranchInfo // all branches from selected repos
@@ -69,7 +69,7 @@ type ModalCreateMsg struct {
 
 type ModalCancelMsg struct{}
 
-func NewModal(repos []git.Repo, scriptDir, pkgManager string, installDefault bool) ModalModel {
+func NewModal(repos []git.Repo, scriptDir string, pkgFor func(string) string, installDefault bool) ModalModel {
 	// Only real repos are selectable; monorepo cards are synthetic entries
 	// derived from *-lts dirs (multi-select of real repos recreates them).
 	selectable := make([]git.Repo, 0, len(repos))
@@ -94,14 +94,28 @@ func NewModal(repos []git.Repo, scriptDir, pkgManager string, installDefault boo
 		Input:          ti,
 		BranchHovered:  -1,
 		ScriptDir:      scriptDir,
-		PkgManager:     pkgManager,
+		PkgFor:         pkgFor,
 		InstallDefault: installDefault,
 	}
 }
 
-// HasInstallToggles reports whether the confirm step shows package-install toggles.
+// pkgForRepo resolves the display package manager for a repo (nil-safe).
+func (m ModalModel) pkgForRepo(repo string) string {
+	if m.PkgFor == nil {
+		return ""
+	}
+	return m.PkgFor(repo)
+}
+
+// HasInstallToggles reports whether the confirm step shows package-install
+// toggles — true when any planned repo has a package manager.
 func (m ModalModel) HasInstallToggles() bool {
-	return m.PkgManager != ""
+	for _, r := range m.PlanRepos {
+		if m.pkgForRepo(r) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // ConfirmRowsOffset returns the number of content lines before the worktree
@@ -115,9 +129,13 @@ func (m ModalModel) ConfirmRowsOffset() int {
 }
 
 // ToggleInstall flips the package-install flag for plan row i.
+// Rows whose repo has no package manager have nothing to toggle.
 func (m *ModalModel) ToggleInstall(i int) {
 	if i >= 0 && i < len(m.PlanRepos) && m.InstallDeps != nil {
 		repo := m.PlanRepos[i]
+		if m.pkgForRepo(repo) == "" {
+			return
+		}
 		m.InstallDeps[repo] = !m.InstallDeps[repo]
 	}
 }
@@ -634,11 +652,14 @@ func (m ModalModel) View(width, height int) string {
 			}
 			line := whiteStyle.Render(cursor) + dimStyle.Render("→ ") + whiteStyle.Render(fmt.Sprintf("%-*s", maxName, name))
 			if hasToggles {
-				install := m.InstallDeps[m.PlanRepos[i]]
-				if install {
-					line += cyanStyle.Render("  [✓] " + m.PkgManager + " install")
-				} else {
-					line += dimStyle.Render("  [ ] " + m.PkgManager + " install")
+				pm := m.pkgForRepo(m.PlanRepos[i])
+				switch {
+				case pm == "":
+					line += dimStyle.Render("  no package manager")
+				case m.InstallDeps[m.PlanRepos[i]]:
+					line += cyanStyle.Render("  [✓] " + pm + " install")
+				default:
+					line += dimStyle.Render("  [ ] " + pm + " install")
 				}
 			}
 			content += line + "\n"

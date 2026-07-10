@@ -158,9 +158,16 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				rc = config.DefaultRepoLocal()
 			}
 
+			pm := rc.PackageManager
+			if pm == "" {
+				pm = "default"
+			}
 			s.Items = append(s.Items,
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Basis Branch", Key: "BASIS_BRANCH",
 					Value: rc.BasisBranch, Kind: SettingText, RepoName: repo},
+				SettingsItem{Section: "Local (" + repo + ")", Label: "Package Manager", Key: "REPO_PACKAGE_MANAGER",
+					Value: pm, Kind: SettingEnum, RepoName: repo,
+					Options: []string{"default", "pnpm", "npm", "yarn", "bun"}},
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Last Refresh", Key: "LAST_REFRESH",
 					Value: formatLastRefresh(rc.LastRefresh), Kind: SettingDisplay, RepoName: repo},
 			)
@@ -430,6 +437,12 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 		switch item.Key {
 		case "BASIS_BRANCH":
 			saveErr = s.Config.SetRepoBasisBranch(item.RepoName, item.Value)
+		case "REPO_PACKAGE_MANAGER":
+			pm := item.Value
+			if pm == "default" {
+				pm = ""
+			}
+			saveErr = s.Config.SetRepoPackageManager(item.RepoName, pm)
 		}
 	}
 	if saveErr != nil {
