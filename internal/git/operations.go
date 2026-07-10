@@ -1132,6 +1132,11 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 	return nil
 }
 
+// isJunkFile reports OS-generated files that shouldn't block directory cleanup.
+func isJunkFile(name string) bool {
+	return name == ".DS_Store"
+}
+
 // cleanEmptyLTSDirs removes empty directories up to and including the -lts root.
 func cleanEmptyLTSDirs(dir string) {
 	for {
@@ -1148,7 +1153,7 @@ func cleanEmptyLTSDirs(dir string) {
 			hasContent := false
 			for _, e := range entries {
 				name := e.Name()
-				if name == ".lts-type" || name == ".lts-repos" {
+				if name == ".lts-type" || name == ".lts-repos" || isJunkFile(name) {
 					continue
 				}
 				if strings.HasSuffix(name, ".code-workspace") {
@@ -1162,12 +1167,17 @@ func cleanEmptyLTSDirs(dir string) {
 			}
 			return
 		}
-		// Not the -lts root — remove if empty
+		// Not the -lts root — remove if empty (ignoring junk files)
 		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
+		if err != nil {
 			return
 		}
-		os.Remove(dir)
+		for _, e := range entries {
+			if !isJunkFile(e.Name()) {
+				return
+			}
+		}
+		os.RemoveAll(dir)
 		dir = filepath.Dir(dir)
 	}
 }
