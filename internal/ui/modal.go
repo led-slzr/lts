@@ -49,6 +49,15 @@ type ModalModel struct {
 	BranchHovered    int              // hovered branch index (-1 = none)
 	ScrollbarHovered bool             // true when mouse is over the scrollbar thumb
 	ScriptDir        string           // for loading branches
+	FetchingBranches bool             // a background fetch is refreshing the list
+}
+
+// ModalBranchesFetchedMsg carries the refreshed branch list after the
+// background `git fetch` completes. Key identifies the repo selection the
+// fetch was started for, so a stale result can't overwrite a newer list.
+type ModalBranchesFetchedMsg struct {
+	Key      string
+	Branches []git.BranchInfo
 }
 
 // Messages
@@ -115,6 +124,15 @@ func (m *ModalModel) ToggleInstall(i int) {
 
 func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ModalBranchesFetchedMsg:
+		// Ignore results from a fetch started for a different repo selection
+		if msg.Key == strings.Join(m.selectedRepoPaths(), "\x00") {
+			m.FetchingBranches = false
+			m.AllBranches = msg.Branches
+			m.FilterBranches()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
@@ -203,8 +221,11 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 		m.Step = ModalEnterBranch
 		m.Input.Focus()
+		// Show what the local ref database knows immediately, then refresh
+		// from the remote in the background.
 		m.loadBranches()
-		return m, textinput.Blink
+		m.FetchingBranches = true
+		return m, tea.Batch(textinput.Blink, fetchBranchesCmd(m.selectedRepoPaths()))
 
 	case ModalEnterBranch:
 		branch := strings.TrimSpace(m.Input.Value())
@@ -250,7 +271,8 @@ func isValidBranchChar(r rune) bool {
 	return false
 }
 
-func (m *ModalModel) loadBranches() {
+// selectedRepoPaths returns the filesystem paths of the selected repos.
+func (m *ModalModel) selectedRepoPaths() []string {
 	var repoPaths []string
 	for idx := range m.Selected {
 		repo := m.Repos[idx]
@@ -264,8 +286,29 @@ func (m *ModalModel) loadBranches() {
 			}
 		}
 	}
-	m.AllBranches = git.GetBranchesWithDates(repoPaths)
+	sort.Strings(repoPaths)
+	return repoPaths
+}
+
+func (m *ModalModel) loadBranches() {
+	m.AllBranches = git.GetBranchesWithDates(m.selectedRepoPaths())
 	m.FilterBranches()
+}
+
+// fetchBranchesCmd fetches origin for each repo in the background, then
+// returns the refreshed branch list. The local ref database only learns
+// about new remote branches on fetch, so without this the suggestion list
+// misses branches pushed since the repo's last fetch.
+func fetchBranchesCmd(repoPaths []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, p := range repoPaths {
+			git.RunGit(p, "fetch", "origin")
+		}
+		return ModalBranchesFetchedMsg{
+			Key:      strings.Join(repoPaths, "\x00"),
+			Branches: git.GetBranchesWithDates(repoPaths),
+		}
+	}
 }
 
 func (m *ModalModel) FilterBranches() {
@@ -424,7 +467,11 @@ func (m ModalModel) View(width, height int) string {
 			content += cyanStyle.Render(strings.Join(selectedNames, ", ")) + "\n"
 		}
 
-		content += "\n" + dimStyle.Render("Branch name:") + "\n\n"
+		branchLabel := "Branch name:"
+		if m.FetchingBranches {
+			branchLabel += "  (updating from remote…)"
+		}
+		content += "\n" + dimStyle.Render(branchLabel) + "\n\n"
 		content += m.Input.View() + "\n"
 		if m.Error != "" {
 			content += "\n" + errorStyle.Render(m.Error)
