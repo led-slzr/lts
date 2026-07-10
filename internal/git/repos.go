@@ -250,6 +250,14 @@ func checkMigrationNeeded(repoPath, mainBranch string) (needsMigration bool, bra
 		return false, "", ""
 	}
 
+	// Never offer to migrate a protected branch (main, master, develop, ...) —
+	// even when the configured basis branch differs, e.g. basis "dev" with the
+	// repo sitting on main. Migrating it creates a worktree that pins the
+	// protected branch outside the repo dir.
+	if IsProtectedBranch(currentBranch) {
+		return false, "", ""
+	}
+
 	var reasons []string
 
 	// Check uncommitted changes

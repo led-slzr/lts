@@ -71,6 +71,7 @@ type Model struct {
 	deleteDangerous     bool            // true = requires typing DELETE
 	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
 	deleteLocalBranch   bool            // true = also delete local branch
+	deleteProtected     bool            // branch is protected: worktree removable, branch always kept
 
 	// Cleanup confirmation
 	cleanupConfirmActive bool
@@ -645,7 +646,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// In non-dangerous mode: ynY-1 = blank, ynY-2 = last toggle
 			// In dangerous mode: ynY = hint line, ynY-2 = input, ynY-4 = "Type DELETE"
 			//   so toggles are further up
-			if !m.deleteDangerous {
+			// Protected branches show a note instead of toggles — nothing to click.
+			if !m.deleteDangerous && !m.deleteProtected {
 				if hasRemote {
 					// ynY-2 = remote toggle, ynY-3 = local toggle
 					if msg.Y == ynY-2 {
@@ -1448,27 +1450,31 @@ func (m Model) renderDeleteConfirmDialog() string {
 		}
 
 		content += "\n"
-		// Local branch deletion toggle
-		branchToggleKey := "b"
-		if m.deleteDangerous {
-			branchToggleKey = "ctrl+b"
-		}
-		if m.deleteLocalBranch {
-			content += whiteStyle.Render("  ["+branchToggleKey+"] ✓ Also delete local branch") + "\n"
+		if m.deleteProtected {
+			content += warnStyle.Render("  Protected branch — the branch itself will be kept") + "\n"
 		} else {
-			content += dimStyle.Render("  ["+branchToggleKey+"] Also delete local branch") + "\n"
-		}
-
-		// Offer remote branch deletion toggle when remote exists and local branch is being deleted
-		if deleteHasRemote(wt.Status) && m.deleteLocalBranch {
-			toggleKey := "d"
+			// Local branch deletion toggle
+			branchToggleKey := "b"
 			if m.deleteDangerous {
-				toggleKey = "ctrl+d"
+				branchToggleKey = "ctrl+b"
 			}
-			if m.deleteRemoteBranch {
-				content += whiteStyle.Render("  ["+toggleKey+"] ✓ Also delete remote branch") + "\n"
+			if m.deleteLocalBranch {
+				content += whiteStyle.Render("  ["+branchToggleKey+"] ✓ Also delete local branch") + "\n"
 			} else {
-				content += dimStyle.Render("  ["+toggleKey+"] Also delete remote branch") + "\n"
+				content += dimStyle.Render("  ["+branchToggleKey+"] Also delete local branch") + "\n"
+			}
+
+			// Offer remote branch deletion toggle when remote exists and local branch is being deleted
+			if deleteHasRemote(wt.Status) && m.deleteLocalBranch {
+				toggleKey := "d"
+				if m.deleteDangerous {
+					toggleKey = "ctrl+d"
+				}
+				if m.deleteRemoteBranch {
+					content += whiteStyle.Render("  ["+toggleKey+"] ✓ Also delete remote branch") + "\n"
+				} else {
+					content += dimStyle.Render("  ["+toggleKey+"] Also delete remote branch") + "\n"
+				}
 			}
 		}
 	}

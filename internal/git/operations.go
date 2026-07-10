@@ -1584,6 +1584,9 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 	if currentBranch == mainBranch {
 		return nil, fmt.Errorf("%s is already on %s — nothing to migrate", repoName, mainBranch)
 	}
+	if IsProtectedBranch(currentBranch) {
+		return nil, fmt.Errorf("%s is on protected branch %s — nothing to migrate", repoName, currentBranch)
+	}
 
 	// Check for ongoing operations
 	if err := CheckOngoingOperations(repoPath); err != nil {
