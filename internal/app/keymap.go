@@ -4,6 +4,7 @@ import (
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -328,27 +329,60 @@ func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 func handleOpenPromptKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
+	case "left", "h", "shift+tab":
+		m.openPromptSelection = (m.openPromptSelection + 2) % 3
+	case "right", "l", "tab":
+		m.openPromptSelection = (m.openPromptSelection + 1) % 3
 	case "y", "Y", "enter":
-		m.openPromptActive = false
-		var openErr error
-		for _, r := range m.openPromptResults {
-			if r.WorkspaceFile != "" {
-				if err := opener.OpenWorktree(r.WorkspaceFile, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal); err != nil {
-					openErr = err
-				}
-			}
-		}
-		if openErr != nil {
-			m.statusMsg = "Failed to open: " + openErr.Error()
-		} else {
-			m.statusMsg = "Opened workspace(s)"
-		}
-		return m, clearStatusCmd()
+		return openCreatedWorkspaces(m, m.openPromptSelection)
 	case "n", "N", "esc":
 		m.openPromptActive = false
 		return m, clearStatusCmd()
 	}
 	return m, nil
+}
+
+// openCreatedWorkspaces opens the just-created workspace(s) with the chosen
+// mode and dismisses the prompt. IDE mode opens the workspace file itself;
+// AI CLI/terminal modes need a directory to cd into.
+func openCreatedWorkspaces(m Model, usage opener.ClickUsage) (Model, tea.Cmd) {
+	m.openPromptActive = false
+	// Monorepo creates share one workspace file across all results.
+	shared := make(map[string]int)
+	for _, r := range m.openPromptResults {
+		if r != nil && r.WorkspaceFile != "" {
+			shared[r.WorkspaceFile]++
+		}
+	}
+	opened := make(map[string]bool)
+	var openErr error
+	for _, r := range m.openPromptResults {
+		if r == nil || r.WorkspaceFile == "" {
+			continue
+		}
+		target := r.WorkspaceFile
+		if usage != opener.ClickIDE {
+			if shared[r.WorkspaceFile] > 1 {
+				// branch subdir containing all of the monorepo's worktrees
+				target = filepath.Dir(r.WorkspaceFile)
+			} else {
+				target = r.WorktreePath
+			}
+		}
+		if opened[target] {
+			continue
+		}
+		opened[target] = true
+		if err := opener.OpenWorktree(target, usage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal); err != nil {
+			openErr = err
+		}
+	}
+	if openErr != nil {
+		m.statusMsg = "Failed to open: " + openErr.Error()
+	} else {
+		m.statusMsg = "Opened workspace(s)"
+	}
+	return m, clearStatusCmd()
 }
 
 func renameHasRemote(m Model) bool {

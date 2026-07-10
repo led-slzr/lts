@@ -58,8 +58,10 @@ type Model struct {
 	contextMenu ui.ContextMenuModel
 
 	// Post-creation prompt
-	openPromptActive  bool
-	openPromptResults []*git.CreateResult
+	openPromptActive    bool
+	openPromptResults   []*git.CreateResult
+	openPromptSelection opener.ClickUsage // option highlighted in the open prompt
+	openPromptHovered   opener.ClickUsage // option under the mouse (-1 = none)
 
 	// Delete confirmation
 	deleteConfirmActive bool
@@ -77,7 +79,7 @@ type Model struct {
 	// Header hover states
 	versionHovered     bool
 	hoveredUsage       opener.ClickUsage // -1 = none
-	updateAvailVersion string             // non-empty when update available but not auto-installed
+	updateAvailVersion string            // non-empty when update available but not auto-installed
 	updateBadgeHovered bool
 
 	// History suggestion hover (empty state)
@@ -105,16 +107,17 @@ func NewModel(cfg config.Config) Model {
 	ui.CurrentWorkDir = cfg.WorkDir
 
 	return Model{
-		config:           cfg,
-		focusedCard:      -1,
-		focusedWT:        -1,
-		hoveredBtn:       ui.BtnNone,
-		hoveredUsage:     -1,
-		hoveredHistory:   -1,
-		renameInput:      ti,
-		deleteTypedInput: di,
-		initialLoad:      true,
-		logPanel:         ui.NewLogPanel(),
+		config:            cfg,
+		focusedCard:       -1,
+		focusedWT:         -1,
+		hoveredBtn:        ui.BtnNone,
+		hoveredUsage:      -1,
+		hoveredHistory:    -1,
+		openPromptHovered: -1,
+		renameInput:       ti,
+		deleteTypedInput:  di,
+		initialLoad:       true,
+		logPanel:          ui.NewLogPanel(),
 	}
 }
 
@@ -400,6 +403,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = fmt.Sprintf("Created %s on %s", strings.Join(names, ", "), msg.Branch)
 		m.openPromptActive = true
 		m.openPromptResults = msg.Results
+		m.openPromptSelection = opener.ClickIDE
+		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
 
@@ -444,6 +449,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = fmt.Sprintf("Migrated %s to LTS worktree", msg.Result.Branch)
 		m.openPromptActive = true
 		m.openPromptResults = []*git.CreateResult{msg.Result}
+		m.openPromptSelection = opener.ClickIDE
+		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
 
@@ -564,19 +571,23 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Y/N dialogs: click on [Y] or [N] buttons
+	// Open prompt: hover/click the IDE │ AI CLI │ Terminal options
 	if m.openPromptActive {
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			modal := m.renderOpenPromptDialog()
-			_, modalTop, modalH := modalMetrics(modal, m.height)
-			ynY := modalTop + modalH - 3 // last content line before padding+border
-			if msg.Y == ynY {
-				modalLeft := (m.width - lipgloss.Width(modal)) / 2
-				relX := msg.X - modalLeft
-				if relX >= 0 && relX < 20 {
-					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-				} else {
-					return handleOpenPromptKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		modal := m.renderOpenPromptDialog()
+		_, modalTop, modalH := modalMetrics(modal, m.height)
+		modalLeft := (m.width - lipgloss.Width(modal)) / 2
+		optionsY := modalTop + modalH - 5 // options line: above blank + hint line
+		m.openPromptHovered = -1
+		if msg.Y == optionsY {
+			relX := msg.X - modalLeft
+			for _, opt := range m.openPromptOptions() {
+				if relX >= opt.x && relX < opt.x+opt.w {
+					m.openPromptHovered = opt.usage
+					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+						m.openPromptSelection = opt.usage
+						return openCreatedWorkspaces(m, opt.usage)
+					}
+					break
 				}
 			}
 		}
@@ -1060,7 +1071,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
 			repo := m.repos[m.focusedCard]
 			if repo.NeedsMigration && repo.Path != "" {
-				logFn, startCmd := m.beginLoading("Migrating "+repo.Name+"...")
+				logFn, startCmd := m.beginLoading("Migrating " + repo.Name + "...")
 				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config))
 			}
 		}
@@ -1300,17 +1311,68 @@ func (m Model) renderRenameDialog() string {
 	return ui.ModalStyle.Width(50).Render(content)
 }
 
+// openPromptOption is one open-mode choice with its rendered X range relative
+// to the modal's left edge — shared by the dialog renderer and mouse hit-testing.
+type openPromptOption struct {
+	usage opener.ClickUsage
+	label string
+	x     int
+	w     int
+}
+
+func (m Model) openPromptOptions() []openPromptOption {
+	labels := []struct {
+		usage opener.ClickUsage
+		label string
+	}{
+		{opener.ClickIDE, "IDE"},
+		{opener.ClickAICli, m.config.AICliLabel()},
+		{opener.ClickTerminal, "Terminal"},
+	}
+	opts := make([]openPromptOption, 0, len(labels))
+	x := 3 + 2 // border(1) + padding(2), then line indent
+	for _, l := range labels {
+		w := lipgloss.Width(l.label) + 2 // Padding(0,1) on the option styles
+		opts = append(opts, openPromptOption{l.usage, l.label, x, w})
+		x += w + 1 // "│" separator
+	}
+	return opts
+}
+
 func (m Model) renderOpenPromptDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorWhite).Background(ui.ColorBlack)
+	hoveredStyle := lipgloss.NewStyle().
+		Foreground(ui.ColorWhite).
+		Background(ui.ColorBlack).
+		Bold(true).
+		Underline(true).
+		Padding(0, 1)
 
 	content := titleStyle.Render("Worktree Created") + "\n\n"
 	for _, r := range m.openPromptResults {
 		content += whiteStyle.Render("  "+r.RepoName) + dimStyle.Render(" → "+r.Branch) + "\n"
 	}
-	content += "\n" + dimStyle.Render("Open workspace in IDE?") + "\n\n"
-	content += whiteStyle.Render("[Y]") + dimStyle.Render("es  ") + whiteStyle.Render("[N]") + dimStyle.Render("o")
+	content += "\n" + dimStyle.Render("How would you like to open this workspace?") + "\n\n"
+
+	optionsLine := "  "
+	opts := m.openPromptOptions()
+	for i, opt := range opts {
+		switch {
+		case opt.usage == m.openPromptSelection:
+			optionsLine += ui.ClickUsageActiveStyle.Render(opt.label)
+		case opt.usage == m.openPromptHovered:
+			optionsLine += hoveredStyle.Render(opt.label)
+		default:
+			optionsLine += ui.ClickUsageInactiveStyle.Render(opt.label)
+		}
+		if i < len(opts)-1 {
+			optionsLine += dimStyle.Render("│")
+		}
+	}
+	content += optionsLine + "\n\n"
+	content += dimStyle.Render("←/→ select · enter open · esc skip")
 
 	return ui.ModalStyle.Width(50).Render(content)
 }
