@@ -46,11 +46,19 @@ type SettingsModel struct {
 	saveGen    int    // generation counter for save status clear timer
 
 	// Tabs
-	ActiveTab  int      // 0 = General, 1 = Worktrees
-	HoveredTab int      // -1 = none, 0 = General, 1 = Worktrees
-	TabNames   []string // ["General", "Worktrees"]
+	ActiveTab  int      // index into TabNames
+	HoveredTab int      // -1 = none
+	TabNames   []string // ["Preferences", "Workspace", "Worktrees", "Diagnostics"]
 	RepoNames  []string // stored for rebuilding items on tab switch
 }
+
+// Tab indices
+const (
+	TabPreferences = iota
+	TabWorkspace
+	TabWorktrees
+	TabDiagnostics
+)
 
 // Messages
 type SettingsSavedMsg struct{}
@@ -93,9 +101,9 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 		Active:     true,
 		Config:     cfg,
 		EditInput:  ti,
-		ActiveTab:  0,
+		ActiveTab:  TabPreferences,
 		HoveredTab: -1,
-		TabNames:   []string{"General", "Worktrees"},
+		TabNames:   []string{"Preferences", "Workspace", "Worktrees", "Diagnostics"},
 		RepoNames:  repoNames,
 	}
 	s.buildItems(repoNames)
@@ -106,36 +114,39 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 	s.Items = nil
 	s.RepoNames = repoNames
 
-	if s.ActiveTab == 0 {
-		// General settings — no section headers (the tab IS the section)
+	switch s.ActiveTab {
+	case TabPreferences:
+		// Tool preferences — which commands LTS drives
 		s.Items = append(s.Items,
 			SettingsItem{Label: "IDE Command", Key: "IDE_COMMAND",
 				Value: s.Config.Global.IDECommand, Kind: SettingEnum,
 				Options: []string{"windsurf", "code", "cursor", "zed"}},
 			SettingsItem{Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
 				Value: s.Config.Global.AICliCommand, Kind: SettingText},
-			SettingsItem{Label: "Package Manager", Key: "PACKAGE_MANAGER",
+			SettingsItem{Label: "Terminal", Key: "TERMINAL",
+				Value: s.Config.Global.Terminal, Kind: SettingEnum,
+				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
+			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
 				Options: []string{"pnpm", "npm", "yarn", "bun"}},
 			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
-			SettingsItem{Label: "Terminal", Key: "TERMINAL",
-				Value: s.Config.Global.Terminal, Kind: SettingEnum,
-				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
 			SettingsItem{Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
 				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+		)
+	case TabWorkspace:
+		// What goes into generated worktrees and workspace files
+		s.Items = append(s.Items,
 			SettingsItem{Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
 				Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
 			SettingsItem{Label: "New Worktree Package Install", Key: "NEW_WT_PACKAGE_INSTALL",
 				Value: boolToStr(s.Config.Global.InstallOnCreate), Kind: SettingBool},
-			SettingsItem{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION",
-				Value: "Press enter to check", Kind: SettingAction},
 		)
-	} else {
-		// Worktrees tab: per-repo local settings
+	case TabWorktrees:
+		// Per-repo local settings
 		for _, repo := range repoNames {
 			key := strings.ToUpper(repo)
 			rc, ok := s.Config.Local[key]
@@ -150,6 +161,11 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 					Value: formatLastRefresh(rc.LastRefresh), Kind: SettingDisplay, RepoName: repo},
 			)
 		}
+	case TabDiagnostics:
+		s.Items = append(s.Items,
+			SettingsItem{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION",
+				Value: "Press enter to check", Kind: SettingAction},
+		)
 	}
 }
 
@@ -595,7 +611,7 @@ func (s SettingsModel) View(width, height int) string {
 	}
 
 	// Empty state for Worktrees tab
-	if s.ActiveTab == 1 && len(s.Items) == 0 {
+	if s.ActiveTab == TabWorktrees && len(s.Items) == 0 {
 		lines = append(lines, dimStyle.Render("  No worktrees configured"))
 	}
 
