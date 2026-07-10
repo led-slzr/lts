@@ -53,6 +53,16 @@ type ModalCreateMsg struct {
 type ModalCancelMsg struct{}
 
 func NewModal(repos []git.Repo, scriptDir string) ModalModel {
+	// Only real repos are selectable; monorepo cards are synthetic entries
+	// derived from *-lts dirs (multi-select of real repos recreates them).
+	selectable := make([]git.Repo, 0, len(repos))
+	for _, r := range repos {
+		if r.IsMonorepo {
+			continue
+		}
+		selectable = append(selectable, r)
+	}
+
 	ti := textinput.New()
 	ti.Placeholder = "type or pick a branch below"
 	ti.CharLimit = 100
@@ -61,7 +71,7 @@ func NewModal(repos []git.Repo, scriptDir string) ModalModel {
 	return ModalModel{
 		Active:        true,
 		Step:          ModalSelectRepos,
-		Repos:         repos,
+		Repos:         selectable,
 		Selected:      make(map[int]bool),
 		CursorIdx:     0,
 		Input:         ti,
