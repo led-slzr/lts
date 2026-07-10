@@ -140,6 +140,10 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 	case TabWorkspace:
 		// What goes into generated worktrees and workspace files
 		s.Items = append(s.Items,
+			SettingsItem{Label: "Copy .env Files to Worktree", Key: "COPY_ENV_FILES",
+				Value: boolToStr(s.Config.Global.CopyEnvFiles), Kind: SettingBool},
+			SettingsItem{Label: "Copy .mcp.json Files to Worktree", Key: "COPY_MCP_JSON",
+				Value: boolToStr(s.Config.Global.CopyMCPJson), Kind: SettingBool},
 			SettingsItem{Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
 				Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
 			SettingsItem{Label: "New Worktree Package Install", Key: "NEW_WT_PACKAGE_INSTALL",
@@ -416,6 +420,10 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.OpenEnvInIDE = item.Value == "true"
 		case "NEW_WT_PACKAGE_INSTALL":
 			s.Config.Global.InstallOnCreate = item.Value == "true"
+		case "COPY_ENV_FILES":
+			s.Config.Global.CopyEnvFiles = item.Value == "true"
+		case "COPY_MCP_JSON":
+			s.Config.Global.CopyMCPJson = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {

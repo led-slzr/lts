@@ -52,6 +52,25 @@ func (l *CreateLog) AddError(msg string) {
 	}
 }
 
+// WorkspaceOptions carries create-time options shared across repos: which
+// commands the generated workspace embeds, which support files get copied
+// into new worktrees, and how each repo's package manager is resolved.
+type WorkspaceOptions struct {
+	PkgManager   func(repoName string) string
+	AICliCommand string
+	IDECommand   string
+	OpenEnvInIDE bool
+	CopyEnv      bool // copy .env* files
+	CopyMCP      bool // copy .mcp.json files
+}
+
+func (o WorkspaceOptions) pkgFor(repoName string) string {
+	if o.PkgManager == nil {
+		return ""
+	}
+	return o.PkgManager(repoName)
+}
+
 // ValidateBranchName checks if a branch name is valid.
 func ValidateBranchName(branch string) error {
 	branch = strings.TrimSpace(branch)
@@ -314,8 +333,9 @@ func CheckOngoingOperations(repoPath string) error {
 
 // CreateSingleRepoWorktree creates a worktree for a single repository.
 // This matches mode_create_worktrees from lts.sh (for 1 worktree).
-func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE, installDeps bool, log *CreateLog) (*CreateResult, error) {
+func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, opts WorkspaceOptions, installDeps bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
+	pkgManager := opts.pkgFor(repoName)
 	ltsDir := repoName + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 
@@ -362,9 +382,11 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 		return nil, err
 	}
 
-	// Copy .env files
-	log.Add("Copying .env files")
-	copyEnvFilesRecursive(repoPath, wtPath)
+	// Copy support files (.env*, .mcp.json)
+	if opts.CopyEnv || opts.CopyMCP {
+		log.Add("Copying support files")
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
+	}
 
 	// Install dependencies
 	if installDeps {
@@ -375,7 +397,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 	result.WorkspaceFile = wsFile
 
 	return result, nil
@@ -385,7 +407,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 // This matches mode_create_monorepo_worktrees from lts.sh.
 // Each repo uses its own configured basis branch via getBasis. installDeps
 // controls package install per repo name; nil means install for all.
-func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, installDeps map[string]bool, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
+func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, installDeps map[string]bool, opts WorkspaceOptions, log *CreateLog) ([]*CreateResult, error) {
 	if len(repoNames) == 0 {
 		return nil, fmt.Errorf("no repositories selected")
 	}
@@ -399,7 +421,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	// Single repo shortcut — use standard naming
 	if len(repoNames) == 1 {
 		repoPath := filepath.Join(scriptDir, repoNames[0])
-		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), pkgManager, aiCliCommand, ideCommand, openEnvInIDE, installFor(repoNames[0]), log)
+		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), opts, installFor(repoNames[0]), log)
 		if err != nil {
 			return nil, err
 		}
@@ -482,12 +504,12 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 			continue
 		}
 
-		// Copy .env files
-		copyEnvFilesRecursive(repoPath, wtPath)
+		// Copy support files (.env*, .mcp.json)
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
 
 		// Install dependencies
 		if installFor(repoName) {
-			runPackageInstall(wtPath, pkgManager, log)
+			runPackageInstall(wtPath, opts.pkgFor(repoName), log)
 		} else {
 			log.Add("Skipping dependency install")
 		}
@@ -515,7 +537,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	writeReposMetadata(ltsPath, sorted)
 
 	// Generate monorepo workspace (only workspace file for monorepo setups)
-	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 	for _, r := range results {
 		r.WorkspaceFile = wsFile
 	}
@@ -595,8 +617,12 @@ func shellQuotePaths(paths []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// copyEnvFilesRecursive copies .env* files preserving directory structure.
-func copyEnvFilesRecursive(srcRoot, dstRoot string) {
+// copySupportFiles copies untracked support files (.env*, .mcp.json) into a
+// new worktree, preserving directory structure.
+func copySupportFiles(srcRoot, dstRoot string, copyEnv, copyMCP bool) {
+	if !copyEnv && !copyMCP {
+		return
+	}
 	filepath.Walk(srcRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -609,8 +635,9 @@ func copyEnvFilesRecursive(srcRoot, dstRoot string) {
 			}
 			return nil
 		}
-		// Match .env* files
-		if strings.HasPrefix(info.Name(), ".env") {
+		match := (copyEnv && strings.HasPrefix(info.Name(), ".env")) ||
+			(copyMCP && info.Name() == ".mcp.json")
+		if match {
 			relPath, _ := filepath.Rel(srcRoot, path)
 			dstPath := filepath.Join(dstRoot, relPath)
 			os.MkdirAll(filepath.Dir(dstPath), 0755)
@@ -1581,7 +1608,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 //
 // Every failure path restores the original state or tells the user exactly
 // where their data is (commits on the branch, uncommitted work in git stash list).
-func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, logFn LogFunc) (*CreateResult, error) {
+func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOptions, logFn LogFunc) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	ctx := repoName
 
@@ -1733,16 +1760,19 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 		}
 	}
 
-	// Copy .env files
-	logFn(ctx, "Copying .env files", false)
-	copyEnvFilesRecursive(repoPath, wtPath)
+	// Copy support files (.env*, .mcp.json)
+	if opts.CopyEnv || opts.CopyMCP {
+		logFn(ctx, "Copying support files", false)
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
+	}
 
 	// Install dependencies
+	pkgManager := opts.pkgFor(repoName)
 	runPackageInstall(wtPath, pkgManager, &CreateLog{Stream: logFn, Context: ctx})
 
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 
 	logFn(ctx, "Migration complete — "+currentBranch+" is now an LTS worktree", false)
 

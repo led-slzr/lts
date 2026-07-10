@@ -1684,11 +1684,23 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 	}
 }
 
+// workspaceOpts assembles the create-time options from config.
+func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
+	return git.WorkspaceOptions{
+		PkgManager:   func(string) string { return cfg.Global.PackageManager },
+		AICliCommand: cfg.Global.AICliCommand,
+		IDECommand:   cfg.Global.IDECommand,
+		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
+		CopyEnv:      cfg.Global.CopyEnvFiles,
+		CopyMCP:      cfg.Global.CopyMCPJson,
+	}
+}
+
 func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, installDeps map[string]bool, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		log := &git.CreateLog{Stream: logFn}
 		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basisResolver(cfg), installDeps,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, log)
+			workspaceOpts(cfg), log)
 		if err != nil {
 			logFn("create", "Failed: "+err.Error(), true)
 		} else {
@@ -1731,8 +1743,7 @@ func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd 
 	return func() tea.Msg {
 		repoName := filepath.Base(repoPath)
 		basis := cfg.GetRepoBasisBranch(repoName)
-		result, err := git.MigrateToWorktree(repoPath, cfg.WorkDir, basis,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
+		result, err := git.MigrateToWorktree(repoPath, cfg.WorkDir, basis, workspaceOpts(cfg), logFn)
 		if err != nil {
 			logFn("migrate", "Failed: "+err.Error(), true)
 		} else {

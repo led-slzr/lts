@@ -22,6 +22,8 @@ type GlobalConfig struct {
 	AutoUpdate      bool   // automatically install new releases in background
 	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
 	InstallOnCreate bool   // default for the package-install toggle when creating worktrees
+	CopyEnvFiles    bool   // copy .env* files into new worktrees
+	CopyMCPJson     bool   // copy .mcp.json files into new worktrees
 	LastUpdateCheck int64  // unix timestamp of last update check
 }
 
@@ -49,6 +51,8 @@ func DefaultGlobal() GlobalConfig {
 		AutoUpdate:      true,
 		OpenEnvInIDE:    true,
 		InstallOnCreate: true,
+		CopyEnvFiles:    true,
+		CopyMCPJson:     false,
 		LastUpdateCheck: 0,
 	}
 }
@@ -228,6 +232,8 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
 		fmt.Sprintf("NEW_WT_PACKAGE_INSTALL=\"%t\"", c.Global.InstallOnCreate),
+		fmt.Sprintf("COPY_ENV_FILES=\"%t\"", c.Global.CopyEnvFiles),
+		fmt.Sprintf("COPY_MCP_JSON=\"%t\"", c.Global.CopyMCPJson),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -295,6 +301,12 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["NEW_WT_PACKAGE_INSTALL"]; ok {
 		g.InstallOnCreate = v != "false"
+	}
+	if v, ok := kv["COPY_ENV_FILES"]; ok {
+		g.CopyEnvFiles = v != "false"
+	}
+	if v, ok := kv["COPY_MCP_JSON"]; ok {
+		g.CopyMCPJson = v == "true"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
