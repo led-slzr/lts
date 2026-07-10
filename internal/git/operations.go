@@ -314,7 +314,7 @@ func CheckOngoingOperations(repoPath string) error {
 
 // CreateSingleRepoWorktree creates a worktree for a single repository.
 // This matches mode_create_worktrees from lts.sh (for 1 worktree).
-func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) (*CreateResult, error) {
+func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE, installDeps bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	ltsDir := repoName + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
@@ -367,7 +367,11 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 	copyEnvFilesRecursive(repoPath, wtPath)
 
 	// Install dependencies
-	runPackageInstall(wtPath, pkgManager, log)
+	if installDeps {
+		runPackageInstall(wtPath, pkgManager, log)
+	} else {
+		log.Add("Skipping dependency install")
+	}
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
@@ -379,16 +383,23 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 // CreateMonorepoWorktrees creates worktrees across multiple repos with the same branch.
 // This matches mode_create_monorepo_worktrees from lts.sh.
-// Each repo uses its own configured basis branch via getBasis.
-func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
+// Each repo uses its own configured basis branch via getBasis. installDeps
+// controls package install per repo name; nil means install for all.
+func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, installDeps map[string]bool, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
 	if len(repoNames) == 0 {
 		return nil, fmt.Errorf("no repositories selected")
+	}
+	installFor := func(repoName string) bool {
+		if installDeps == nil {
+			return true
+		}
+		return installDeps[repoName]
 	}
 
 	// Single repo shortcut — use standard naming
 	if len(repoNames) == 1 {
 		repoPath := filepath.Join(scriptDir, repoNames[0])
-		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), pkgManager, aiCliCommand, ideCommand, openEnvInIDE, log)
+		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), pkgManager, aiCliCommand, ideCommand, openEnvInIDE, installFor(repoNames[0]), log)
 		if err != nil {
 			return nil, err
 		}
@@ -475,7 +486,11 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 		copyEnvFilesRecursive(repoPath, wtPath)
 
 		// Install dependencies
-		runPackageInstall(wtPath, pkgManager, log)
+		if installFor(repoName) {
+			runPackageInstall(wtPath, pkgManager, log)
+		} else {
+			log.Add("Skipping dependency install")
+		}
 
 		results = append(results, &CreateResult{
 			WorktreePath: wtPath,

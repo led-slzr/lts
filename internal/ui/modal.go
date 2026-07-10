@@ -31,9 +31,16 @@ type ModalModel struct {
 	Branch      string
 
 	// Pre-computed plan info for confirmation
-	PlanSingle  bool   // true if single-repo mode
-	PlanLTSDir  string // e.g. "core-lts" or "core-erp-ui-lts"
+	PlanSingle  bool     // true if single-repo mode
+	PlanLTSDir  string   // e.g. "core-lts" or "core-erp-ui-lts"
 	PlanWTNames []string // planned worktree folder names
+	PlanRepos   []string // repo name per plan row (aligned with PlanWTNames)
+
+	// Per-repo package-install toggles shown in the confirm step
+	InstallDeps    map[string]bool // repo name → run package install
+	InstallDefault bool            // initial toggle value (from settings)
+	PkgManager     string          // for display; empty hides the toggles
+	ConfirmCursor  int             // focused plan row in the confirm step
 
 	// Branch suggestions (populated when entering ModalEnterBranch)
 	AllBranches      []git.BranchInfo // all branches from selected repos
@@ -46,13 +53,14 @@ type ModalModel struct {
 
 // Messages
 type ModalCreateMsg struct {
-	RepoNames []string // selected repo names
-	Branch    string
+	RepoNames   []string // selected repo names
+	Branch      string
+	InstallDeps map[string]bool // repo name → run package install
 }
 
 type ModalCancelMsg struct{}
 
-func NewModal(repos []git.Repo, scriptDir string) ModalModel {
+func NewModal(repos []git.Repo, scriptDir, pkgManager string, installDefault bool) ModalModel {
 	// Only real repos are selectable; monorepo cards are synthetic entries
 	// derived from *-lts dirs (multi-select of real repos recreates them).
 	selectable := make([]git.Repo, 0, len(repos))
@@ -69,14 +77,39 @@ func NewModal(repos []git.Repo, scriptDir string) ModalModel {
 	ti.Width = 50
 
 	return ModalModel{
-		Active:        true,
-		Step:          ModalSelectRepos,
-		Repos:         selectable,
-		Selected:      make(map[int]bool),
-		CursorIdx:     0,
-		Input:         ti,
-		BranchHovered: -1,
-		ScriptDir:     scriptDir,
+		Active:         true,
+		Step:           ModalSelectRepos,
+		Repos:          selectable,
+		Selected:       make(map[int]bool),
+		CursorIdx:      0,
+		Input:          ti,
+		BranchHovered:  -1,
+		ScriptDir:      scriptDir,
+		PkgManager:     pkgManager,
+		InstallDefault: installDefault,
+	}
+}
+
+// HasInstallToggles reports whether the confirm step shows package-install toggles.
+func (m ModalModel) HasInstallToggles() bool {
+	return m.PkgManager != ""
+}
+
+// ConfirmRowsOffset returns the number of content lines before the worktree
+// rows in the ModalConfirm view. Must match the rendering order:
+// title, blank, "Confirm creation:", blank, Directory, [Mode], Branch, blank.
+func (m ModalModel) ConfirmRowsOffset() int {
+	if m.PlanSingle {
+		return 7
+	}
+	return 8 // + Mode line
+}
+
+// ToggleInstall flips the package-install flag for plan row i.
+func (m *ModalModel) ToggleInstall(i int) {
+	if i >= 0 && i < len(m.PlanRepos) && m.InstallDeps != nil {
+		repo := m.PlanRepos[i]
+		m.InstallDeps[repo] = !m.InstallDeps[repo]
 	}
 }
 
@@ -95,9 +128,15 @@ func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 			if m.Step == ModalSelectRepos && m.CursorIdx > 0 {
 				m.CursorIdx--
 			}
+			if m.Step == ModalConfirm && m.ConfirmCursor > 0 {
+				m.ConfirmCursor--
+			}
 		case "down", "j":
 			if m.Step == ModalSelectRepos && m.CursorIdx < len(m.Repos)-1 {
 				m.CursorIdx++
+			}
+			if m.Step == ModalConfirm && m.ConfirmCursor < len(m.PlanWTNames)-1 {
+				m.ConfirmCursor++
 			}
 		case " ", "tab":
 			// Toggle selection in multi-select
@@ -107,6 +146,10 @@ func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 				} else {
 					m.Selected[m.CursorIdx] = true
 				}
+			}
+			// Toggle package install for the focused row
+			if m.Step == ModalConfirm && m.HasInstallToggles() {
+				m.ToggleInstall(m.ConfirmCursor)
 			}
 		case "backspace":
 			if m.Step == ModalEnterBranch {
@@ -171,6 +214,11 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 		m.Branch = branch
 		m.computePlan()
+		m.InstallDeps = make(map[string]bool, len(m.PlanRepos))
+		for _, r := range m.PlanRepos {
+			m.InstallDeps[r] = m.InstallDefault
+		}
+		m.ConfirmCursor = 0
 		m.Step = ModalConfirm
 		return m, nil
 
@@ -181,8 +229,9 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 			repoNames = append(repoNames, m.Repos[idx].Name)
 		}
 		branch := m.Branch
+		installDeps := m.InstallDeps
 		return m, func() tea.Msg {
-			return ModalCreateMsg{RepoNames: repoNames, Branch: branch}
+			return ModalCreateMsg{RepoNames: repoNames, Branch: branch, InstallDeps: installDeps}
 		}
 	}
 	return m, nil
@@ -275,19 +324,23 @@ func (m *ModalModel) computePlan() {
 		repo := selectedNames[0]
 		m.PlanLTSDir = repo + "-lts"
 		m.PlanWTNames = []string{repo + "-" + safeSuffix}
+		m.PlanRepos = []string{repo}
 	} else {
 		m.PlanSingle = false
 		sorted := make([]string, len(selectedNames))
 		copy(sorted, selectedNames)
 		sort.Strings(sorted)
 		ltsPrefix := strings.Join(sorted, "-")
-		m.PlanLTSDir = ltsPrefix + "-lts"
+		// The branch subdir is common to every worktree — show it as part of
+		// the directory so the per-repo rows stay short (they carry toggles).
 		branchSubdir := ltsPrefix + "-" + safeSuffix
+		m.PlanLTSDir = ltsPrefix + "-lts/" + branchSubdir
 		var names []string
 		for _, repo := range sorted {
-			names = append(names, branchSubdir+"/"+repo+"-"+safeSuffix)
+			names = append(names, repo+"-"+safeSuffix)
 		}
 		m.PlanWTNames = names
+		m.PlanRepos = sorted
 	}
 }
 
@@ -520,16 +573,43 @@ func (m ModalModel) View(width, height int) string {
 		}
 		content += dimStyle.Render("Branch:    ") + cyanStyle.Render(m.Branch) + "\n\n"
 
+		hasToggles := m.HasInstallToggles()
+		maxName := 0
 		for _, name := range m.PlanWTNames {
-			content += dimStyle.Render("  → ") + whiteStyle.Render(name) + "\n"
+			if len(name) > maxName {
+				maxName = len(name)
+			}
+		}
+		for i, name := range m.PlanWTNames {
+			cursor := "  "
+			if hasToggles && i == m.ConfirmCursor {
+				cursor = "▸ "
+			}
+			line := whiteStyle.Render(cursor) + dimStyle.Render("→ ") + whiteStyle.Render(fmt.Sprintf("%-*s", maxName, name))
+			if hasToggles {
+				install := m.InstallDeps[m.PlanRepos[i]]
+				if install {
+					line += cyanStyle.Render("  [✓] " + m.PkgManager + " install")
+				} else {
+					line += dimStyle.Render("  [ ] " + m.PkgManager + " install")
+				}
+			}
+			content += line + "\n"
 		}
 
-		content += "\n" + dimStyle.Render("enter create • esc cancel")
+		hint := "enter create • esc cancel"
+		if hasToggles {
+			hint = "↑/↓ • space toggle • " + hint
+		}
+		content += "\n" + dimStyle.Render(hint)
 	}
 
 	style := ModalStyle
 	if m.Step == ModalEnterBranch {
 		style = style.Width(60) // wider for branch list with dates
+	}
+	if m.Step == ModalConfirm {
+		style = style.Width(60) // room for worktree rows with install toggles
 	}
 	return style.Render(content)
 }

@@ -21,6 +21,7 @@ type GlobalConfig struct {
 	CheckForUpdates bool   // daily check for new releases
 	AutoUpdate      bool   // automatically install new releases in background
 	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
+	InstallOnCreate bool   // default for the package-install toggle when creating worktrees
 	LastUpdateCheck int64  // unix timestamp of last update check
 }
 
@@ -47,6 +48,7 @@ func DefaultGlobal() GlobalConfig {
 		CheckForUpdates: true,
 		AutoUpdate:      true,
 		OpenEnvInIDE:    true,
+		InstallOnCreate: true,
 		LastUpdateCheck: 0,
 	}
 }
@@ -207,6 +209,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
+		fmt.Sprintf("NEW_WT_PACKAGE_INSTALL=\"%t\"", c.Global.InstallOnCreate),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -271,6 +274,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["OPEN_ENV_IDE"]; ok {
 		g.OpenEnvInIDE = v != "false"
+	}
+	if v, ok := kv["NEW_WT_PACKAGE_INSTALL"]; ok {
+		g.InstallOnCreate = v != "false"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

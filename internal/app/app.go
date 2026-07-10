@@ -514,7 +514,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ui.ModalCreateMsg:
 		if len(msg.RepoNames) > 0 {
 			logFn, startCmd := m.beginLoading("Creating worktree...")
-			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, &m.config))
+			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, msg.InstallDeps, &m.config))
 		}
 		return m, nil
 
@@ -785,6 +785,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 
 		case ui.ModalConfirm:
+			// Hover/click on plan rows toggles the per-repo install checkbox
+			if m.modal.HasInstallToggles() {
+				row := msg.Y - (contentStartY + m.modal.ConfirmRowsOffset())
+				if row >= 0 && row < len(m.modal.PlanWTNames) {
+					m.modal.ConfirmCursor = row
+					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+						m.modal.ToggleInstall(row)
+					}
+					return m, nil
+				}
+			}
+			// Click anywhere else confirms creation
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 				var cmd tea.Cmd
 				m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1065,7 +1077,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 		// Create button (only when repos exist)
 		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.Global.PackageManager, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -1658,10 +1670,10 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 	}
 }
 
-func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, cfg *config.Config) tea.Cmd {
+func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, installDeps map[string]bool, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		log := &git.CreateLog{Stream: logFn}
-		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basisResolver(cfg),
+		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basisResolver(cfg), installDeps,
 			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, log)
 		if err != nil {
 			logFn("create", "Failed: "+err.Error(), true)

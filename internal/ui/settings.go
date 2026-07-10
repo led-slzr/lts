@@ -129,6 +129,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
 			SettingsItem{Label: "Open .env in IDE", Key: "OPEN_ENV_IDE",
 				Value: boolToStr(s.Config.Global.OpenEnvInIDE), Kind: SettingBool},
+			SettingsItem{Label: "New Worktree Package Install", Key: "NEW_WT_PACKAGE_INSTALL",
+				Value: boolToStr(s.Config.Global.InstallOnCreate), Kind: SettingBool},
 			SettingsItem{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION",
 				Value: "Press enter to check", Kind: SettingAction},
 		)
@@ -396,6 +398,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.AutoUpdate = item.Value == "true"
 		case "OPEN_ENV_IDE":
 			s.Config.Global.OpenEnvInIDE = item.Value == "true"
+		case "NEW_WT_PACKAGE_INSTALL":
+			s.Config.Global.InstallOnCreate = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {
