@@ -66,8 +66,7 @@ The installer downloads a pre-built binary for your platform. If no pre-built bi
 ```bash
 git clone https://github.com/led-slzr/lts.git
 cd lts
-go build -o lts .
-mv lts ~/.local/bin/
+go build -o ~/.local/bin/lts .
 ```
 
 </details>
