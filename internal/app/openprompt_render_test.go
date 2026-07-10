@@ -32,7 +32,8 @@ func TestOpenPromptOptionsRowMatchesHitZoneMath(t *testing.T) {
 		t.Fatalf("options row %d out of range (%d lines)", rowInModal, len(lines))
 	}
 	row := lines[rowInModal]
-	for _, want := range []string{"IDE", "Claude", "Terminal"} {
+	// Labels derive from the configured commands (default: windsurf/claude/terminal)
+	for _, want := range []string{cfg.IDELabel(), cfg.AICliLabel(), cfg.TerminalLabel()} {
 		if !strings.Contains(row, want) {
 			t.Errorf("options row (modal line %d) missing %q: %q", rowInModal, want, row)
 		}

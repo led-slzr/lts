@@ -92,8 +92,46 @@ type headerLayout struct {
 	Gap          int
 }
 
+// UsageLabels holds the display names of the three click-usage targets,
+// derived from the configured IDE / AI CLI / terminal commands.
+type UsageLabels struct {
+	IDE      string
+	AICli    string
+	Terminal string
+}
+
+// normalized fills empty labels with generic fallbacks.
+func (l UsageLabels) normalized() UsageLabels {
+	if l.IDE == "" {
+		l.IDE = "IDE"
+	}
+	if l.AICli == "" {
+		l.AICli = "AI CLI"
+	}
+	if l.Terminal == "" {
+		l.Terminal = "Terminal"
+	}
+	return l
+}
+
+// modes returns the usage/label pairs in display order.
+func (l UsageLabels) modes() []struct {
+	usage opener.ClickUsage
+	name  string
+} {
+	l = l.normalized()
+	return []struct {
+		usage opener.ClickUsage
+		name  string
+	}{
+		{opener.ClickIDE, l.IDE},
+		{opener.ClickAICli, l.AICli},
+		{opener.ClickTerminal, l.Terminal},
+	}
+}
+
 // computeHeaderLayout is the single source of truth for header positioning.
-func computeHeaderLayout(termWidth int, aiCliLabel string, updateAvailable ...string) headerLayout {
+func computeHeaderLayout(termWidth int, labels UsageLabels, updateAvailable ...string) headerLayout {
 	bannerStyle := lipgloss.NewStyle().
 		Foreground(ColorDarkGreen).
 		Background(ColorBlack).
@@ -110,7 +148,7 @@ func computeHeaderLayout(termWidth int, aiCliLabel string, updateAvailable ...st
 	bannerLines = append(bannerLines, versionLine)
 	bannerWidth := lipgloss.Width(strings.Join(bannerLines, "\n"))
 
-	usageStr := renderClickUsage(opener.ClickIDE, aiCliLabel, -1)
+	usageStr := renderClickUsage(opener.ClickIDE, labels, -1)
 	statusLine := renderStatusLine("", false, 0)
 	rightBlock := usageStr + "\n" + statusLine
 	rightWidth := lipgloss.Width(rightBlock)
@@ -129,27 +167,16 @@ func computeHeaderLayout(termWidth int, aiCliLabel string, updateAvailable ...st
 }
 
 // ClickUsageHitZones returns the screen coordinates of each click usage tab.
-func ClickUsageHitZones(termWidth int, aiCliLabel string, updateAvailable ...string) (y int, zones []ClickUsageZone) {
-	if aiCliLabel == "" {
-		aiCliLabel = "AI CLI"
-	}
-
+func ClickUsageHitZones(termWidth int, labels UsageLabels, updateAvailable ...string) (y int, zones []ClickUsageZone) {
 	ua := ""
 	if len(updateAvailable) > 0 {
 		ua = updateAvailable[0]
 	}
-	layout := computeHeaderLayout(termWidth, aiCliLabel, ua)
+	layout := computeHeaderLayout(termWidth, labels, ua)
 
 	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("Click Usage:")) + 1 // +1 for space after label
 
-	modes := []struct {
-		usage opener.ClickUsage
-		name  string
-	}{
-		{opener.ClickIDE, "IDE"},
-		{opener.ClickAICli, aiCliLabel},
-		{opener.ClickTerminal, "Terminal"},
-	}
+	modes := labels.modes()
 
 	y = 2 // 1 (header top margin) + 1 (rightBlock marginTop)
 	curX := layout.RightBlockX + labelW
@@ -177,7 +204,7 @@ type HeaderOpts struct {
 	UpdateBadgeHovered bool
 }
 
-func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, opts ...HeaderOpts) string {
+func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, opts ...HeaderOpts) string {
 	var o HeaderOpts
 	if len(opts) > 0 {
 		o = opts[0]
@@ -230,14 +257,14 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, aiCliLabel string, o
 	banner := strings.Join(bannerLines, "\n")
 
 	// Render click usage toggle
-	usageStr := renderClickUsage(activeUsage, aiCliLabel, o.HoveredUsage)
+	usageStr := renderClickUsage(activeUsage, labels, o.HoveredUsage)
 
 	// Render status line below usage
 	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
 	rightBlock := usageStr + "\n" + statusLine
 
 	// Position: banner center-left, usage+status top-right
-	layout := computeHeaderLayout(width, aiCliLabel, o.UpdateAvailable)
+	layout := computeHeaderLayout(width, labels, o.UpdateAvailable)
 	gap := layout.Gap
 
 	// Place right block aligned to top of banner
@@ -272,12 +299,8 @@ func renderStatusLine(status string, loading bool, frame int) string {
 	return line
 }
 
-func renderClickUsage(active opener.ClickUsage, aiCliLabel string, hoveredUsage opener.ClickUsage) string {
+func renderClickUsage(active opener.ClickUsage, labels UsageLabels, hoveredUsage opener.ClickUsage) string {
 	label := ClickUsageLabelStyle.Render("Click Usage:")
-
-	if aiCliLabel == "" {
-		aiCliLabel = "AI CLI"
-	}
 
 	hoveredStyle := lipgloss.NewStyle().
 		Foreground(ColorWhite).
@@ -286,14 +309,7 @@ func renderClickUsage(active opener.ClickUsage, aiCliLabel string, hoveredUsage 
 		Underline(true).
 		Padding(0, 1)
 
-	modes := []struct {
-		usage opener.ClickUsage
-		name  string
-	}{
-		{opener.ClickIDE, "IDE"},
-		{opener.ClickAICli, aiCliLabel},
-		{opener.ClickTerminal, "Terminal"},
-	}
+	modes := labels.modes()
 
 	var parts []string
 	parts = append(parts, label)

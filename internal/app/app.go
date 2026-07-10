@@ -122,6 +122,16 @@ func NewModel(cfg config.Config) Model {
 	}
 }
 
+// usageLabels returns the display names of the click-usage targets,
+// derived from the configured commands.
+func (m *Model) usageLabels() ui.UsageLabels {
+	return ui.UsageLabels{
+		IDE:      m.config.IDELabel(),
+		AICli:    m.config.AICliLabel(),
+		Terminal: m.config.TerminalLabel(),
+	}
+}
+
 // recomputeLayout recalculates grid, hit zones, and section Y positions.
 // Must be called from Update (not View) so the state persists.
 func (m *Model) recomputeLayout() {
@@ -132,7 +142,7 @@ func (m *Model) recomputeLayout() {
 	yPos := 0
 
 	// Header (includes status line) — fixed, not scrollable
-	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel(), ui.HeaderOpts{
+	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.usageLabels(), ui.HeaderOpts{
 		Loading:            m.loading,
 		Frame:              m.loaderFrame,
 		StatusMsg:          m.statusMsg,
@@ -882,7 +892,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Check click usage toggle hover (fixed screen position in header)
-		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.usageLabels(), m.updateAvailVersion)
 		if y == usageY {
 			for _, z := range usageZones {
 				if x >= z.X && x < z.X+z.W {
@@ -1022,7 +1032,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Check click usage toggle click (fixed screen position in header)
-		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.config.AICliLabel(), m.updateAvailVersion)
+		usageY, usageZones := ui.ClickUsageHitZones(m.width, m.usageLabels(), m.updateAvailVersion)
 		if y == usageY {
 			for _, z := range usageZones {
 				if x >= z.X && x < z.X+z.W && z.Usage != m.clickUsage {
@@ -1162,7 +1172,7 @@ func (m Model) View() string {
 
 	// Show tree growth animation during initial load
 	if m.initialLoad {
-		header := ui.RenderHeader(m.width, m.clickUsage, m.config.AICliLabel())
+		header := ui.RenderHeader(m.width, m.clickUsage, m.usageLabels())
 		loader := ui.RenderLoader(m.width, m.loaderFrame, "Discovering repositories")
 		content := header + "\n" + loader
 		return paintBlack(content, m.width, m.height)
@@ -1339,9 +1349,9 @@ func (m Model) openPromptOptions() []openPromptOption {
 		usage opener.ClickUsage
 		label string
 	}{
-		{opener.ClickIDE, "IDE"},
+		{opener.ClickIDE, m.config.IDELabel()},
 		{opener.ClickAICli, m.config.AICliLabel()},
-		{opener.ClickTerminal, "Terminal"},
+		{opener.ClickTerminal, m.config.TerminalLabel()},
 	}
 	opts := make([]openPromptOption, 0, len(labels))
 	x := 3 + 2 // border(1) + padding(2), then line indent

@@ -174,24 +174,42 @@ func (c *Config) SetLastUpdateCheck(ts int64) error {
 	return c.SaveGlobal()
 }
 
+// commandLabel derives a display label from a command string: first word
+// (before any flags), title-cased, with overrides for known tools whose
+// display name differs from their command.
+func commandLabel(cmd, fallback string, special map[string]string) string {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return fallback
+	}
+	name := parts[0]
+	if label, ok := special[strings.ToLower(name)]; ok {
+		return label
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
 // AICliLabel returns a display label derived from the AI CLI command.
 // e.g. "claude" → "Claude", "opencode" → "Opencode", "claude --dangerously-skip-permissions" → "Claude"
 func (c *Config) AICliLabel() string {
-	cmd := c.Global.AICliCommand
-	if cmd == "" {
-		return "AI CLI"
-	}
-	// Take first word (before any flags)
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return "AI CLI"
-	}
-	name := parts[0]
-	// Title case
-	if len(name) > 0 {
-		return strings.ToUpper(name[:1]) + name[1:]
-	}
-	return name
+	return commandLabel(c.Global.AICliCommand, "AI CLI", nil)
+}
+
+// IDELabel returns a display label derived from the IDE command.
+// e.g. "code" → "VSCode", "windsurf" → "Windsurf"
+func (c *Config) IDELabel() string {
+	return commandLabel(c.Global.IDECommand, "IDE", map[string]string{
+		"code": "VSCode",
+	})
+}
+
+// TerminalLabel returns a display label derived from the terminal setting.
+// e.g. "ghostty" → "Ghostty", "iterm" → "iTerm"
+func (c *Config) TerminalLabel() string {
+	return commandLabel(c.Global.Terminal, "Terminal", map[string]string{
+		"iterm":   "iTerm",
+		"wezterm": "WezTerm",
+	})
 }
 
 // SaveGlobal writes the global config to ~/.config/lts/config
