@@ -242,11 +242,13 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 		}
 		return s.handleNavKey(msg)
 	case tea.MouseMsg:
-		// Tab hover detection
+		// Hover: tabs and setting rows
 		if msg.Action == tea.MouseActionMotion {
 			s.HoveredTab = s.hitTestTab(msg.X, msg.Y)
+			if idx := s.hitTestItem(msg.X, msg.Y); idx >= 0 {
+				s.CursorIdx = idx
+			}
 		}
-		// Tab click detection
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 			if tabIdx := s.hitTestTab(msg.X, msg.Y); tabIdx >= 0 && tabIdx != s.ActiveTab {
 				s.ActiveTab = tabIdx
@@ -258,14 +260,19 @@ func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 				s.buildItems(s.RepoNames)
 				return s, nil
 			}
+			// Click on a setting row activates it (cycle/edit/toggle/run)
+			if idx := s.hitTestItem(msg.X, msg.Y); idx >= 0 {
+				s.CursorIdx = idx
+				return s.activateCursor()
+			}
 		}
 		if msg.Button == tea.MouseButtonWheelUp {
 			if s.Scroll > 0 {
 				s.Scroll--
 			}
 		} else if msg.Button == tea.MouseButtonWheelDown {
-			maxScroll := len(s.Items) + len(s.Items)/2
-			if s.Scroll < maxScroll {
+			_, _, total, maxVis := s.visibleWindow()
+			if s.Scroll < total-maxVis {
 				s.Scroll++
 			}
 		}
@@ -303,38 +310,45 @@ func (s SettingsModel) handleNavKey(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
 	case "down", "j":
 		s.moveCursor(1)
 	case "enter", " ":
-		if len(s.Items) == 0 {
-			return s, nil
-		}
-		item := &s.Items[s.CursorIdx]
-		switch item.Kind {
-		case SettingEnum:
-			for i, opt := range item.Options {
-				if opt == item.Value {
-					item.Value = item.Options[(i+1)%len(item.Options)]
-					return s, s.applyChange(*item)
-				}
-			}
-			if len(item.Options) > 0 {
-				item.Value = item.Options[0]
+		return s.activateCursor()
+	}
+	return s, nil
+}
+
+// activateCursor performs the enter action for the item under the cursor:
+// cycle enums, edit text, toggle bools, run actions.
+func (s SettingsModel) activateCursor() (SettingsModel, tea.Cmd) {
+	if len(s.Items) == 0 || s.CursorIdx < 0 || s.CursorIdx >= len(s.Items) {
+		return s, nil
+	}
+	item := &s.Items[s.CursorIdx]
+	switch item.Kind {
+	case SettingEnum:
+		for i, opt := range item.Options {
+			if opt == item.Value {
+				item.Value = item.Options[(i+1)%len(item.Options)]
 				return s, s.applyChange(*item)
 			}
-		case SettingText:
-			s.Editing = true
-			s.EditInput.SetValue(item.Value)
-			s.EditInput.Focus()
-			return s, textinput.Blink
-		case SettingBool:
-			if item.Value == "true" {
-				item.Value = "false"
-			} else {
-				item.Value = "true"
-			}
-			return s, s.applyChange(*item)
-		case SettingAction:
-			action := item.Key
-			return s, func() tea.Msg { return SettingsActionMsg{Action: action} }
 		}
+		if len(item.Options) > 0 {
+			item.Value = item.Options[0]
+			return s, s.applyChange(*item)
+		}
+	case SettingText:
+		s.Editing = true
+		s.EditInput.SetValue(item.Value)
+		s.EditInput.Focus()
+		return s, textinput.Blink
+	case SettingBool:
+		if item.Value == "true" {
+			item.Value = "false"
+		} else {
+			item.Value = "true"
+		}
+		return s, s.applyChange(*item)
+	case SettingAction:
+		action := item.Key
+		return s, func() tea.Msg { return SettingsActionMsg{Action: action} }
 	}
 	return s, nil
 }
@@ -363,11 +377,7 @@ func (s *SettingsModel) moveCursor(delta int) {
 }
 
 func (s *SettingsModel) ensureCursorVisible() {
-	// border(2) + padding(2) + title(2) + tabs(3) + indicators(2) + blank(1) + footer(2)
-	maxVisible := s.ViewHeight - 14
-	if maxVisible < 5 {
-		maxVisible = 5
-	}
+	maxVisible := s.maxVisibleRows()
 
 	cursorLine := s.cursorContentLine()
 	if cursorLine < s.Scroll {
@@ -382,9 +392,15 @@ func (s *SettingsModel) ensureCursorVisible() {
 }
 
 func (s *SettingsModel) cursorContentLine() int {
+	return s.itemContentLine(s.CursorIdx)
+}
+
+// itemContentLine returns the content-region row of item idx (section headers
+// and blank lines included). Must match View's line construction.
+func (s *SettingsModel) itemContentLine(idx int) int {
 	line := 0
 	lastSection := ""
-	for i := 0; i <= s.CursorIdx && i < len(s.Items); i++ {
+	for i := 0; i <= idx && i < len(s.Items); i++ {
 		if s.Items[i].Section != lastSection {
 			if lastSection != "" {
 				line++ // blank line before new section
@@ -394,7 +410,7 @@ func (s *SettingsModel) cursorContentLine() int {
 			}
 			lastSection = s.Items[i].Section
 		}
-		if i < s.CursorIdx {
+		if i < idx {
 			line++
 		}
 	}
@@ -512,7 +528,57 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	)
 }
 
-// modalMetrics computes the modal layout dimensions matching View().
+// footerCount returns the number of footer lines below the item list.
+func (s *SettingsModel) footerCount() int {
+	if s.SaveError != "" || s.SaveStatus != "" {
+		return 2
+	}
+	return 1
+}
+
+// maxVisibleRows returns how many content rows fit in the scroll viewport.
+func (s *SettingsModel) maxVisibleRows() int {
+	// Modal border(2) + padding(2) + title(2) + tabs(3) + scroll indicators(2) + blank(1)
+	mv := s.ViewHeight - 12 - s.footerCount()
+	if mv < 5 {
+		mv = 5
+	}
+	return mv
+}
+
+// totalContentRows returns the total scrollable content rows (items plus
+// section headers and blank lines, matching View's line construction).
+func (s *SettingsModel) totalContentRows() int {
+	if len(s.Items) == 0 {
+		if s.ActiveTab == TabWorktrees {
+			return 1 // "No worktrees configured"
+		}
+		return 0
+	}
+	return s.itemContentLine(len(s.Items)-1) + 1
+}
+
+// visibleWindow returns the clamped scroll window over the content rows.
+func (s *SettingsModel) visibleWindow() (scroll, end, total, maxVis int) {
+	total = s.totalContentRows()
+	maxVis = s.maxVisibleRows()
+	if total <= maxVis {
+		return 0, total, total, maxVis
+	}
+	scroll = s.Scroll
+	end = scroll + maxVis
+	if end > total {
+		end = total
+		scroll = end - maxVis
+		if scroll < 0 {
+			scroll = 0
+		}
+	}
+	return scroll, end, total, maxVis
+}
+
+// modalMetrics computes the modal layout dimensions matching View() exactly —
+// mouse hit-testing depends on this staying in lockstep with rendering.
 func (s *SettingsModel) modalMetrics() (modalWidth, modalLeft, contentLeft, contentTopY int) {
 	w := s.ViewWidth
 	h := s.ViewHeight
@@ -533,11 +599,20 @@ func (s *SettingsModel) modalMetrics() (modalWidth, modalLeft, contentLeft, cont
 	modalLeft = (w - renderedW) / 2
 	contentLeft = modalLeft + 1 + 2 // border + padding
 
-	// Estimate modal height for vertical centering
-	// Content: title(1) + blank(1) + tabbar(1) + separator(1) + blank(1) + items + footer
-	contentLines := 5 + len(s.Items) + 3 // rough estimate
-	modalContentH := contentLines + 2    // padding top + bottom
-	renderedH := modalContentH + 2       // border top + bottom
+	// Content: title(1) + blank(1) + tabbar(1) + separator(1) + blank(1)
+	// + [↑ more] + visible rows + [↓ more] + blank(1) + footer
+	scroll, end, total, maxVis := s.visibleWindow()
+	body := end - scroll
+	if total > maxVis {
+		if scroll > 0 {
+			body++ // "↑ more"
+		}
+		if end < total {
+			body++ // "↓ more"
+		}
+	}
+	contentLines := 5 + body + 1 + s.footerCount()
+	renderedH := contentLines + 2 + 2 // padding + border
 	if renderedH > h {
 		renderedH = h
 	}
@@ -545,6 +620,49 @@ func (s *SettingsModel) modalMetrics() (modalWidth, modalLeft, contentLeft, cont
 	contentTopY = modalTopY + 1 + 1 // border + padding
 
 	return
+}
+
+// hitTestItem returns the index of the interactive item at screen position
+// (mouseX, mouseY), or -1 when the position isn't on an activatable row.
+func (s *SettingsModel) hitTestItem(mouseX, mouseY int) int {
+	if s.Editing || len(s.Items) == 0 {
+		return -1
+	}
+	modalWidth, modalLeft, _, contentTopY := s.modalMetrics()
+	if mouseX < modalLeft || mouseX >= modalLeft+modalWidth+2 {
+		return -1
+	}
+	scroll, end, total, maxVis := s.visibleWindow()
+	itemsStart := contentTopY + 5
+	if total > maxVis && scroll > 0 {
+		itemsStart++ // "↑ more" line
+	}
+	if mouseY < itemsStart {
+		return -1
+	}
+	row := mouseY - itemsStart + scroll
+	if row >= end {
+		return -1
+	}
+	for i := range s.Items {
+		if s.itemContentLine(i) == row {
+			if s.Items[i].Kind == SettingDisplay {
+				return -1
+			}
+			return i
+		}
+	}
+	return -1
+}
+
+// tabCell returns the plain text of tab i exactly as rendered (styles add no
+// width) — the single source of truth for tab widths in render and hit-test.
+// Kept tight so four tabs fit on one line even at the minimum modal width.
+func (s *SettingsModel) tabCell(i int) string {
+	if i == s.ActiveTab {
+		return "[" + s.TabNames[i] + "]"
+	}
+	return " " + s.TabNames[i] + " "
 }
 
 // hitTestTab checks if the mouse click is on a tab and returns the tab index (-1 if none).
@@ -558,21 +676,12 @@ func (s *SettingsModel) hitTestTab(mouseX, mouseY int) int {
 	}
 
 	curX := contentLeft
-	for i, name := range s.TabNames {
-		var tabText string
-		if i == s.ActiveTab {
-			tabText = " [ " + name + " ] "
-		} else {
-			tabText = "   " + name + "   "
-		}
-		tabW := lipgloss.Width(tabText)
+	for i := range s.TabNames {
+		tabW := lipgloss.Width(s.tabCell(i))
 		if mouseX >= curX && mouseX < curX+tabW {
 			return i
 		}
-		// Account for the separator "│" between tabs
-		if i < len(s.TabNames)-1 {
-			curX += tabW + 1 // +1 for "│"
-		}
+		curX += tabW + 1 // +1 for the "│" separator
 	}
 	return -1
 }
@@ -581,6 +690,8 @@ func (s SettingsModel) View(width, height int) string {
 	if !s.Active {
 		return ""
 	}
+	// Keep the dimensions the layout helpers use in sync with what we render
+	s.ViewWidth, s.ViewHeight = width, height
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorGreen).Background(ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
@@ -597,20 +708,21 @@ func (s SettingsModel) View(width, height int) string {
 	// Tab bar
 	activeTabStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
 	inactiveTabStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
-	tabHintStyle := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack)
 	sepStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 
 	var tabParts []string
-	for i, name := range s.TabNames {
-		if i == s.ActiveTab {
-			tabParts = append(tabParts, activeTabStyle.Render(" [ "+name+" ] "))
-		} else if i == s.HoveredTab {
-			tabParts = append(tabParts, inactiveTabStyle.Underline(true).Render("   "+name+"   "))
-		} else {
-			tabParts = append(tabParts, inactiveTabStyle.Render("   "+name+"   "))
+	for i := range s.TabNames {
+		cell := s.tabCell(i)
+		switch {
+		case i == s.ActiveTab:
+			tabParts = append(tabParts, activeTabStyle.Render(cell))
+		case i == s.HoveredTab:
+			tabParts = append(tabParts, inactiveTabStyle.Underline(true).Render(cell))
+		default:
+			tabParts = append(tabParts, inactiveTabStyle.Render(cell))
 		}
 	}
-	tabBar := strings.Join(tabParts, sepStyle.Render("│")) + tabHintStyle.Render("  (tab | click)")
+	tabBar := strings.Join(tabParts, sepStyle.Render("│"))
 	lines = append(lines, tabBar)
 	lines = append(lines, dimStyle.Render(strings.Repeat("─", 30)))
 	lines = append(lines, "")
@@ -701,31 +813,23 @@ func (s SettingsModel) View(width, height int) string {
 	}
 	footerLines = append(footerLines, dimStyle.Render("↑/↓ navigate • enter edit/cycle • tab switch • esc close"))
 
-	// Apply scroll: reserve space for modal chrome, title, tabs, scroll indicators, and footer
-	// Modal border(2) + padding(2) + title(2) + tabs(3) + scroll indicators(2) + blank(1) = 12
-	maxVisible := height - 12 - len(footerLines)
-	if maxVisible < 5 {
-		maxVisible = 5
-	}
+	// Apply scroll — the window math is shared with mouse hit-testing
+	// (visibleWindow/modalMetrics) and must stay in lockstep with it.
+	scroll, end, _, maxVisible := s.visibleWindow()
 
 	// Content lines: everything after title + blank + tabs + separator + blank
 	titleLines := lines[:5] // "Settings", blank, tab bar, separator, blank
 	contentLines := lines[5:]
 
 	if len(contentLines) > maxVisible {
-		end := s.Scroll + maxVisible
 		if end > len(contentLines) {
 			end = len(contentLines)
-			s.Scroll = end - maxVisible
-			if s.Scroll < 0 {
-				s.Scroll = 0
-			}
 		}
-		visibleContent := contentLines[s.Scroll:end]
+		visibleContent := contentLines[scroll:end]
 
 		var scrolledLines []string
 		scrolledLines = append(scrolledLines, titleLines...)
-		if s.Scroll > 0 {
+		if scroll > 0 {
 			scrolledLines = append(scrolledLines, dimStyle.Render("  ↑ more"))
 		}
 		scrolledLines = append(scrolledLines, visibleContent...)
@@ -740,8 +844,6 @@ func (s SettingsModel) View(width, height int) string {
 		lines = append(lines, footerLines...)
 	}
 
-	content := strings.Join(lines, "\n")
-
 	modalWidth := 78
 	if width-4 < modalWidth {
 		modalWidth = width - 4
@@ -749,6 +851,18 @@ func (s SettingsModel) View(width, height int) string {
 	if modalWidth < 50 {
 		modalWidth = 50
 	}
+
+	// Truncate every line to the inner width so nothing ever wraps — the
+	// layout math in modalMetrics/hitTest* assumes one row per line.
+	innerWidth := modalWidth - 4 // Padding(1, 2)
+	truncStyle := lipgloss.NewStyle().MaxWidth(innerWidth)
+	for i := range lines {
+		if lipgloss.Width(lines[i]) > innerWidth {
+			lines[i] = truncStyle.Render(lines[i])
+		}
+	}
+	content := strings.Join(lines, "\n")
+
 	modal := ModalStyle.Width(modalWidth).Render(content)
 
 	return lipgloss.Place(
