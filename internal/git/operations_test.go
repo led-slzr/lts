@@ -60,3 +60,30 @@ func TestCleanEmptyLTSDirsKeepsRealContent(t *testing.T) {
 		t.Fatalf("expected %s to survive, got %v", lts, err)
 	}
 }
+
+func TestParseGitVersion(t *testing.T) {
+	cases := []struct {
+		in           string
+		major, minor int
+		ok           bool
+	}{
+		{"git version 2.39.5 (Apple Git-154)", 2, 39, true},
+		{"git version 2.17.0", 2, 17, true},
+		{"git version 2.50.1.windows.1", 2, 50, true},
+		{"not a version", 0, 0, false},
+		{"", 0, 0, false},
+	}
+	for _, tc := range cases {
+		major, minor, ok := parseGitVersion(tc.in)
+		if major != tc.major || minor != tc.minor || ok != tc.ok {
+			t.Errorf("parseGitVersion(%q) = %d, %d, %v; want %d, %d, %v",
+				tc.in, major, minor, ok, tc.major, tc.minor, tc.ok)
+		}
+	}
+}
+
+func TestCheckPrerequisitesOnThisMachine(t *testing.T) {
+	if err := CheckPrerequisites(); err != nil {
+		t.Errorf("expected prerequisites to pass here, got: %v", err)
+	}
+}

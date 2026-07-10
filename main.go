@@ -7,6 +7,7 @@ import (
 
 	"lts-revamp/internal/app"
 	"lts-revamp/internal/config"
+	"lts-revamp/internal/git"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/version"
 
@@ -20,6 +21,11 @@ func main() {
 			fmt.Println(version.Full())
 			os.Exit(0)
 		}
+	}
+
+	if err := git.CheckPrerequisites(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	workDir := getWorkDir()
