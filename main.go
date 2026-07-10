@@ -69,19 +69,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Check if we need to relaunch in a different directory
-	if m, ok := finalModel.(app.Model); ok && m.RelaunchDir != "" {
-		exe, err := os.Executable()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not find executable: %v\n", err)
-			os.Exit(1)
+	if m, ok := finalModel.(app.Model); ok {
+		// Reset requested from Diagnostics: rerun the setup wizard, then relaunch
+		if m.RelaunchSetup {
+			setupModel := ui.NewSetup()
+			sp := tea.NewProgram(setupModel, tea.WithAltScreen())
+			if _, err := sp.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+			relaunch(workDir)
 		}
-		// Replace the current process with a new LTS instance
-		err = syscall.Exec(exe, []string{exe, "--dir", m.RelaunchDir}, os.Environ())
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: could not relaunch: %v\n", err)
-			os.Exit(1)
+		// Relaunch in a different directory (history suggestion)
+		if m.RelaunchDir != "" {
+			relaunch(m.RelaunchDir)
 		}
+	}
+}
+
+// relaunch replaces the current process with a fresh LTS instance in dir.
+func relaunch(dir string) {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: could not find executable: %v\n", err)
+		os.Exit(1)
+	}
+	err = syscall.Exec(exe, []string{exe, "--dir", dir}, os.Environ())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: could not relaunch: %v\n", err)
+		os.Exit(1)
 	}
 }
 

@@ -40,6 +40,29 @@ func CheckPrerequisites() error {
 		major, minor, minGitMajor, minGitMinor)
 }
 
+// GitVersion returns the installed git version string and whether it meets
+// the minimum requirement. Empty version means git is missing entirely.
+func GitVersion() (version string, ok bool) {
+	out, err := exec.Command("git", "--version").Output()
+	if err != nil {
+		return "", false
+	}
+	major, minor, parsed := parseGitVersion(string(out))
+	if !parsed {
+		return strings.TrimSpace(string(out)), true
+	}
+	// Show the full numeric token (e.g. "2.39.5"), judge on major.minor
+	version = fmt.Sprintf("%d.%d", major, minor)
+	for _, f := range strings.Fields(string(out)) {
+		if strings.HasPrefix(f, fmt.Sprintf("%d.%d", major, minor)) {
+			version = f
+			break
+		}
+	}
+	ok = major > minGitMajor || (major == minGitMajor && minor >= minGitMinor)
+	return version, ok
+}
+
 // parseGitVersion extracts major.minor from `git --version` output,
 // e.g. "git version 2.39.5 (Apple Git-154)".
 func parseGitVersion(s string) (major, minor int, ok bool) {

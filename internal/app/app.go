@@ -90,6 +90,9 @@ type Model struct {
 	// Relaunch: set to a directory path to relaunch LTS there after quit
 	RelaunchDir string
 
+	// RelaunchSetup: quit into the setup wizard, then relaunch here
+	RelaunchSetup bool
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
@@ -276,6 +279,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusGen++
 			m.recomputeLayout()
 			return m, updateCheckCmd(false)
+		case "RESET_SETUP_ACTION":
+			m.RelaunchSetup = true
+			return m, tea.Quit
 		}
 		return m, nil
 

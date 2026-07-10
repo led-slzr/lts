@@ -3,6 +3,9 @@ package ui
 import (
 	"fmt"
 	"lts-revamp/internal/config"
+	"lts-revamp/internal/git"
+	"lts-revamp/internal/version"
+	"os"
 	"strings"
 	"time"
 
@@ -173,11 +176,62 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			)
 		}
 	case TabDiagnostics:
-		s.Items = append(s.Items,
-			SettingsItem{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION",
-				Value: "Press enter to check", Kind: SettingAction},
-		)
+		s.Items = append(s.Items, s.diagnosticItems()...)
 	}
+}
+
+// diagnosticItems computes the health checks shown on the Diagnostics tab.
+func (s *SettingsModel) diagnosticItems() []SettingsItem {
+	gitStatus := "not found ✗ — install git"
+	if v, ok := git.GitVersion(); ok {
+		gitStatus = v + " ✓"
+	} else if v != "" {
+		gitStatus = v + " ✗ — LTS needs git 2.17+"
+	}
+
+	repoStatus := fmt.Sprintf("%d found ✓", len(s.RepoNames))
+	if len(s.RepoNames) == 0 {
+		repoStatus = "none found ✗ — run lts in your projects folder (lts --dir <path>)"
+	}
+
+	configStatus := "writable ✓"
+	if f, err := os.OpenFile(config.GlobalConfigPath(), os.O_WRONLY, 0); err != nil {
+		configStatus = "not writable ✗ — " + err.Error()
+	} else {
+		f.Close()
+	}
+
+	build := version.Display()
+	if version.IsDev() {
+		build += " — built from source"
+	} else {
+		build += " — official release"
+	}
+
+	binPath := "unknown"
+	if exe, err := os.Executable(); err == nil {
+		binPath = shortenHome(exe)
+	}
+
+	return []SettingsItem{
+		{Label: "Git", Key: "DIAG_GIT", Value: gitStatus, Kind: SettingDisplay},
+		{Label: "Working Directory", Key: "DIAG_WORKDIR", Value: shortenHome(s.Config.WorkDir), Kind: SettingDisplay},
+		{Label: "Repositories", Key: "DIAG_REPOS", Value: repoStatus, Kind: SettingDisplay},
+		{Label: "Config File", Key: "DIAG_CONFIG", Value: configStatus, Kind: SettingDisplay},
+		{Label: "Build", Key: "DIAG_BUILD", Value: build, Kind: SettingDisplay},
+		{Label: "Binary", Key: "DIAG_BINARY", Value: binPath, Kind: SettingDisplay},
+		{Label: "Last Update Check", Key: "DIAG_UPDATE", Value: formatLastRefresh(s.Config.Global.LastUpdateCheck), Kind: SettingDisplay},
+		{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION", Value: "Press enter to check", Kind: SettingAction},
+		{Label: "Reset LTS (Open Setup Wizard)", Key: "RESET_SETUP_ACTION", Value: "Press enter to rerun setup", Kind: SettingAction},
+	}
+}
+
+// shortenHome replaces the home-directory prefix with ~ for display.
+func shortenHome(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
 }
 
 func (s SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
