@@ -376,12 +376,7 @@ func openCreatedWorkspaces(m Model, usage opener.ClickUsage) (Model, tea.Cmd) {
 			continue
 		}
 		opened[target] = true
-		if err := opener.OpenWorktree(target, usage, opener.Options{
-			IDECommand:   m.config.Global.IDECommand,
-			AICliCommand: m.config.Global.AICliCommand,
-			Terminal:     m.config.Global.Terminal,
-			Multiplexer:  m.config.Global.Multiplexer,
-		}); err != nil {
+		if err := opener.OpenWorktree(target, usage, m.openerOpts()); err != nil {
 			openErr = err
 		}
 	}

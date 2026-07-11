@@ -153,10 +153,12 @@ func (m *Model) usageLabels() ui.UsageLabels {
 // openerOpts assembles the opener configuration from settings.
 func (m *Model) openerOpts() opener.Options {
 	return opener.Options{
-		IDECommand:   m.config.Global.IDECommand,
-		AICliCommand: m.config.Global.AICliCommand,
-		Terminal:     m.config.Global.Terminal,
-		Multiplexer:  m.config.Global.Multiplexer,
+		IDECommand:      m.config.Global.IDECommand,
+		AICliCommand:    m.config.Global.AICliCommand,
+		Terminal:        m.config.Global.Terminal,
+		Multiplexer:     m.config.Global.Multiplexer,
+		TmuxAIPaneWidth: m.config.Global.TmuxAIPaneWidth,
+		TmuxRightPanes:  m.config.Global.TmuxRightPanes,
 	}
 }
 

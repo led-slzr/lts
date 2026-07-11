@@ -56,11 +56,11 @@ func sanitizeSessionName(s string) string {
 }
 
 // openTmux opens the worktree's tmux session in the configured terminal,
-// creating it first if needed (left pane: AI CLI, right pane: shell).
+// creating it first if needed (left pane: AI CLI, right column: shells).
 // focusAI selects the AI pane; otherwise the shell pane is focused.
 func openTmux(path string, o Options, focusAI bool) error {
 	name := SessionName(path)
-	if err := ensureTmuxSession(name, path, o.AICliCommand); err != nil {
+	if err := ensureTmuxSession(name, path, o.AICliCommand, o.TmuxAIPaneWidth, o.TmuxRightPanes); err != nil {
 		return err
 	}
 	focusTmuxPane(name, focusAI)
@@ -72,10 +72,37 @@ func openTmux(path string, o Options, focusAI bool) error {
 	return openTerminalWithCommand(path, o.Terminal, fmt.Sprintf("'%s' attach-session -t '%s'", tmuxPath, name))
 }
 
+// clampAIPaneWidth normalizes the configured AI pane width percent.
+func clampAIPaneWidth(pct int) int {
+	if pct == 0 {
+		return 50
+	}
+	if pct < 20 {
+		return 20
+	}
+	if pct > 90 {
+		return 90
+	}
+	return pct
+}
+
+// rightSplitPercents returns the -l percentages that stack the right column
+// into `panes` evenly sized panes, splitting the bottom pane each time:
+// 2 panes → [50], 3 panes → [66, 50].
+func rightSplitPercents(panes int) []int {
+	var out []int
+	for i := 1; i < panes; i++ {
+		remaining := panes - i
+		out = append(out, remaining*100/(remaining+1))
+	}
+	return out
+}
+
 // ensureTmuxSession creates the session if it doesn't exist yet: pane 0
-// (left) runs the AI CLI, the horizontal split (right) is a plain shell.
-// The commands talk to the tmux server directly — no terminal needed.
-func ensureTmuxSession(name, dir, aiCliCommand string) error {
+// (left) runs the AI CLI at the configured width, the right column holds
+// one or more stacked shells. Talks to the tmux server directly — no
+// terminal needed. Existing sessions keep their layout untouched.
+func ensureTmuxSession(name, dir, aiCliCommand string, aiWidthPct, rightPanes int) error {
 	// "=" forces an exact-name match (plain -t does prefix matching)
 	if exec.Command("tmux", "has-session", "-t", "="+name).Run() == nil {
 		return nil
@@ -86,9 +113,21 @@ func ensureTmuxSession(name, dir, aiCliCommand string) error {
 	}
 	win := strings.TrimSpace(string(out))
 	if aiCliCommand != "" && win != "" {
-		// Split creates the right pane; the AI CLI types into the left one,
-		// running inside the user's interactive shell (full PATH, aliases).
-		exec.Command("tmux", "split-window", "-h", "-t", win, "-c", dir).Run()
+		// Split creates the right column sized to what the AI pane leaves
+		// (-l percent needs tmux ≥3.1; retry unsized for older servers)
+		rightPct := 100 - clampAIPaneWidth(aiWidthPct)
+		if exec.Command("tmux", "split-window", "-h", "-l", fmt.Sprintf("%d%%", rightPct), "-t", win, "-c", dir).Run() != nil {
+			exec.Command("tmux", "split-window", "-h", "-t", win, "-c", dir).Run()
+		}
+		// Stack additional shells in the right column, evenly sized
+		if rightPanes > 3 {
+			rightPanes = 3
+		}
+		for _, pct := range rightSplitPercents(rightPanes) {
+			exec.Command("tmux", "split-window", "-v", "-l", fmt.Sprintf("%d%%", pct), "-t", win+".{bottom-right}", "-c", dir).Run()
+		}
+		// The AI CLI types into the left pane, running inside the user's
+		// interactive shell (full PATH, aliases)
 		exec.Command("tmux", "send-keys", "-t", win+".{left}", aiCliCommand, "Enter").Run()
 	}
 	return nil

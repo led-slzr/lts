@@ -7,6 +7,7 @@ import (
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/version"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -133,6 +134,18 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
 				Value: s.Config.Global.Multiplexer, Kind: SettingEnum,
 				Options: []string{"none", "tmux"}},
+		)
+		if s.Config.Global.Multiplexer == "tmux" {
+			// Layout of newly created sessions (existing ones keep theirs)
+			s.Items = append(s.Items,
+				SettingsItem{Label: "Tmux AI Pane Width %", Key: "TMUX_AI_PANE_WIDTH",
+					Value: fmt.Sprintf("%d", s.Config.Global.TmuxAIPaneWidth), Kind: SettingText},
+				SettingsItem{Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
+					Value: fmt.Sprintf("%d", s.Config.Global.TmuxRightPanes), Kind: SettingEnum,
+					Options: []string{"1", "2", "3"}},
+			)
+		}
+		s.Items = append(s.Items,
 			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
 				Options: []string{"pnpm", "npm", "yarn", "bun"}},
@@ -442,6 +455,8 @@ func (s *SettingsModel) previousValue(item SettingsItem) string {
 			return s.Config.Global.AutoRefresh
 		case "TERMINAL":
 			return s.Config.Global.Terminal
+		case "TMUX_AI_PANE_WIDTH":
+			return fmt.Sprintf("%d", s.Config.Global.TmuxAIPaneWidth)
 		case "DAILY_CHECK_FOR_UPDATES":
 			return boolToStr(s.Config.Global.CheckForUpdates)
 		case "AUTO_UPDATE_NEW_RELEASE":
@@ -503,6 +518,18 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.Terminal = item.Value
 		case "TERMINAL_MULTIPLEXER":
 			s.Config.Global.Multiplexer = item.Value
+		case "TMUX_AI_PANE_WIDTH":
+			n, err := strconv.Atoi(strings.TrimSpace(item.Value))
+			if err != nil || n < 20 || n > 90 {
+				s.SaveError = "AI pane width must be a number between 20 and 90"
+				s.Items[s.CursorIdx].Value = s.previousValue(item)
+				return nil
+			}
+			s.Config.Global.TmuxAIPaneWidth = n
+		case "TMUX_RIGHT_PANES":
+			if n, err := strconv.Atoi(item.Value); err == nil {
+				s.Config.Global.TmuxRightPanes = n
+			}
 		case "DAILY_CHECK_FOR_UPDATES":
 			s.Config.Global.CheckForUpdates = item.Value == "true"
 		case "AUTO_UPDATE_NEW_RELEASE":
@@ -532,6 +559,10 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	if saveErr != nil {
 		s.SaveError = "Failed to save: " + saveErr.Error()
 		return nil
+	}
+	if item.Key == "TERMINAL_MULTIPLEXER" {
+		// Reveal/hide the tmux layout settings
+		s.buildItems(s.RepoNames)
 	}
 	s.SaveStatus = "Saved!"
 	s.saveGen++

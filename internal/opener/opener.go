@@ -35,10 +35,12 @@ func (c ClickUsage) Next() ClickUsage {
 
 // Options carries the configured commands used to open repos and worktrees.
 type Options struct {
-	IDECommand   string
-	AICliCommand string
-	Terminal     string
-	Multiplexer  string // "tmux" = session per worktree; anything else = plain
+	IDECommand      string
+	AICliCommand    string
+	Terminal        string
+	Multiplexer     string // "tmux" = session per worktree; anything else = plain
+	TmuxAIPaneWidth int    // AI pane width % (20–90; 0 = default 50)
+	TmuxRightPanes  int    // stacked panes in the right column (1–3; 0 = 1)
 }
 
 // tmuxEnabled reports whether opens should go through tmux sessions.

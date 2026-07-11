@@ -35,3 +35,35 @@ func TestOptionsTmuxEnabled(t *testing.T) {
 	// on the machine's tmux, just that it doesn't panic
 	_ = (Options{Multiplexer: "tmux"}).tmuxEnabled()
 }
+
+func TestClampAIPaneWidth(t *testing.T) {
+	cases := map[int]int{0: 50, 10: 20, 20: 20, 75: 75, 90: 90, 99: 90}
+	for in, want := range cases {
+		if got := clampAIPaneWidth(in); got != want {
+			t.Errorf("clampAIPaneWidth(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func TestRightSplitPercents(t *testing.T) {
+	cases := []struct {
+		panes int
+		want  []int
+	}{
+		{1, nil},
+		{2, []int{50}},
+		{3, []int{66, 50}},
+	}
+	for _, tc := range cases {
+		got := rightSplitPercents(tc.panes)
+		if len(got) != len(tc.want) {
+			t.Errorf("rightSplitPercents(%d) = %v, want %v", tc.panes, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("rightSplitPercents(%d) = %v, want %v", tc.panes, got, tc.want)
+			}
+		}
+	}
+}
