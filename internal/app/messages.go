@@ -68,6 +68,14 @@ type CleanModulesDoneMsg struct {
 	Err     error
 }
 
+// MaintenanceDoneMsg is sent when startup auto-maintenance completes.
+type MaintenanceDoneMsg struct {
+	Cleaned int      // node_modules directories removed
+	Freed   int64    // bytes freed
+	Killed  []string // idle tmux sessions killed
+	Locked  []string // repo locks to release
+}
+
 // LogEntryMsg is sent when an async operation produces a log line.
 type LogEntryMsg struct {
 	Context string // repo/operation context

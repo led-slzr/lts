@@ -22,6 +22,8 @@ type GlobalConfig struct {
 	TmuxAIPaneWidth int    // AI pane width as % of the window (tmux sessions)
 	TmuxRightPanes  int    // stacked panes in the right column (tmux sessions)
 	Layout          string // main view layout: board, explorer
+	AutoCleanModules string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
+	AutoKillTmux     string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
 	CheckForUpdates bool   // daily check for new releases
 	AutoUpdate      bool   // automatically install new releases in background
 	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
@@ -56,6 +58,8 @@ func DefaultGlobal() GlobalConfig {
 		TmuxAIPaneWidth: 50,
 		TmuxRightPanes:  1,
 		Layout:          "board",
+		AutoCleanModules: "OFF",
+		AutoKillTmux:     "OFF",
 		CheckForUpdates: true,
 		AutoUpdate:      true,
 		OpenEnvInIDE:    true,
@@ -264,6 +268,8 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("TMUX_AI_PANE_WIDTH=\"%d\"", c.Global.TmuxAIPaneWidth),
 		fmt.Sprintf("TMUX_RIGHT_PANES=\"%d\"", c.Global.TmuxRightPanes),
 		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
+		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
+		fmt.Sprintf("AUTO_KILL_TMUX=\"%s\"", c.Global.AutoKillTmux),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
@@ -344,6 +350,12 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["LAYOUT"]; ok {
 		g.Layout = v
+	}
+	if v, ok := kv["AUTO_CLEAN_MODULES"]; ok {
+		g.AutoCleanModules = v
+	}
+	if v, ok := kv["AUTO_KILL_TMUX"]; ok {
+		g.AutoKillTmux = v
 	}
 	if v, ok := kv["DAILY_CHECK_FOR_UPDATES"]; ok {
 		g.CheckForUpdates = v != "false"

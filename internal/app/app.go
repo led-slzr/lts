@@ -2,6 +2,8 @@ package app
 
 import (
 	"fmt"
+	"strconv"
+
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
@@ -273,6 +275,100 @@ func (m *Model) ensureExplorerRepoVisible() {
 	}
 }
 
+// ageDuration parses maintenance age options ("8H", "1D"); "OFF"/"" = 0.
+func ageDuration(v string) time.Duration {
+	v = strings.ToUpper(strings.TrimSpace(v))
+	if v == "" || v == "OFF" || len(v) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(v[:len(v)-1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch v[len(v)-1] {
+	case 'H':
+		return time.Duration(n) * time.Hour
+	case 'D':
+		return time.Duration(n) * 24 * time.Hour
+	}
+	return 0
+}
+
+// maintenanceCandidates returns the worktree paths idle for longer than
+// maxAge (by LastActivity) plus the repo locks cleaning them requires.
+// Busy repos and worktrees without activity data are skipped.
+func (m *Model) maintenanceCandidates(maxAge time.Duration) (paths, locks []string) {
+	cutoff := time.Now().Add(-maxAge).Unix()
+	lockSeen := make(map[string]bool)
+	for _, r := range m.repos {
+		if m.repoBusy(r) || r.NeedsMigration {
+			continue
+		}
+		for _, wt := range r.Worktrees {
+			if wt.LastActivity > 0 && wt.LastActivity < cutoff {
+				paths = append(paths, wt.Path)
+				for _, n := range lockSet(r) {
+					if !lockSeen[n] {
+						lockSeen[n] = true
+						locks = append(locks, n)
+					}
+				}
+			}
+		}
+	}
+	return paths, locks
+}
+
+// startAutoMaintenance kicks off the startup sweep when configured:
+// node_modules of idle worktrees are removed (worktrees with an attached
+// tmux session are skipped) and idle unattached sessions are killed.
+func (m *Model) startAutoMaintenance() tea.Cmd {
+	modAge := ageDuration(m.config.Global.AutoCleanModules)
+	tmuxAge := time.Duration(0)
+	if m.config.Global.Multiplexer == "tmux" {
+		tmuxAge = ageDuration(m.config.Global.AutoKillTmux)
+	}
+	if modAge == 0 && tmuxAge == 0 {
+		return nil
+	}
+	var paths, locks []string
+	if modAge > 0 {
+		paths, locks = m.maintenanceCandidates(modAge)
+	}
+	if len(paths) == 0 && tmuxAge == 0 {
+		return nil
+	}
+	logFn, startCmd := m.beginOp("Auto-maintenance...", locks...)
+	return tea.Batch(startCmd, maintenanceCmd(logFn, paths, tmuxAge, locks))
+}
+
+func maintenanceCmd(logFn git.LogFunc, paths []string, tmuxIdle time.Duration, locked []string) tea.Cmd {
+	return func() tea.Msg {
+		attached := opener.AttachedSessions()
+		cleaned := 0
+		var freed int64
+		for _, p := range paths {
+			if attached[opener.SessionName(p)] {
+				logFn("auto", "Skipping "+filepath.Base(p)+" — tmux session attached", false)
+				continue
+			}
+			r, f, err := git.CleanModules(p, logFn)
+			if err == nil {
+				cleaned += r
+				freed += f
+			}
+		}
+		var killed []string
+		if tmuxIdle > 0 {
+			killed = opener.KillIdleSessions(tmuxIdle)
+			for _, k := range killed {
+				logFn("auto", "Killed idle session "+k, false)
+			}
+		}
+		return MaintenanceDoneMsg{Cleaned: cleaned, Freed: freed, Killed: killed, Locked: locked}
+	}
+}
+
 // openCreateModalFor opens the create modal pre-seeded with a repo's
 // selection and jumps straight to the branch step.
 func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
@@ -541,6 +637,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadReposCmd(&m.config)
 
 	case ReposLoadedMsg:
+		wasInitialLoad := m.initialLoad
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
 		m.initialLoad = false
@@ -560,6 +657,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.SaveHistory(m.config.WorkDir, len(m.repos))
 		}
 		m.recomputeLayout()
+		// Startup auto-maintenance runs once, after the first discovery
+		if wasInitialLoad {
+			if cmd := m.startAutoMaintenance(); cmd != nil {
+				return m, cmd
+			}
+		}
 		return m, nil
 
 	case RefreshDoneMsg:
@@ -657,6 +760,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
+
+	case MaintenanceDoneMsg:
+		m.clearBusy(msg.Locked...)
+		for _, k := range msg.Killed {
+			delete(m.tmuxLive, k)
+		}
+		if msg.Cleaned > 0 || len(msg.Killed) > 0 {
+			m.statusMsg = fmt.Sprintf("Auto-maintenance: cleaned %d node_modules (%s), killed %d idle session(s)",
+				msg.Cleaned, git.HumanBytes(msg.Freed), len(msg.Killed))
+		} else {
+			m.statusMsg = ""
+		}
+		m.recomputeLayout()
+		return m, clearStatusCmd()
 
 	case CleanModulesDoneMsg:
 		m.clearBusy(msg.Locked...)

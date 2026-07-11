@@ -143,6 +143,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				SettingsItem{Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxRightPanes), Kind: SettingEnum,
 					Options: []string{"1", "2", "3"}},
+			SettingsItem{Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
+				Value: s.Config.Global.AutoKillTmux, Kind: SettingEnum,
+				Options: []string{"OFF", "8H", "1D", "3D", "7D"}},
 			)
 		}
 		s.Items = append(s.Items,
@@ -152,6 +155,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
+			SettingsItem{Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
+				Value: s.Config.Global.AutoCleanModules, Kind: SettingEnum,
+				Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}},
 			SettingsItem{Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
 				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
@@ -531,6 +537,10 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			if n, err := strconv.Atoi(item.Value); err == nil {
 				s.Config.Global.TmuxRightPanes = n
 			}
+		case "AUTO_CLEAN_MODULES":
+			s.Config.Global.AutoCleanModules = item.Value
+		case "AUTO_KILL_TMUX":
+			s.Config.Global.AutoKillTmux = item.Value
 		case "DAILY_CHECK_FOR_UPDATES":
 			s.Config.Global.CheckForUpdates = item.Value == "true"
 		case "AUTO_UPDATE_NEW_RELEASE":

@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // TmuxAvailable reports whether tmux is installed.
@@ -204,6 +205,55 @@ func LiveSessions() map[string]bool {
 		}
 	}
 	return live
+}
+
+// AttachedSessions returns the LTS session names that have at least one
+// client attached — someone is looking at them right now.
+func AttachedSessions() map[string]bool {
+	if !TmuxAvailable() {
+		return nil
+	}
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}\t#{session_attached}").Output()
+	if err != nil {
+		return nil
+	}
+	attached := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 2 && strings.HasPrefix(parts[0], "lts-") && parts[1] != "0" {
+			attached[parts[0]] = true
+		}
+	}
+	return attached
+}
+
+// KillIdleSessions kills unattached LTS sessions whose tmux activity clock
+// (any keystroke/output in any pane) is older than maxIdle. Attached
+// sessions are never killed. Returns the killed names.
+func KillIdleSessions(maxIdle time.Duration) []string {
+	if !TmuxAvailable() || maxIdle <= 0 {
+		return nil
+	}
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}\t#{session_activity}\t#{session_attached}").Output()
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-maxIdle).Unix()
+	var killed []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 || !strings.HasPrefix(parts[0], "lts-") || parts[2] != "0" {
+			continue
+		}
+		var activity int64
+		fmt.Sscanf(parts[1], "%d", &activity)
+		if activity > 0 && activity < cutoff {
+			if exec.Command("tmux", "kill-session", "-t", "="+parts[0]).Run() == nil {
+				killed = append(killed, parts[0])
+			}
+		}
+	}
+	return killed
 }
 
 // KillAllSessions kills every LTS-managed tmux session and returns how many.
