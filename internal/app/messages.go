@@ -68,6 +68,11 @@ type CleanModulesDoneMsg struct {
 	Err     error
 }
 
+// MaintenanceTickMsg re-evaluates auto-maintenance hourly so long-running
+// instances sweep worktrees/sessions that cross their age threshold after
+// launch (the startup run only covers launch time).
+type MaintenanceTickMsg struct{}
+
 // MaintenanceDoneMsg is sent when startup auto-maintenance completes.
 type MaintenanceDoneMsg struct {
 	Cleaned int      // node_modules directories removed

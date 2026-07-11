@@ -110,6 +110,9 @@ type Model struct {
 	// Live LTS tmux sessions (session name → alive), for the ● indicators
 	tmuxLive map[string]bool
 
+	// Last auto-maintenance evaluation (throttles the hourly tick)
+	lastMaintenance time.Time
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -403,6 +406,11 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 	return tea.Batch(startCmd, maintenanceCmd(logFn, paths, tmuxAge, locks))
 }
 
+// maintenanceTickCmd schedules the next hourly auto-maintenance check.
+func maintenanceTickCmd() tea.Cmd {
+	return tea.Tick(time.Hour, func(time.Time) tea.Msg { return MaintenanceTickMsg{} })
+}
+
 func maintenanceCmd(logFn git.LogFunc, paths []string, tmuxIdle time.Duration, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		attached := opener.AttachedSessions()
@@ -594,6 +602,7 @@ func (m Model) Init() tea.Cmd {
 		tea.SetWindowTitle("LTS - Led's Tree Script"),
 		loaderTickCmd(),
 		listenForLogs(m.logChan), // persistent listener for all operations
+		maintenanceTickCmd(),     // hourly auto-maintenance re-check
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
 		// Dev builds never auto-replace themselves with the official binary —
@@ -719,8 +728,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.SaveHistory(m.config.WorkDir, len(m.repos))
 		}
 		m.recomputeLayout()
-		// Startup auto-maintenance runs once, after the first discovery
+		// Startup auto-maintenance runs after the first discovery; the
+		// hourly MaintenanceTickMsg covers long-running instances
 		if wasInitialLoad {
+			m.lastMaintenance = time.Now()
 			if cmd := m.startAutoMaintenance(); cmd != nil {
 				return m, cmd
 			}
@@ -822,6 +833,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
+
+	case MaintenanceTickMsg:
+		// Re-evaluate hourly so instances left running still sweep items
+		// that cross their age threshold after launch
+		cmds := []tea.Cmd{maintenanceTickCmd()}
+		if time.Since(m.lastMaintenance) > 55*time.Minute {
+			m.lastMaintenance = time.Now()
+			if cmd := m.startAutoMaintenance(); cmd != nil {
+				cmds = append(cmds, cmd)
+				m.recomputeLayout()
+			}
+		}
+		return m, tea.Batch(cmds...)
 
 	case MaintenanceDoneMsg:
 		m.clearBusy(msg.Locked...)
