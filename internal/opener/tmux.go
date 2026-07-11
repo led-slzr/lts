@@ -187,6 +187,25 @@ func focusTmuxPane(name string, left bool) {
 	exec.Command("tmux", "select-pane", "-t", win+"."+pane).Run()
 }
 
+// LiveSessions returns the names of LTS-managed tmux sessions currently
+// alive (lts- prefix). Nil when tmux is absent or no server is running.
+func LiveSessions() map[string]bool {
+	if !TmuxAvailable() {
+		return nil
+	}
+	out, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		return nil // no server running
+	}
+	live := make(map[string]bool)
+	for _, name := range strings.Fields(string(out)) {
+		if strings.HasPrefix(name, "lts-") {
+			live[name] = true
+		}
+	}
+	return live
+}
+
 // KillSession removes the tmux session of a deleted worktree (best-effort).
 func KillSession(path string) {
 	if !TmuxAvailable() {

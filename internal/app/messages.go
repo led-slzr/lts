@@ -7,8 +7,9 @@ import (
 
 // ReposLoadedMsg is sent when repo discovery completes.
 type ReposLoadedMsg struct {
-	Repos []git.Repo
-	Err   error
+	Repos    []git.Repo
+	TmuxLive map[string]bool // live LTS tmux sessions (piggybacked on discovery)
+	Err      error
 }
 
 // RefreshDoneMsg is sent when refresh completes.

@@ -104,6 +104,9 @@ type Model struct {
 	// thread touches this map.
 	busy map[string]string
 
+	// Live LTS tmux sessions (session name → alive), for the ● indicators
+	tmuxLive map[string]bool
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  chan LogEntryMsg // persistent, shared by all operations
@@ -171,6 +174,18 @@ func (m *Model) tmuxFallbackNote(mode opener.ClickUsage) string {
 	return ""
 }
 
+// markSessionLive flips the tmux indicator on immediately after LTS opens a
+// session, without waiting for the next discovery reload.
+func (m *Model) markSessionLive(path string, mode opener.ClickUsage) {
+	if mode == opener.ClickIDE || m.config.Global.Multiplexer != "tmux" || !opener.TmuxAvailable() {
+		return
+	}
+	if m.tmuxLive == nil {
+		m.tmuxLive = make(map[string]bool)
+	}
+	m.tmuxLive[opener.SessionName(path)] = true
+}
+
 // recomputeLayout recalculates grid, hit zones, and section Y positions.
 // Must be called from Update (not View) so the state persists.
 func (m *Model) recomputeLayout() {
@@ -195,7 +210,7 @@ func (m *Model) recomputeLayout() {
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
-	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory, m.busyCardNames())
+	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory, m.busyCardNames(), m.tmuxLive)
 	gridH := lipgloss.Height(m.gridResult.View)
 	yPos += gridH
 
@@ -356,6 +371,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReposLoadedMsg:
 		m.repos = msg.Repos
+		m.tmuxLive = msg.TmuxLive
 		m.initialLoad = false
 		if msg.Err != nil {
 			m.statusMsg = "Error loading repos: " + msg.Err.Error()
@@ -1207,6 +1223,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
 				} else {
 					m.statusMsg = fmt.Sprintf("Opened %s in %s%s", repo.Name, m.clickUsage, m.tmuxFallbackNote(m.clickUsage))
+					m.markSessionLive(repo.Path, m.clickUsage)
 				}
 				return m, clearStatusCmd()
 			}
@@ -1222,6 +1239,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
 				} else {
 					m.statusMsg = fmt.Sprintf("Opened %s in %s%s", wt.Branch, m.clickUsage, m.tmuxFallbackNote(m.clickUsage))
+					m.markSessionLive(wt.Path, m.clickUsage)
 				}
 				return m, clearStatusCmd()
 			}
@@ -1698,7 +1716,7 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
 		repos := git.DiscoverRepos(workDir, resolve)
-		return ReposLoadedMsg{Repos: repos}
+		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions()}
 	}
 }
 

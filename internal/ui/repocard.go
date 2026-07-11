@@ -2,6 +2,7 @@ package ui
 
 import (
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/opener"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -90,7 +91,7 @@ func statusStyle(status git.WTStatus) lipgloss.Style {
 // RenderCard renders a single repository card.
 // focusedWT: index of hovered worktree (-1 = none, -2 = repo header hovered)
 // busy: an operation is running on this repo (or one of its constituents)
-func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton, busy bool) string {
+func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton, busy bool, tmuxLive map[string]bool) string {
 	iw := innerWidth(cardWidth)
 
 	// Migration card: yellow border with centered message and migrate button
@@ -148,6 +149,12 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 			branchStyled += " " + statusStyle(wt.Status).Render(changedBadge)
 		}
 
+		// Live tmux session indicator
+		sessionDot := ""
+		if tmuxLive[opener.SessionName(wt.Path)] {
+			sessionDot = " " + lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack).Render("●")
+		}
+
 		var line string
 		if isHovered {
 			hoverDisplay := branchDisplay
@@ -156,10 +163,10 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 			}
 			branchStyled = WTHighlightStyle.Render(hoverDisplay)
 			triggerBtn := renderInlineBtn("[⋮]", hoveredBtn == BtnContextMenu)
-			textPart := TreeCharStyle.Render(treeChar) + branchStyled
+			textPart := TreeCharStyle.Render(treeChar) + branchStyled + sessionDot
 			line = rightAlignButtons(textPart, triggerBtn, iw)
 		} else {
-			line = TreeCharStyle.Render(treeChar) + branchStyled
+			line = TreeCharStyle.Render(treeChar) + branchStyled + sessionDot
 		}
 
 		lines = append(lines, truncate(line, iw))

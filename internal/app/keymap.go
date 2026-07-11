@@ -378,6 +378,8 @@ func openCreatedWorkspaces(m Model, usage opener.ClickUsage) (Model, tea.Cmd) {
 		opened[target] = true
 		if err := opener.OpenWorktree(target, usage, m.openerOpts()); err != nil {
 			openErr = err
+		} else {
+			m.markSessionLive(target, usage)
 		}
 	}
 	if openErr != nil {
