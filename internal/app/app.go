@@ -1054,31 +1054,20 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// History suggestion click (empty state)
-		histIdx := ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
-		if histIdx >= 0 {
-			suggestions := config.GetHistorySuggestions(m.config.WorkDir)
-			if histIdx < len(suggestions) {
-				m.RelaunchDir = suggestions[histIdx].Path
-				return m, tea.Quit
+		// History suggestion click (empty state) — blocked during operations:
+		// relaunching replaces the process and would kill the running op
+		if !m.loading {
+			histIdx := ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+			if histIdx >= 0 {
+				suggestions := config.GetHistorySuggestions(m.config.WorkDir)
+				if histIdx < len(suggestions) {
+					m.RelaunchDir = suggestions[histIdx].Path
+					return m, tea.Quit
+				}
 			}
 		}
 
-		if m.loading {
-			return m, nil
-		}
-
-		// Footer buttons (refresh/cleanup only when repos exist)
-		if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
-			logFn, startCmd := m.beginLoading("Refreshing all repos...")
-			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
-		}
-		if m.hoveredBtn == ui.BtnCleanupMerged && len(m.repos) > 0 {
-			m.cleanupConfirmActive = true
-			m.cleanupRemoteBranch = false
-			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
-			return m, nil
-		}
+		// Settings and Exit stay available during operations
 		if m.hoveredBtn == ui.BtnSettings {
 			var repoNames []string
 			for _, r := range m.repos {
@@ -1095,25 +1084,42 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Create button (only when repos exist)
-		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
-			return m, textinput.Blink
-		}
+		// Mutation-initiating targets are blocked while an operation runs;
+		// opening repos/worktrees (below) stays available
+		if !m.loading {
+			// Footer buttons (refresh/cleanup only when repos exist)
+			if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
+				logFn, startCmd := m.beginLoading("Refreshing all repos...")
+				return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
+			}
+			if m.hoveredBtn == ui.BtnCleanupMerged && len(m.repos) > 0 {
+				m.cleanupConfirmActive = true
+				m.cleanupRemoteBranch = false
+				m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
+				return m, nil
+			}
 
-		// Migrate button
-		if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
-			repo := m.repos[m.focusedCard]
-			if repo.NeedsMigration && repo.Path != "" {
-				logFn, startCmd := m.beginLoading("Migrating " + repo.Name + "...")
-				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config))
+			// Create button (only when repos exist)
+			if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
+				m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+				return m, textinput.Blink
+			}
+
+			// Migrate button
+			if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
+				repo := m.repos[m.focusedCard]
+				if repo.NeedsMigration && repo.Path != "" {
+					logFn, startCmd := m.beginLoading("Migrating " + repo.Name + "...")
+					return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config))
+				}
 			}
 		}
 
 		// Context menu trigger [▸] — open context menu (not for migration cards).
 		// The target repo/worktree is snapshotted here; actions never resolve
 		// indices later (the repo list may reload while the menu is open).
-		if m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && !isMigrationCard {
+		// Blocked during operations — every menu action is a mutation.
+		if !m.loading && m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && !isMigrationCard {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
 				// Repo header context menu
