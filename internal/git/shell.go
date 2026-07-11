@@ -40,6 +40,12 @@ func CheckPrerequisites() error {
 		major, minor, minGitMajor, minGitMinor)
 }
 
+// UserName returns the configured git user.name, or "" when unset.
+func UserName() string {
+	name, _ := RunGit("", "config", "--get", "user.name")
+	return name
+}
+
 // GitVersion returns the installed git version string and whether it meets
 // the minimum requirement. Empty version means git is missing entirely.
 func GitVersion() (version string, ok bool) {

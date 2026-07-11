@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 
@@ -113,6 +114,9 @@ type Model struct {
 	// Last auto-maintenance evaluation (throttles the hourly tick)
 	lastMaintenance time.Time
 
+	// Launch greeting shown in the header gap
+	greeting string
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -149,10 +153,38 @@ func NewModel(cfg config.Config) Model {
 		deleteTypedInput:  di,
 		initialLoad:       true,
 		loaderTicking:     true, // Init issues the first tick
+		greeting:          pickGreeting(),
 		busy:              make(map[string]string),
 		logPanel:          ui.NewLogPanel(),
 		logChan:           make(chan LogEntryMsg, 64),
 	}
+}
+
+// greetingTemplates rotate per launch; %s is the git user's first name.
+var greetingTemplates = []string{
+	"Heyya %s! Let's get worktree-ing",
+	"Welcome back, %s — branches await",
+	"Ready to branch out, %s?",
+	"May your merges be clean, %s",
+	"Plant something great today, %s",
+	"Back at it, %s?",
+	"Ship it, %s",
+}
+
+var namelessGreetings = []string{
+	"Let's get worktree-ing",
+	"Branches await",
+	"Ready to branch out?",
+	"May your merges be clean",
+}
+
+// pickGreeting composes a random launch greeting from the git user name.
+func pickGreeting() string {
+	name := git.UserName()
+	if fields := strings.Fields(name); len(fields) > 0 {
+		return fmt.Sprintf(greetingTemplates[rand.IntN(len(greetingTemplates))], fields[0])
+	}
+	return namelessGreetings[rand.IntN(len(namelessGreetings))]
 }
 
 // usageLabels returns the display names of the click-usage targets,
@@ -241,12 +273,13 @@ func (m *Model) clampExplorer() {
 // ensureExplorerRowVisible scrolls the sheet so the selected row shows.
 func (m *Model) ensureExplorerRowVisible() {
 	// Sheet rows capacity mirrors LayoutExplorer: height - borders(2) -
-	// title(1) - column header(1) - action strip(1) [- migration notice(1)]
+	// title(1) - column header(1) - nav hint(1) - action strip(1)
+	// [- migration notice(1)]
 	exH := m.height - m.headerH - 2
 	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
 		exH -= 9
 	}
-	capacity := exH - 5
+	capacity := exH - 6
 	if m.explorer.SelectedRepo < len(m.repos) && m.repos[m.explorer.SelectedRepo].NeedsMigration {
 		capacity--
 	}
@@ -518,6 +551,7 @@ func (m *Model) recomputeLayout() {
 		UpdateBadgeHovered: m.updateBadgeHovered,
 		Layout:             m.config.Global.Layout,
 		HoveredView:        m.hoveredView,
+		Greeting:           m.greeting,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH

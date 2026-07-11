@@ -170,18 +170,20 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	}
 	title := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack).Bold(true).Render(repo.Name) +
 		dimStyle.Render(" — "+countTxt)
-	newBtn := "[+ new]"
-	newStyled := dimStyle.Render(newBtn)
+	const newBtnText = "n New Worktree"
+	keyStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
+	newStyled := keyStyle.Render("n") + dimStyle.Render(" New Worktree")
 	if hoveredBtn == BtnCreateWT {
-		newStyled = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Render(newBtn)
+		newStyled = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true).Render(newBtnText)
 	}
 	titleLine := title
-	pad := shInner - lipgloss.Width(title) - lipgloss.Width(newStyled)
+	newW := lipgloss.Width(newBtnText)
+	pad := shInner - lipgloss.Width(title) - newW
 	if pad > 0 {
 		titleLine = title + strings.Repeat(" ", pad) + newStyled
 		sheetX := MarginH + sidebarW + 1
 		zones = append(zones, HitZone{
-			X: sheetX + 2 + shInner - len(newBtn), Y: yOffset + 1, W: len(newBtn), H: 1,
+			X: sheetX + 2 + shInner - newW, Y: yOffset + 1, W: newW, H: 1,
 			Type: ZoneExplorerNew, RepoIdx: sel, WTIdx: -1, Button: BtnCreateWT,
 		})
 	}
@@ -214,9 +216,10 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	}
 
 	shLines := []string{truncate(titleLine, shInner), truncate(header, shInner)}
-	// Sheet rows start after: border(1) + title(1) + column header(1)
+	// Sheet rows start after: border(1) + title(1) + column header(1);
+	// the last inner line is reserved for the navigation hint
 	rowStartY := yOffset + 3
-	rowCapacity := innerH - 2
+	rowCapacity := innerH - 3
 
 	if repo.NeedsMigration {
 		notice := warnStyle.Render("⚠ existing work on "+repo.MigrationBranch) + dimStyle.Render(" — use the Board view to migrate")
@@ -309,9 +312,10 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	if len(repo.Worktrees) == 0 && !repo.NeedsMigration {
 		shLines = append(shLines, dimStyle.Render("  No worktrees — click [+ new] to create one"))
 	}
-	for len(shLines) < innerH {
+	for len(shLines) < innerH-1 {
 		shLines = append(shLines, "")
 	}
+	shLines = append(shLines, truncate(dimStyle.Render("↑/↓ navigate · ←/→ switch pane · ⏎ open · n new"), shInner))
 
 	sheetBorder := CardBorderNormal
 	if st.FocusSheet {

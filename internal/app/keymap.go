@@ -574,6 +574,10 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 			m2, cmd := explorerAction(m, ui.BtnKillSession)
 			return true, m2, cmd
 		}
+	case "n":
+		// Create pre-seeded with the selected repo (same as the sheet button)
+		m2, cmd := m.openCreateModalFor(st.SelectedRepo)
+		return true, m2, cmd
 	case "p":
 		if st.FocusSheet {
 			m2, cmd := explorerAction(m, ui.BtnCleanModules)

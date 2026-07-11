@@ -205,6 +205,7 @@ type HeaderOpts struct {
 	UpdateBadgeHovered bool
 	Layout             string // "board" or "explorer"
 	HoveredView        int    // -1 = none, 0 = Board, 1 = Explorer
+	Greeting           string // shown centered between the banner and the right block
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, opts ...HeaderOpts) string {
@@ -277,7 +278,7 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 	headerRow := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		banner,
-		strings.Repeat(" ", gap),
+		renderGreeting(o.Greeting, gap),
 		rightPadded,
 	)
 
@@ -336,6 +337,22 @@ func renderClickUsage(active opener.ClickUsage, labels UsageLabels, hoveredUsage
 	parts = append(parts, " ", tabKey)
 
 	return strings.Join(parts, "")
+}
+
+// renderGreeting fills the gap between the banner and the right block with a
+// centered greeting (blank when it doesn't fit). The block is exactly gap
+// columns wide on every line so the right block's hit zones don't shift.
+func renderGreeting(text string, gap int) string {
+	if text == "" || gap < lipgloss.Width(text)+4 {
+		return strings.Repeat(" ", gap)
+	}
+	style := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
+	w := lipgloss.Width(text)
+	left := (gap - w) / 2
+	line := strings.Repeat(" ", left) + style.Render(text) + strings.Repeat(" ", gap-w-left)
+	blank := strings.Repeat(" ", gap)
+	// Rows 0-2 blank; the greeting sits on row 3, mid-banner height
+	return strings.Join([]string{blank, blank, blank, line}, "\n")
 }
 
 // viewToggleNames are the layout names in display order.

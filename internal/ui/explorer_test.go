@@ -70,8 +70,8 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 				t.Errorf("[+ new] zone beyond row")
 				continue
 			}
-			if got := string(row[z.X : z.X+z.W]); got != "[+ new]" {
-				t.Errorf("[+ new] zone at x=%d got %q (row %q)", z.X, got, string(row))
+			if got := string(row[z.X : z.X+z.W]); got != "n New Worktree" {
+				t.Errorf("new-worktree zone at x=%d got %q (row %q)", z.X, got, string(row))
 			}
 		}
 	}
@@ -123,7 +123,8 @@ func TestExplorerMonorepoActions(t *testing.T) {
 // The header View toggle hit zones must match where Board/Explorer render.
 func TestViewToggleHitZonesMatchRender(t *testing.T) {
 	labels := UsageLabels{IDE: "Windsurf", AICli: "Claude", Terminal: "Ghostty"}
-	header := RenderHeader(120, 0, labels, HeaderOpts{Layout: "board", HoveredView: -1})
+	// Greeting fills the banner gap — it must never shift the right block
+	header := RenderHeader(120, 0, labels, HeaderOpts{Layout: "board", HoveredView: -1, Greeting: "Heyya Mark! Let's get worktree-ing"})
 	lines := strings.Split(header, "\n")
 
 	y, zones := ViewToggleHitZones(120, labels)
