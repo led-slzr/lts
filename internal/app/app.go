@@ -107,6 +107,10 @@ type Model struct {
 	// Live LTS tmux sessions (session name → alive), for the ● indicators
 	tmuxLive map[string]bool
 
+	// Explorer layout state (selection, pane focus, scrolls)
+	explorer    ui.ExplorerState
+	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
+
 	// Log panel
 	logPanel ui.LogPanelModel
 	logChan  chan LogEntryMsg // persistent, shared by all operations
@@ -132,6 +136,8 @@ func NewModel(cfg config.Config) Model {
 		hoveredBtn:        ui.BtnNone,
 		hoveredUsage:      -1,
 		hoveredHistory:    -1,
+		hoveredView:       -1,
+		explorer:          ui.ExplorerState{SelectedWT: -1},
 		openPromptHovered: -1,
 		renameInput:       ti,
 		deleteTypedInput:  di,
@@ -174,6 +180,140 @@ func (m *Model) tmuxFallbackNote(mode opener.ClickUsage) string {
 	return ""
 }
 
+// explorerZoneAt finds the Explorer hit zone at a screen position,
+// preferring the most specific zone (actions before rows before repos).
+func explorerZoneAt(zones []ui.HitZone, x, y int) (ui.HitZone, bool) {
+	best := ui.HitZone{}
+	found := false
+	rank := func(t ui.HitZoneType) int {
+		switch t {
+		case ui.ZoneExplorerAction, ui.ZoneExplorerNew:
+			return 2
+		case ui.ZoneExplorerRow:
+			return 1
+		case ui.ZoneExplorerRepo:
+			return 0
+		}
+		return -1
+	}
+	for _, z := range zones {
+		if rank(z.Type) < 0 {
+			continue
+		}
+		if y >= z.Y && y < z.Y+z.H && x >= z.X && x < z.X+z.W {
+			if !found || rank(z.Type) > rank(best.Type) {
+				best = z
+				found = true
+			}
+		}
+	}
+	return best, found
+}
+
+// explorerActive reports whether the Explorer layout is showing (it needs
+// repos; the empty state stays shared with Board).
+func (m *Model) explorerActive() bool {
+	return m.config.Global.Layout == "explorer" && len(m.repos) > 0
+}
+
+// clampExplorer keeps the Explorer selection valid after repo reloads.
+func (m *Model) clampExplorer() {
+	if m.explorer.SelectedRepo >= len(m.repos) {
+		m.explorer.SelectedRepo = len(m.repos) - 1
+	}
+	if m.explorer.SelectedRepo < 0 {
+		m.explorer.SelectedRepo = 0
+	}
+	if len(m.repos) > 0 {
+		wts := len(m.repos[m.explorer.SelectedRepo].Worktrees)
+		if m.explorer.SelectedWT >= wts {
+			m.explorer.SelectedWT = wts - 1
+		}
+	}
+}
+
+// ensureExplorerRowVisible scrolls the sheet so the selected row shows.
+func (m *Model) ensureExplorerRowVisible() {
+	// Sheet rows capacity mirrors LayoutExplorer: height - borders(2) -
+	// title(1) - column header(1) - action strip(1) [- migration notice(1)]
+	exH := m.height - m.headerH - 2
+	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
+		exH -= 9
+	}
+	capacity := exH - 5
+	if m.explorer.SelectedRepo < len(m.repos) && m.repos[m.explorer.SelectedRepo].NeedsMigration {
+		capacity--
+	}
+	if capacity < 1 {
+		capacity = 1
+	}
+	if m.explorer.SelectedWT < m.explorer.SheetScroll {
+		m.explorer.SheetScroll = m.explorer.SelectedWT
+	}
+	if m.explorer.SelectedWT >= m.explorer.SheetScroll+capacity {
+		m.explorer.SheetScroll = m.explorer.SelectedWT - capacity + 1
+	}
+}
+
+// ensureExplorerRepoVisible scrolls the sidebar so the selected repo shows.
+func (m *Model) ensureExplorerRepoVisible() {
+	exH := m.height - m.headerH - 2
+	if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
+		exH -= 9
+	}
+	capacity := exH - 3 // borders(2) + title(1)
+	if capacity < 1 {
+		capacity = 1
+	}
+	if m.explorer.SelectedRepo < m.explorer.SidebarScroll {
+		m.explorer.SidebarScroll = m.explorer.SelectedRepo
+	}
+	if m.explorer.SelectedRepo >= m.explorer.SidebarScroll+capacity {
+		m.explorer.SidebarScroll = m.explorer.SelectedRepo - capacity + 1
+	}
+}
+
+// openCreateModalFor opens the create modal pre-seeded with a repo's
+// selection and jumps straight to the branch step.
+func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
+	if repoIdx < 0 || repoIdx >= len(m.repos) {
+		return m, nil
+	}
+	target := m.repos[repoIdx]
+	m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+	// Monorepo cards pre-select their constituent repos
+	want := map[string]bool{target.Name: true}
+	if target.IsMonorepo {
+		want = make(map[string]bool)
+		for _, n := range target.RepoNames {
+			want[n] = true
+		}
+	}
+	for i, r := range m.modal.Repos {
+		if want[r.Name] {
+			m.modal.Selected[i] = true
+		}
+	}
+	// Advance to the branch step (starts the background branch fetch)
+	var cmd tea.Cmd
+	m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	return m, cmd
+}
+
+// toggleLayout switches Board ↔ Explorer and persists the choice.
+func (m *Model) toggleLayout() {
+	if m.config.Global.Layout == "explorer" {
+		m.config.Global.Layout = "board"
+	} else {
+		m.config.Global.Layout = "explorer"
+		if m.explorer.SelectedWT < 0 && len(m.repos) > 0 && len(m.repos[0].Worktrees) > 0 {
+			m.explorer.SelectedWT = 0
+		}
+	}
+	m.config.SaveGlobal()
+	m.statusMsg = "View: " + m.config.Global.Layout
+}
+
 // markSessionLive flips the tmux indicator on immediately after LTS opens a
 // session, without waiting for the next discovery reload.
 func (m *Model) markSessionLive(path string, mode opener.ClickUsage) {
@@ -204,9 +344,27 @@ func (m *Model) recomputeLayout() {
 		HoveredUsage:       m.hoveredUsage,
 		UpdateAvailable:    m.updateAvailVersion,
 		UpdateBadgeHovered: m.updateBadgeHovered,
+		Layout:             m.config.Global.Layout,
+		HoveredView:        m.hoveredView,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
+
+	// Explorer layout: a fixed-height master-detail block, no outer scrolling
+	if m.explorerActive() {
+		logReserve := 0
+		if m.logPanel.Visible && len(m.logPanel.Entries) > 0 {
+			logReserve = 9
+		}
+		exH := m.height - m.headerH - 2 - logReserve
+		m.clampExplorer()
+		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive)
+		m.createBtnY = 0
+		m.contentHeight = lipgloss.Height(m.gridResult.View)
+		m.footerY = m.headerH + m.contentHeight
+		m.scrollY = 0
+		return
+	}
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
@@ -916,6 +1074,24 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.logPanel.ScrollDown(1)
 				}
+			} else if m.explorerActive() {
+				// Scroll the pane under the cursor
+				delta := 2
+				if msg.Button == tea.MouseButtonWheelUp {
+					delta = -2
+				}
+				if msg.X < ui.MarginH+ui.ExplorerSidebarWidth(m.width) {
+					m.explorer.SidebarScroll += delta
+					if m.explorer.SidebarScroll < 0 {
+						m.explorer.SidebarScroll = 0
+					}
+				} else {
+					m.explorer.SheetScroll += delta
+					if m.explorer.SheetScroll < 0 {
+						m.explorer.SheetScroll = 0
+					}
+				}
+				m.recomputeLayout()
 			} else {
 				// Scroll main content
 				if msg.Button == tea.MouseButtonWheelUp {
@@ -974,8 +1150,21 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// Check view toggle hover (line below click usage)
+		prevHoveredView := m.hoveredView
+		m.hoveredView = -1
+		viewY, viewZones := ui.ViewToggleHitZones(m.width, m.usageLabels(), m.updateAvailVersion)
+		if y == viewY {
+			for _, z := range viewZones {
+				if x >= z.X && x < z.X+z.W {
+					m.hoveredView = int(z.Usage)
+					break
+				}
+			}
+		}
+
 		// Recompute header if any header hover state changed
-		if wasVersionHovered != m.versionHovered || prevHoveredUsage != m.hoveredUsage {
+		if wasVersionHovered != m.versionHovered || prevHoveredUsage != m.hoveredUsage || prevHoveredView != m.hoveredView {
 			m.recomputeLayout()
 		}
 
@@ -995,6 +1184,27 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.hoveredBtn = ui.BtnNone
 			} else {
 				m.hoveredBtn = btn
+			}
+			return m, nil
+		}
+
+		// Explorer layout: hover previews selection and lights up actions
+		if m.explorerActive() {
+			if z, ok := explorerZoneAt(m.gridResult.HitZones, x, y); ok {
+				switch z.Type {
+				case ui.ZoneExplorerRepo:
+					if m.explorer.SelectedRepo != z.RepoIdx {
+						m.explorer.SelectedRepo = z.RepoIdx
+						m.explorer.SelectedWT = 0
+						m.explorer.SheetScroll = 0
+					}
+					m.explorer.FocusSheet = false
+				case ui.ZoneExplorerRow:
+					m.explorer.FocusSheet = true
+					m.explorer.SelectedWT = z.WTIdx
+				case ui.ZoneExplorerAction, ui.ZoneExplorerNew:
+					m.hoveredBtn = z.Button
+				}
 			}
 			return m, nil
 		}
@@ -1121,6 +1331,24 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// View toggle click (line below click usage)
+		viewY, viewZones := ui.ViewToggleHitZones(m.width, m.usageLabels(), m.updateAvailVersion)
+		if y == viewY {
+			for _, z := range viewZones {
+				if x >= z.X && x < z.X+z.W {
+					want := "board"
+					if int(z.Usage) == 1 {
+						want = "explorer"
+					}
+					if want != m.config.Global.Layout {
+						m.toggleLayout()
+						m.recomputeLayout()
+						return m, clearStatusCmd()
+					}
+				}
+			}
+		}
+
 		// History suggestion click (empty state) — blocked during operations:
 		// relaunching replaces the process and would kill running ops
 		if !m.anyBusy() {
@@ -1164,6 +1392,32 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
 				return m, nil
 			}
+		}
+
+		// Explorer layout: clicks act on sidebar/sheet zones; board-specific
+		// targets below (create button, migrate, cards) don't exist here
+		if m.explorerActive() {
+			if z, ok := explorerZoneAt(m.gridResult.HitZones, x, y); ok {
+				switch z.Type {
+				case ui.ZoneExplorerRepo:
+					m.explorer.SelectedRepo = z.RepoIdx
+					m.explorer.SelectedWT = 0
+					m.explorer.SheetScroll = 0
+					m.explorer.FocusSheet = false
+					return m, nil
+				case ui.ZoneExplorerRow:
+					m.explorer.FocusSheet = true
+					m.explorer.SelectedWT = z.WTIdx
+					return explorerAction(m, ui.BtnOpen)
+				case ui.ZoneExplorerAction:
+					m.explorer.FocusSheet = true
+					m.explorer.SelectedWT = z.WTIdx
+					return explorerAction(m, z.Button)
+				case ui.ZoneExplorerNew:
+					return m.openCreateModalFor(z.RepoIdx)
+				}
+			}
+			return m, nil
 		}
 
 		// Create button (only when repos exist) — the modal opens anytime;
@@ -1275,10 +1529,12 @@ func (m Model) View() string {
 	sections = append(sections, m.headerView)
 
 	// --- Scrollable content area ---
+	// Explorer shows status text inline and creates via [+ new], so the
+	// legend and the big create button are Board-only
 	hasRepos := len(m.repos) > 0
 	var scrollable []string
 	scrollable = append(scrollable, m.gridResult.View)
-	if hasRepos {
+	if hasRepos && !m.explorerActive() {
 		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
 		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT, false))
 	}

@@ -35,6 +35,7 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 - **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
 - **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches
 - **Rebase, rename, delete** — Manage worktrees and branches from context menus without leaving the TUI
+- **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with status, age, and tmux session columns); switch with `shift+tab`
 - **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings
 
 ## Platform Support
@@ -95,6 +96,9 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 | Key | Action |
 |-----|--------|
 | `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
+| `Shift+Tab` | Switch layout: Board ↔ Explorer |
+| `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet) |
+| `Enter`, `b`, `m`, `d` | Explorer selected row: open, rebase, rename, delete |
 | `n` | Create new worktree |
 | `r` | Refresh all repos |
 | `c` | Cleanup merged worktrees |
@@ -137,11 +141,10 @@ Supported values:
 - **Package Manager**: `pnpm`, `npm`, `yarn`, `bun`
 - **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
+- **Layout** (`LAYOUT`): `board` (default) or `explorer` — also toggled in-app with `shift+tab` or by clicking the View switcher in the header
 - **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.
 - **Tmux AI Pane Width** (`TMUX_AI_PANE_WIDTH`): AI pane width as a percent of the window, `20`–`90` (default `50`).
-- **Tmux Right Panes** (`TMUX_RIGHT_PANES`): `1`, `2`, or `3` evenly stacked shell panes in the right column (default `1`).
-
-Layout changes apply the next time a worktree is opened — existing sessions are resized (and missing right panes added) without touching running processes. Panes are never removed automatically.
+- **Tmux Right Panes** (`TMUX_RIGHT_PANES`): `1`, `2`, or `3` evenly stacked shell panes in the right column (default `1`). Tmux layout changes apply the next time a worktree is opened — existing sessions are resized (and missing right panes added) without touching running processes; panes are never removed automatically.
 - **Check for Updates**: `true` / `false` — daily check for new releases on startup
 - **Auto Update**: `true` / `false` — silently download and install new releases in the background
 

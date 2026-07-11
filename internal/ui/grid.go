@@ -30,6 +30,11 @@ const (
 	ZoneFooterBtn
 	ZoneMigrateBtn
 	ZoneHistoryItem
+	// Explorer layout zones
+	ZoneExplorerRepo   // sidebar repo item (RepoIdx)
+	ZoneExplorerRow    // sheet worktree row (RepoIdx = selected repo, WTIdx = row)
+	ZoneExplorerAction // action-strip item (Button, WTIdx)
+	ZoneExplorerNew    // [+ new] in the sheet header (RepoIdx)
 )
 
 // HitZone represents a clickable/hoverable region on screen.

@@ -44,6 +44,14 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleRenameKey(m, msg)
 	}
 
+	// Explorer navigation intercepts movement keys; everything else falls
+	// through to the shared bindings below
+	if m.explorerActive() {
+		if handled, m2, cmd := handleExplorerKey(m, msg); handled {
+			return m2, cmd
+		}
+	}
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -51,6 +59,10 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "tab":
 		m.clickUsage = m.clickUsage.Next()
 		return m, nil
+
+	case "shift+tab":
+		m.toggleLayout()
+		return m, clearStatusCmd()
 
 	case "r":
 		if !m.anyBusy() && len(m.repos) > 0 {
@@ -456,4 +468,126 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.renameInput, cmd = m.renameInput.Update(msg)
 		return m, cmd
 	}
+}
+
+// handleExplorerKey processes Explorer-layout navigation and row actions.
+// Returns handled=false for keys that should fall through to the shared
+// main-view bindings.
+func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
+	st := &m.explorer
+	repo := m.repos[st.SelectedRepo]
+
+	switch msg.String() {
+	case "up", "k":
+		if st.FocusSheet {
+			if st.SelectedWT > 0 {
+				st.SelectedWT--
+				m.ensureExplorerRowVisible()
+			}
+		} else if st.SelectedRepo > 0 {
+			st.SelectedRepo--
+			st.SelectedWT = 0
+			st.SheetScroll = 0
+			m.ensureExplorerRepoVisible()
+		}
+		return true, m, nil
+
+	case "down", "j":
+		if st.FocusSheet {
+			if st.SelectedWT < len(repo.Worktrees)-1 {
+				st.SelectedWT++
+				m.ensureExplorerRowVisible()
+			}
+		} else if st.SelectedRepo < len(m.repos)-1 {
+			st.SelectedRepo++
+			st.SelectedWT = 0
+			st.SheetScroll = 0
+			m.ensureExplorerRepoVisible()
+		}
+		return true, m, nil
+
+	case "left", "h":
+		st.FocusSheet = false
+		return true, m, nil
+
+	case "right", "l":
+		if len(repo.Worktrees) > 0 {
+			st.FocusSheet = true
+			if st.SelectedWT < 0 {
+				st.SelectedWT = 0
+			}
+		}
+		return true, m, nil
+
+	case "esc":
+		if st.FocusSheet {
+			st.FocusSheet = false
+			return true, m, nil
+		}
+		return false, m, nil
+
+	case "enter":
+		if !st.FocusSheet {
+			if len(repo.Worktrees) > 0 {
+				st.FocusSheet = true
+				if st.SelectedWT < 0 {
+					st.SelectedWT = 0
+				}
+			}
+			return true, m, nil
+		}
+		m2, cmd := explorerAction(m, ui.BtnOpen)
+		return true, m2, cmd
+
+	case "b":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnRebase)
+			return true, m2, cmd
+		}
+	case "m":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnRename)
+			return true, m2, cmd
+		}
+	case "d":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnDelete)
+			return true, m2, cmd
+		}
+	}
+	return false, m, nil
+}
+
+// explorerAction runs an action-strip action on the selected worktree,
+// snapshotting the target (same contract as the context menu).
+func explorerAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
+	if m.explorer.SelectedRepo >= len(m.repos) {
+		return m, nil
+	}
+	repo := m.repos[m.explorer.SelectedRepo]
+	if m.explorer.SelectedWT < 0 || m.explorer.SelectedWT >= len(repo.Worktrees) {
+		return m, nil
+	}
+	wt := repo.Worktrees[m.explorer.SelectedWT]
+
+	if action == ui.BtnOpen {
+		err := opener.OpenWorktree(wt.Path, m.clickUsage, m.openerOpts())
+		if err != nil {
+			m.statusMsg = "Failed to open: " + err.Error()
+		} else {
+			m.statusMsg = "Opened " + wt.Branch + " in " + m.clickUsage.String() + m.tmuxFallbackNote(m.clickUsage)
+			m.markSessionLive(wt.Path, m.clickUsage)
+		}
+		return m, clearStatusCmd()
+	}
+
+	// Mutations need the repo free
+	if m.repoBusy(repo) {
+		m.statusMsg = repo.Name + " is busy — wait for the running operation"
+		return m, clearStatusCmd()
+	}
+	m.menuRepo = repo
+	m.menuWT = wt
+	m.menuHasWT = true
+	return executeContextAction(m, action)
 }

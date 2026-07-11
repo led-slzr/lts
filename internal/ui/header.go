@@ -149,8 +149,9 @@ func computeHeaderLayout(termWidth int, labels UsageLabels, updateAvailable ...s
 	bannerWidth := lipgloss.Width(strings.Join(bannerLines, "\n"))
 
 	usageStr := renderClickUsage(opener.ClickIDE, labels, -1)
+	viewStr := renderViewToggle("board", -1)
 	statusLine := renderStatusLine("", false, 0)
-	rightBlock := usageStr + "\n" + statusLine
+	rightBlock := usageStr + "\n" + viewStr + "\n" + statusLine
 	rightWidth := lipgloss.Width(rightBlock)
 
 	availableWidth := termWidth - (MarginH * 2)
@@ -202,6 +203,8 @@ type HeaderOpts struct {
 	HoveredUsage       opener.ClickUsage // -1 = none hovered
 	UpdateAvailable    string            // non-empty = version available (e.g. "2.6.1")
 	UpdateBadgeHovered bool
+	Layout             string // "board" or "explorer"
+	HoveredView        int    // -1 = none, 0 = Board, 1 = Explorer
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, opts ...HeaderOpts) string {
@@ -256,12 +259,11 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 	bannerLines = append(bannerLines, versionRendered)
 	banner := strings.Join(bannerLines, "\n")
 
-	// Render click usage toggle
+	// Render click usage toggle, view toggle, and status line
 	usageStr := renderClickUsage(activeUsage, labels, o.HoveredUsage)
-
-	// Render status line below usage
+	viewStr := renderViewToggle(o.Layout, o.HoveredView)
 	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
-	rightBlock := usageStr + "\n" + statusLine
+	rightBlock := usageStr + "\n" + viewStr + "\n" + statusLine
 
 	// Position: banner center-left, usage+status top-right
 	layout := computeHeaderLayout(width, labels, o.UpdateAvailable)
@@ -334,4 +336,69 @@ func renderClickUsage(active opener.ClickUsage, labels UsageLabels, hoveredUsage
 	parts = append(parts, " ", tabKey)
 
 	return strings.Join(parts, "")
+}
+
+// viewToggleNames are the layout names in display order.
+var viewToggleNames = [2]string{"Board", "Explorer"}
+
+// renderViewToggle renders the layout switcher line, aligned under the
+// Click Usage line (the label is padded to the same width).
+func renderViewToggle(activeLayout string, hoveredView int) string {
+	label := ClickUsageLabelStyle.Render("View:       ") // aligns with "Click Usage:"
+
+	hoveredStyle := lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBlack).
+		Bold(true).
+		Underline(true).
+		Padding(0, 1)
+
+	activeIdx := 0
+	if activeLayout == "explorer" {
+		activeIdx = 1
+	}
+
+	parts := []string{label, " "}
+	for i, name := range viewToggleNames {
+		var rendered string
+		switch {
+		case i == activeIdx:
+			rendered = ClickUsageActiveStyle.Render(name)
+		case i == hoveredView:
+			rendered = hoveredStyle.Render(name)
+		default:
+			rendered = ClickUsageInactiveStyle.Render(name)
+		}
+		parts = append(parts, rendered)
+		if i < len(viewToggleNames)-1 {
+			parts = append(parts, BranchDimStyle.Render("│"))
+		}
+	}
+	key := lipgloss.NewStyle().Foreground(ColorDarkGreen).Background(ColorBlack).Render("(shift+tab)")
+	parts = append(parts, " ", key)
+	return strings.Join(parts, "")
+}
+
+// ViewToggleHitZones returns the screen coordinates of the Board/Explorer
+// cells on the header's View line (one row below Click Usage).
+func ViewToggleHitZones(termWidth int, labels UsageLabels, updateAvailable ...string) (y int, zones []ClickUsageZone) {
+	ua := ""
+	if len(updateAvailable) > 0 {
+		ua = updateAvailable[0]
+	}
+	layout := computeHeaderLayout(termWidth, labels, ua)
+
+	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("View:       ")) + 1
+
+	y = 3 // click usage is at y=2; the view line is directly below
+	curX := layout.RightBlockX + labelW
+	for i, name := range viewToggleNames {
+		w := lipgloss.Width(ClickUsageActiveStyle.Render(name))
+		zones = append(zones, ClickUsageZone{X: curX, W: w, Usage: opener.ClickUsage(i)})
+		curX += w
+		if i < len(viewToggleNames)-1 {
+			curX += lipgloss.Width(BranchDimStyle.Render("│"))
+		}
+	}
+	return y, zones
 }

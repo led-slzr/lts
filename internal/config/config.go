@@ -21,6 +21,7 @@ type GlobalConfig struct {
 	Multiplexer     string // none, tmux — session layer inside the terminal
 	TmuxAIPaneWidth int    // AI pane width as % of the window (tmux sessions)
 	TmuxRightPanes  int    // stacked panes in the right column (tmux sessions)
+	Layout          string // main view layout: board, explorer
 	CheckForUpdates bool   // daily check for new releases
 	AutoUpdate      bool   // automatically install new releases in background
 	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
@@ -54,6 +55,7 @@ func DefaultGlobal() GlobalConfig {
 		Multiplexer:     "none",
 		TmuxAIPaneWidth: 50,
 		TmuxRightPanes:  1,
+		Layout:          "board",
 		CheckForUpdates: true,
 		AutoUpdate:      true,
 		OpenEnvInIDE:    true,
@@ -261,6 +263,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("TERMINAL_MULTIPLEXER=\"%s\"", c.Global.Multiplexer),
 		fmt.Sprintf("TMUX_AI_PANE_WIDTH=\"%d\"", c.Global.TmuxAIPaneWidth),
 		fmt.Sprintf("TMUX_RIGHT_PANES=\"%d\"", c.Global.TmuxRightPanes),
+		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
@@ -338,6 +341,9 @@ func loadGlobal(g *GlobalConfig) {
 		if n, err := strconv.Atoi(v); err == nil {
 			g.TmuxRightPanes = n
 		}
+	}
+	if v, ok := kv["LAYOUT"]; ok {
+		g.Layout = v
 	}
 	if v, ok := kv["DAILY_CHECK_FOR_UPDATES"]; ok {
 		g.CheckForUpdates = v != "false"

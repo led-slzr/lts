@@ -41,6 +41,8 @@ const (
 	BtnSettings
 	// Migrate button
 	BtnMigrate
+	// Explorer action strip: open selected worktree
+	BtnOpen
 )
 
 // innerWidth returns the usable content width inside a card.
