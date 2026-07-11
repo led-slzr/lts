@@ -155,6 +155,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
+			SettingsItem{Label: "Completion Sound", Key: "DONE_SOUND",
+				Value: s.Config.Global.DoneSound, Kind: SettingEnum,
+				Options: []string{"off", "glass", "submarine", "ping", "pop", "hero", "bell"}},
 			SettingsItem{Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
 				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
 				Options: []string{"activity", "created", "name"}},
@@ -542,6 +545,9 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			}
 		case "SORT_ORDER":
 			s.Config.Global.SortOrder = item.Value
+		case "DONE_SOUND":
+			s.Config.Global.DoneSound = item.Value
+			opener.PlayDoneSound(item.Value) // preview on change
 		case "AUTO_CLEAN_MODULES":
 			s.Config.Global.AutoCleanModules = item.Value
 		case "AUTO_KILL_TMUX":

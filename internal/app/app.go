@@ -861,6 +861,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			names[i] = r.RepoName
 		}
 		m.statusMsg = fmt.Sprintf("Created %s on %s", strings.Join(names, ", "), msg.Branch)
+		opener.PlayDoneSound(m.config.Global.DoneSound)
 		m.openPromptActive = true
 		m.openPromptResults = msg.Results
 		m.openPromptSelection = opener.ClickIDE
@@ -946,6 +947,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 		m.statusMsg = fmt.Sprintf("Migrated %s to LTS worktree", msg.Result.Branch)
+		opener.PlayDoneSound(m.config.Global.DoneSound)
 		m.openPromptActive = true
 		m.openPromptResults = []*git.CreateResult{msg.Result}
 		m.openPromptSelection = opener.ClickIDE
