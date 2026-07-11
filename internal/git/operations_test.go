@@ -2,8 +2,10 @@ package git
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Simulates deleting the last monorepo worktree: the branch subdir has been
@@ -141,5 +143,73 @@ func TestCopySupportFiles(t *testing.T) {
 	entries, _ := os.ReadDir(dst3)
 	if len(entries) != 0 {
 		t.Errorf("both-off: expected empty dir, got %d entries", len(entries))
+	}
+}
+
+func TestWorktreeMetaLifecycle(t *testing.T) {
+	dir := t.TempDir()
+
+	recordWorktreeCreated(dir, "feat-x", 1700000000)
+	if got := worktreeCreatedAt(dir, "feat-x"); got != 1700000000 {
+		t.Errorf("created_at = %d, want 1700000000", got)
+	}
+	if got := worktreeCreatedAt(dir, "unknown"); got != 0 {
+		t.Errorf("unknown worktree should be 0, got %d", got)
+	}
+
+	renameWorktreeMeta(dir, "feat-x", "feat-y")
+	if got := worktreeCreatedAt(dir, "feat-y"); got != 1700000000 {
+		t.Errorf("renamed entry lost timestamp: %d", got)
+	}
+	if got := worktreeCreatedAt(dir, "feat-x"); got != 0 {
+		t.Errorf("old name should be gone, got %d", got)
+	}
+
+	removeWorktreeMeta(dir, "feat-y")
+	if got := worktreeCreatedAt(dir, "feat-y"); got != 0 {
+		t.Errorf("removed entry should be 0, got %d", got)
+	}
+}
+
+// The metadata file must not keep an otherwise-empty LTS dir alive.
+func TestCleanEmptyLTSDirsIgnoresMetaFile(t *testing.T) {
+	root := t.TempDir()
+	lts := filepath.Join(root, "core-lts")
+	if err := os.MkdirAll(lts, 0755); err != nil {
+		t.Fatal(err)
+	}
+	recordWorktreeCreated(lts, "gone", 1700000000)
+	if err := os.WriteFile(filepath.Join(lts, ".lts-type"), []byte("single\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cleanEmptyLTSDirs(lts)
+	if _, err := os.Stat(lts); !os.IsNotExist(err) {
+		t.Errorf("expected %s removed despite metadata file", lts)
+	}
+}
+
+// LastActivity comes from the tip commit time (and index mtime for worktrees).
+func TestWorktreeLastActivity(t *testing.T) {
+	repo := t.TempDir()
+	run := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", ".")
+	run("commit", "-q", "-m", "initial")
+
+	got := worktreeLastActivity(repo)
+	if got == 0 {
+		t.Fatal("expected non-zero activity for a repo with a commit")
+	}
+	if diff := time.Now().Unix() - got; diff < 0 || diff > 300 {
+		t.Errorf("activity %d not near now (diff %ds)", got, diff)
 	}
 }

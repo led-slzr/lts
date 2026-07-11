@@ -381,6 +381,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	if err != nil {
 		return nil, err
 	}
+	recordWorktreeCreated(ltsPath, wtName, time.Now().Unix())
 
 	// Copy support files (.env*, .mcp.json)
 	if opts.CopyEnv || opts.CopyMCP {
@@ -535,6 +536,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 
 	// Write/merge .lts-repos metadata
 	writeReposMetadata(ltsPath, sorted)
+	recordWorktreeCreated(ltsPath, branchSubdir, time.Now().Unix())
 
 	// Generate monorepo workspace (only workspace file for monorepo setups)
 	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
@@ -1105,6 +1107,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 	// Clean up empty LTS parent
 	log(ctx, "Cleaning up empty directories", false)
+	removeWorktreeMeta(filepath.Dir(branchSubdir), filepath.Base(branchSubdir))
 	cleanEmptyLTSDirs(filepath.Dir(branchSubdir))
 
 	return nil
@@ -1171,6 +1174,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 
 	// Clean up empty parent directories inside -lts structure
 	log(ctx, "Cleaning up empty directories", false)
+	removeWorktreeMeta(filepath.Dir(wtPath), filepath.Base(wtPath))
 	cleanEmptyLTSDirs(filepath.Dir(wtPath))
 
 	return nil
@@ -1197,7 +1201,7 @@ func cleanEmptyLTSDirs(dir string) {
 			hasContent := false
 			for _, e := range entries {
 				name := e.Name()
-				if name == ".lts-type" || name == ".lts-repos" || isJunkFile(name) {
+				if name == ".lts-type" || name == ".lts-repos" || name == ltsMetaFile || isJunkFile(name) {
 					continue
 				}
 				if strings.HasSuffix(name, ".code-workspace") {
@@ -1348,6 +1352,10 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 			}
 			RunGit(repoPath, "worktree", "repair")
 		}
+	}
+
+	if newWtName != oldWtName {
+		renameWorktreeMeta(ltsDir, oldWtName, newWtName)
 	}
 
 	// 3. Rename the workspace file and regenerate its contents
@@ -1504,6 +1512,8 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 			log(ctx, "Branch subdir rename failed: "+err.Error(), true)
 			// Non-fatal — worktrees still work at old subdir path
 			newBranchSubdirPath = branchSubdirPath
+		} else {
+			renameWorktreeMeta(ltsPath, filepath.Base(branchSubdirPath), newBranchDirName)
 		}
 		// Repair all worktrees after moving the parent directory
 		for _, wt := range worktrees {
@@ -1773,6 +1783,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)
 	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
+	recordWorktreeCreated(ltsPath, wtName, time.Now().Unix())
 
 	logFn(ctx, "Migration complete — "+currentBranch+" is now an LTS worktree", false)
 
