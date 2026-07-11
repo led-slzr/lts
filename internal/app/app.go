@@ -169,6 +169,15 @@ var greetingTemplates = []string{
 	"Plant something great today, %s",
 	"Back at it, %s?",
 	"Ship it, %s",
+	"Sick leave k na %s, g",
+	"%s's work be like: 'pls fix, push, PR'",
+	"Whats uppp, %s",
+	"Kape muna bago worktree, %s?",
+	"Push mo na yan, %s",
+	"Deploy on a Friday? Bold move, %s",
+	"Merge conflicts fear %s",
+	"works on my machine — %s, probably",
+	"Another day, another branch, %s",
 }
 
 var namelessGreetings = []string{
@@ -176,6 +185,10 @@ var namelessGreetings = []string{
 	"Branches await",
 	"Ready to branch out?",
 	"May your merges be clean",
+	"Pahinga, when kaya",
+	"LTS FTW LGTM",
+	"Sana all merged na",
+	"It's not a bug, it's a feature",
 }
 
 // pickGreeting composes a random launch greeting from the git user name.
