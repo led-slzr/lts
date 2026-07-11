@@ -178,6 +178,16 @@ var greetingTemplates = []string{
 	"Merge conflicts fear %s",
 	"works on my machine — %s, probably",
 	"Another day, another branch, %s",
+	"How about you touch some grass for once, %s",
+	"Lets goooo %s",
+	"Have you committed today, %s?",
+	"%s, the branches won't merge themselves",
+	"Rebase responsibly, %s",
+	"%s vs the backlog: round infinity",
+	"Nice worktrees, %s. Did an AI make those?",
+	"One commit at a time, %s, you got this",
+	"Small diffs, big dreams, %s",
+	"Hydrate then dominate, %s",
 }
 
 var namelessGreetings = []string{
@@ -189,15 +199,51 @@ var namelessGreetings = []string{
 	"LTS FTW LGTM",
 	"Sana all merged na",
 	"It's not a bug, it's a feature",
+	"This is a reminder na magkape ka na",
+	"Hays.",
+	"4x+12=3, find x",
+	"7 x 8 = ? — no calculator allowed",
+	"What has keys but can't open locks?",
+	"I speak without a mouth and hear without ears. What am I?",
+	"How much wood would a woodchuck chuck if a woodchuck could chuck wood?",
+	"She sells seashells by the seashore",
+	"Peter Piper picked a peck of pickled peppers",
+	"If a branch is deleted and no one fetched it, did it ever exist?",
+	"We are all just worktrees of the same repo",
+	"To merge or to rebase — that is the question",
+	"The unexamined diff is not worth merging",
+	"A repo is a memory of every mistake we chose to keep",
+}
+
+// weekendGreeting counts down to Saturday with matching energy.
+func weekendGreeting(name string) string {
+	switch wd := time.Now().Weekday(); wd {
+	case time.Saturday, time.Sunday:
+		return "It's the weekend, " + name + " — why are you here?"
+	case time.Friday:
+		return "It's Friday, " + name + ", almost there"
+	default:
+		days := int(time.Saturday - wd)
+		unit := "days"
+		if days == 1 {
+			unit = "day"
+		}
+		return fmt.Sprintf("%d %s left till the weekend, %s, you got this", days, unit, name)
+	}
 }
 
 // pickGreeting composes a random launch greeting from the git user name.
 func pickGreeting() string {
-	name := git.UserName()
-	if fields := strings.Fields(name); len(fields) > 0 {
-		return fmt.Sprintf(greetingTemplates[rand.IntN(len(greetingTemplates))], fields[0])
+	var pool []string
+	if fields := strings.Fields(git.UserName()); len(fields) > 0 {
+		first := fields[0]
+		for _, t := range greetingTemplates {
+			pool = append(pool, fmt.Sprintf(t, first))
+		}
+		pool = append(pool, weekendGreeting(first))
 	}
-	return namelessGreetings[rand.IntN(len(namelessGreetings))]
+	pool = append(pool, namelessGreetings...)
+	return pool[rand.IntN(len(pool))]
 }
 
 // usageLabels returns the display names of the click-usage targets,
