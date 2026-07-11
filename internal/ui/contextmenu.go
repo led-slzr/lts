@@ -35,12 +35,18 @@ func RepoContextItems(isMonorepo bool) []ContextMenuItem {
 }
 
 // WorktreeContextItems returns context menu items for a worktree.
-func WorktreeContextItems() []ContextMenuItem {
-	return []ContextMenuItem{
-		{Label: "Rebase", Action: BtnRebase},
-		{Label: "Rename Branch", Action: BtnRename},
-		{Label: "Delete", Action: BtnDelete},
+// Monorepo worktree paths are branch subdirectories (containers of per-repo
+// worktrees, not git worktrees themselves), so Rebase can't run there —
+// per-repo monorepo rebase is a future feature.
+func WorktreeContextItems(isMonorepo bool) []ContextMenuItem {
+	items := []ContextMenuItem{}
+	if !isMonorepo {
+		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
 	}
+	return append(items,
+		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},
+		ContextMenuItem{Label: "Delete", Action: BtnDelete},
+	)
 }
 
 // RenderContextMenu renders the context menu as a centered dialog.

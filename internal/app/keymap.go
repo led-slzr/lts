@@ -167,6 +167,12 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 
 	case ui.BtnRebase:
 		if hasWT {
+			// Monorepo worktree paths are branch subdirs, not git worktrees —
+			// the menu hides Rebase there, but guard against stray dispatch
+			if repo.IsMonorepo {
+				m.statusMsg = "Rebase isn't supported for monorepo worktrees yet"
+				return m, clearStatusCmd()
+			}
 			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
 			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), wt.Branch))
 		}

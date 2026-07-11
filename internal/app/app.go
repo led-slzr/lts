@@ -1145,7 +1145,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Worktree context menu
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.WorktreeContextItems(),
+					Items:  ui.WorktreeContextItems(repo.IsMonorepo),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo
