@@ -289,10 +289,17 @@ func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
 			want[n] = true
 		}
 	}
+	matched := 0
 	for i, r := range m.modal.Repos {
 		if want[r.Name] {
 			m.modal.Selected[i] = true
+			matched++
 		}
+	}
+	if matched == 0 {
+		// Target vanished (reload race) — stay on the select step rather
+		// than letting the modal's cursor fallback pre-seed the wrong repo
+		return m, textinput.Blink
 	}
 	// Advance to the branch step (starts the background branch fetch)
 	var cmd tea.Cmd
@@ -1075,18 +1082,30 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.logPanel.ScrollDown(1)
 				}
 			} else if m.explorerActive() {
-				// Scroll the pane under the cursor
+				// Scroll the pane under the cursor. Clamp against content —
+				// the render clamps a copy, so unbounded state would make
+				// scrolling back take as long as the over-scroll.
 				delta := 2
 				if msg.Button == tea.MouseButtonWheelUp {
 					delta = -2
 				}
 				if msg.X < ui.MarginH+ui.ExplorerSidebarWidth(m.width) {
 					m.explorer.SidebarScroll += delta
+					if maxS := len(m.repos) - 1; m.explorer.SidebarScroll > maxS {
+						m.explorer.SidebarScroll = maxS
+					}
 					if m.explorer.SidebarScroll < 0 {
 						m.explorer.SidebarScroll = 0
 					}
 				} else {
 					m.explorer.SheetScroll += delta
+					wts := 0
+					if m.explorer.SelectedRepo < len(m.repos) {
+						wts = len(m.repos[m.explorer.SelectedRepo].Worktrees)
+					}
+					if maxS := wts - 1; m.explorer.SheetScroll > maxS {
+						m.explorer.SheetScroll = maxS
+					}
 					if m.explorer.SheetScroll < 0 {
 						m.explorer.SheetScroll = 0
 					}
@@ -2143,7 +2162,11 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
-		cleaned, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
+		cleaned, deletedPaths, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
+		// Cleaned worktrees are gone — their tmux sessions must not linger
+		for _, p := range deletedPaths {
+			opener.KillSession(p)
+		}
 		return CleanupMergedDoneMsg{Cleaned: cleaned, Locked: locked, Err: err}
 	}
 }

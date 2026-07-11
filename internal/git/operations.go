@@ -1548,8 +1548,10 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 }
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.
-// Also cleans up workspace files and empty directories.
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, error) {
+// Also cleans up workspace files and empty directories. Returns the count and
+// the paths of the deleted worktrees (so callers can release attached
+// resources like tmux sessions).
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1558,6 +1560,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	log("cleanup", "Discovering repos and scanning worktree statuses...", false)
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	cleaned := 0
+	var deletedPaths []string
 
 	// Count candidates first
 	candidates := 0
@@ -1570,7 +1573,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	}
 	if candidates == 0 {
 		log("cleanup", "No merged cleanable worktrees found", false)
-		return 0, nil
+		return 0, nil, nil
 	}
 	log("cleanup", fmt.Sprintf("Found %d merged cleanable worktrees", candidates), false)
 
@@ -1582,6 +1585,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
+						deletedPaths = append(deletedPaths, wt.Path)
 					} else {
 						log(wt.Branch, "Failed: "+err.Error(), true)
 					}
@@ -1593,6 +1597,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
+						deletedPaths = append(deletedPaths, wt.Path)
 					} else {
 						log(wt.Branch, "Failed: "+err.Error(), true)
 					}
@@ -1601,7 +1606,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 		}
 	}
 
-	return cleaned, nil
+	return cleaned, deletedPaths, nil
 }
 
 // MigrateToWorktree migrates existing work from the main repo directory into
