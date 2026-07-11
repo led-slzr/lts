@@ -138,8 +138,10 @@ Supported values:
 - **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
 - **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.
-- **Tmux AI Pane Width** (`TMUX_AI_PANE_WIDTH`): AI pane width as a percent of the window, `20`–`90` (default `50`). Applies to newly created sessions.
-- **Tmux Right Panes** (`TMUX_RIGHT_PANES`): `1`, `2`, or `3` evenly stacked shell panes in the right column (default `1`). Applies to newly created sessions.
+- **Tmux AI Pane Width** (`TMUX_AI_PANE_WIDTH`): AI pane width as a percent of the window, `20`–`90` (default `50`).
+- **Tmux Right Panes** (`TMUX_RIGHT_PANES`): `1`, `2`, or `3` evenly stacked shell panes in the right column (default `1`).
+
+Layout changes apply the next time a worktree is opened — existing sessions are resized (and missing right panes added) without touching running processes. Panes are never removed automatically.
 - **Check for Updates**: `true` / `false` — daily check for new releases on startup
 - **Auto Update**: `true` / `false` — silently download and install new releases in the background
 

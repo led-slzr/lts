@@ -63,6 +63,7 @@ func openTmux(path string, o Options, focusAI bool) error {
 	if err := ensureTmuxSession(name, path, o.AICliCommand, o.TmuxAIPaneWidth, o.TmuxRightPanes); err != nil {
 		return err
 	}
+	reconcileTmuxLayout(name, path, o.TmuxAIPaneWidth, o.TmuxRightPanes)
 	focusTmuxPane(name, focusAI)
 
 	tmuxPath, err := exec.LookPath("tmux")
@@ -131,6 +132,43 @@ func ensureTmuxSession(name, dir, aiCliCommand string, aiWidthPct, rightPanes in
 		exec.Command("tmux", "send-keys", "-t", win+".{left}", aiCliCommand, "Enter").Run()
 	}
 	return nil
+}
+
+// reconcileTmuxLayout applies the configured layout to an existing session
+// so settings changes show up on the next open: the AI pane is resized to
+// the configured width and missing right-column shells are added.
+// Non-destructive — panes are never killed, running processes survive.
+func reconcileTmuxLayout(name, dir string, aiWidthPct, rightPanes int) {
+	out, err := exec.Command("tmux", "display-message", "-t", name+":", "-p", "#{window_id}").Output()
+	if err != nil {
+		return
+	}
+	win := strings.TrimSpace(string(out))
+	panesOut, err := exec.Command("tmux", "list-panes", "-t", win, "-F", "#{pane_id}").Output()
+	if err != nil {
+		return
+	}
+	total := len(strings.Fields(string(panesOut)))
+	if total < 2 {
+		return // no AI/shell split to manage
+	}
+
+	exec.Command("tmux", "resize-pane", "-t", win+".{left}", "-x",
+		fmt.Sprintf("%d%%", clampAIPaneWidth(aiWidthPct))).Run()
+
+	want := rightPanes
+	if want < 1 {
+		want = 1
+	}
+	if want > 3 {
+		want = 3
+	}
+	for have := total - 1; have < want; have++ {
+		remaining := want - have
+		pct := remaining * 100 / (remaining + 1)
+		exec.Command("tmux", "split-window", "-d", "-v", "-l", fmt.Sprintf("%d%%", pct),
+			"-t", win+".{bottom-right}", "-c", dir).Run()
+	}
 }
 
 // focusTmuxPane selects the AI pane ({left}) or the shell pane ({right}) of
