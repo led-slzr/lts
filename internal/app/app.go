@@ -658,6 +658,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
 
+	case CleanModulesDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Clean modules error: " + msg.Err.Error()
+		} else if msg.Removed == 0 {
+			m.statusMsg = "No node_modules in " + msg.Branch
+		} else {
+			m.statusMsg = fmt.Sprintf("Cleaned %d node_modules in %s (freed %s)", msg.Removed, msg.Branch, git.HumanBytes(msg.Freed))
+		}
+		m.recomputeLayout()
+		return m, clearStatusCmd()
+
 	case CleanupMergedDoneMsg:
 		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
@@ -2205,6 +2217,13 @@ func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []s
 			opener.RenameSession(branchSubdirPath, res.NewPath) // keep tmux session matching
 		}
 		return RenameDoneMsg{NewBranch: newBranch, Locked: locked, Err: err}
+	}
+}
+
+func cleanModulesCmd(logFn git.LogFunc, wtPath, branch string, locked []string) tea.Cmd {
+	return func() tea.Msg {
+		removed, freed, err := git.CleanModules(wtPath, logFn)
+		return CleanModulesDoneMsg{Branch: branch, Removed: removed, Freed: freed, Locked: locked, Err: err}
 	}
 }
 

@@ -211,6 +211,13 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			return m, clearStatusCmd()
 		}
 
+	case ui.BtnCleanModules:
+		if hasWT {
+			lock := lockSet(repo)
+			logFn, startCmd := m.beginOp("Cleaning modules in "+wt.Branch+"...", lock...)
+			return m, tea.Batch(startCmd, cleanModulesCmd(logFn, wt.Path, wt.Branch, lock))
+		}
+
 	case ui.BtnDelete:
 		if hasWT {
 			// Protected branches: the worktree can be removed, the branch never is
@@ -565,6 +572,11 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 	case "x":
 		if st.FocusSheet {
 			m2, cmd := explorerAction(m, ui.BtnKillSession)
+			return true, m2, cmd
+		}
+	case "p":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnCleanModules)
 			return true, m2, cmd
 		}
 	}

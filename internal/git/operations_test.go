@@ -213,3 +213,61 @@ func TestWorktreeLastActivity(t *testing.T) {
 		t.Errorf("activity %d not near now (diff %ds)", got, diff)
 	}
 }
+
+func TestCleanModules(t *testing.T) {
+	wt := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(wt, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("node_modules/pkg/index.js", "xxxx")
+	write("apps/web/node_modules/dep/a.js", "yyyyyyyy")
+	write(".git/node_modules/never.js", "z") // inside .git — untouched
+	write("src/main.ts", "keep")
+
+	removed, freed, err := CleanModules(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 2 {
+		t.Errorf("removed = %d, want 2", removed)
+	}
+	if freed != 12 {
+		t.Errorf("freed = %d bytes, want 12", freed)
+	}
+	for _, gone := range []string{"node_modules", "apps/web/node_modules"} {
+		if _, err := os.Stat(filepath.Join(wt, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s should be removed", gone)
+		}
+	}
+	for _, kept := range []string{"src/main.ts", ".git/node_modules/never.js"} {
+		if _, err := os.Stat(filepath.Join(wt, kept)); err != nil {
+			t.Errorf("%s should survive", kept)
+		}
+	}
+
+	// idempotent
+	removed, _, err = CleanModules(wt)
+	if err != nil || removed != 0 {
+		t.Errorf("second run: removed=%d err=%v, want 0,nil", removed, err)
+	}
+}
+
+func TestHumanBytes(t *testing.T) {
+	cases := map[int64]string{
+		512:     "512B",
+		2048:    "2.0KB",
+		5 << 20: "5.0MB",
+		3 << 30: "3.0GB",
+	}
+	for n, want := range cases {
+		if got := HumanBytes(n); got != want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", n, got, want)
+		}
+	}
+}

@@ -46,6 +46,7 @@ func WorktreeContextItems(isMonorepo, hasSession bool) []ContextMenuItem {
 	}
 	items = append(items,
 		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},
+		ContextMenuItem{Label: "Clean Modules", Action: BtnCleanModules},
 		ContextMenuItem{Label: "Delete", Action: BtnDelete},
 	)
 	if hasSession {

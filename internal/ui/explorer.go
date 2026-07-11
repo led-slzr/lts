@@ -71,6 +71,7 @@ func explorerActions(repo git.Repo, hasSession bool) []stripAction {
 	}
 	actions = append(actions,
 		stripAction{"m rename", BtnRename},
+		stripAction{"p modules", BtnCleanModules},
 		stripAction{"d delete", BtnDelete},
 	)
 	if hasSession {

@@ -59,6 +59,15 @@ type CleanupMergedDoneMsg struct {
 	Err     error
 }
 
+// CleanModulesDoneMsg is sent when a node_modules cleanup completes.
+type CleanModulesDoneMsg struct {
+	Branch  string
+	Removed int
+	Freed   int64
+	Locked  []string // repo locks to release
+	Err     error
+}
+
 // LogEntryMsg is sent when an async operation produces a log line.
 type LogEntryMsg struct {
 	Context string // repo/operation context

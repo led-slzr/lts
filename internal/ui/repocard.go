@@ -45,6 +45,8 @@ const (
 	BtnOpen
 	// Kill a worktree's tmux session
 	BtnKillSession
+	// Remove node_modules from a worktree
+	BtnCleanModules
 )
 
 // innerWidth returns the usable content width inside a card.

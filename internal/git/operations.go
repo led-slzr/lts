@@ -1609,6 +1609,84 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	return cleaned, deletedPaths, nil
 }
 
+// CleanModules removes every node_modules directory inside a worktree
+// (nested ones included, npkill-style) and reports how many were removed
+// and how many bytes were freed. Safe to re-run; skips .git.
+func CleanModules(wtPath string, logFn ...LogFunc) (int, int64, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+	ctx := filepath.Base(wtPath)
+
+	if _, err := os.Stat(wtPath); err != nil {
+		return 0, 0, fmt.Errorf("worktree not found: %s", wtPath)
+	}
+
+	removed := 0
+	var freed int64
+	filepath.Walk(wtPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() {
+			return nil
+		}
+		switch filepath.Base(path) {
+		case ".git":
+			return filepath.SkipDir
+		case "node_modules":
+			size := dirSize(path)
+			log(ctx, fmt.Sprintf("Removing %s (%s)", relOrSelf(wtPath, path), HumanBytes(size)), false)
+			if rmErr := os.RemoveAll(path); rmErr != nil {
+				log(ctx, "Failed: "+rmErr.Error(), true)
+			} else {
+				removed++
+				freed += size
+			}
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if removed == 0 {
+		log(ctx, "No node_modules found", false)
+	} else {
+		log(ctx, fmt.Sprintf("Freed %s across %d node_modules", HumanBytes(freed), removed), false)
+	}
+	return removed, freed, nil
+}
+
+// dirSize sums the file sizes under a directory.
+func dirSize(root string) int64 {
+	var total int64
+	filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// relOrSelf returns path relative to root for display, or the base name.
+func relOrSelf(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return rel
+	}
+	return filepath.Base(path)
+}
+
+// HumanBytes formats a byte count compactly (B, KB, MB, GB).
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMG"[exp])
+}
+
 // MigrateToWorktree migrates existing work from the main repo directory into
 // an LTS worktree. This handles the case where a user has been working directly
 // in the repo (non-main branch, uncommitted changes, unpushed commits) before
