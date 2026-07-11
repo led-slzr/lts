@@ -150,6 +150,25 @@ func (m *Model) usageLabels() ui.UsageLabels {
 	}
 }
 
+// openerOpts assembles the opener configuration from settings.
+func (m *Model) openerOpts() opener.Options {
+	return opener.Options{
+		IDECommand:   m.config.Global.IDECommand,
+		AICliCommand: m.config.Global.AICliCommand,
+		Terminal:     m.config.Global.Terminal,
+		Multiplexer:  m.config.Global.Multiplexer,
+	}
+}
+
+// tmuxFallbackNote appends a hint when tmux mode is configured but the
+// binary is missing (opens fall back to a plain terminal).
+func (m *Model) tmuxFallbackNote(mode opener.ClickUsage) string {
+	if mode != opener.ClickIDE && m.config.Global.Multiplexer == "tmux" && !opener.TmuxAvailable() {
+		return " (tmux not found — opened plain)"
+	}
+	return ""
+}
+
 // recomputeLayout recalculates grid, hit zones, and section Y positions.
 // Must be called from Update (not View) so the state persists.
 func (m *Model) recomputeLayout() {
@@ -1181,11 +1200,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.focusedCard >= 0 && m.focusedWT == -2 && m.hoveredBtn == ui.BtnNone {
 			repo := m.repos[m.focusedCard]
 			if repo.Path != "" {
-				err := opener.OpenRepo(repo.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				err := opener.OpenRepo(repo.Path, m.clickUsage, m.openerOpts())
 				if err != nil {
 					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
 				} else {
-					m.statusMsg = fmt.Sprintf("Opened %s in %s", repo.Name, m.clickUsage)
+					m.statusMsg = fmt.Sprintf("Opened %s in %s%s", repo.Name, m.clickUsage, m.tmuxFallbackNote(m.clickUsage))
 				}
 				return m, clearStatusCmd()
 			}
@@ -1196,11 +1215,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT < len(repo.Worktrees) {
 				wt := repo.Worktrees[m.focusedWT]
-				err := opener.OpenWorktree(wt.Path, m.clickUsage, m.config.Global.IDECommand, m.config.Global.AICliCommand, m.config.Global.Terminal)
+				err := opener.OpenWorktree(wt.Path, m.clickUsage, m.openerOpts())
 				if err != nil {
 					m.statusMsg = fmt.Sprintf("Failed to open: %s", err.Error())
 				} else {
-					m.statusMsg = fmt.Sprintf("Opened %s in %s", wt.Branch, m.clickUsage)
+					m.statusMsg = fmt.Sprintf("Opened %s in %s%s", wt.Branch, m.clickUsage, m.tmuxFallbackNote(m.clickUsage))
 				}
 				return m, clearStatusCmd()
 			}
@@ -1798,6 +1817,9 @@ func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string,
 func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)
+		if err == nil {
+			opener.KillSession(wtPath) // best-effort tmux cleanup
+		}
 		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
 	}
 }
@@ -1805,6 +1827,9 @@ func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, 
 func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteLocal, deleteRemote, logFn)
+		if err == nil {
+			opener.KillSession(branchSubdir) // best-effort tmux cleanup
+		}
 		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
 	}
 }
@@ -1851,10 +1876,12 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 	pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
 	aiCli, ide, openEnv := cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
-		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
+		res, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
 			pm, aiCli, ide, openEnv, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
+		} else if res != nil {
+			opener.RenameSession(wtPath, res.NewPath) // keep tmux session matching
 		}
 		return RenameDoneMsg{NewBranch: newBranch, Locked: locked, Err: err}
 	}
@@ -1864,10 +1891,12 @@ func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []s
 	workDir := cfg.WorkDir
 	pm, aiCli, ide, openEnv := cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
-		_, err := git.RenameMonorepoWorktrees(workDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
+		res, err := git.RenameMonorepoWorktrees(workDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
 			pm, aiCli, ide, openEnv, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
+		} else if res != nil {
+			opener.RenameSession(branchSubdirPath, res.NewPath) // keep tmux session matching
 		}
 		return RenameDoneMsg{NewBranch: newBranch, Locked: locked, Err: err}
 	}

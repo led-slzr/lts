@@ -126,6 +126,7 @@ AI_CLI_COMMAND="claude"
 PACKAGE_MANAGER="pnpm"
 AUTO_REFRESH="24H"
 TERMINAL="terminal"
+TERMINAL_MULTIPLEXER="none"
 DAILY_CHECK_FOR_UPDATES="true"
 AUTO_UPDATE_NEW_RELEASE="true"
 ```
@@ -136,6 +137,7 @@ Supported values:
 - **Package Manager**: `pnpm`, `npm`, `yarn`, `bun`
 - **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
+- **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.
 - **Check for Updates**: `true` / `false` — daily check for new releases on startup
 - **Auto Update**: `true` / `false` — silently download and install new releases in the background
 

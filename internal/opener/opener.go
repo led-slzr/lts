@@ -33,30 +33,58 @@ func (c ClickUsage) Next() ClickUsage {
 	return (c + 1) % 3
 }
 
+// Options carries the configured commands used to open repos and worktrees.
+type Options struct {
+	IDECommand   string
+	AICliCommand string
+	Terminal     string
+	Multiplexer  string // "tmux" = session per worktree; anything else = plain
+}
+
+// tmuxEnabled reports whether opens should go through tmux sessions.
+func (o Options) tmuxEnabled() bool {
+	return o.Multiplexer == "tmux" && TmuxAvailable()
+}
+
 // OpenRepo opens the main repo path using the specified click usage mode.
 // For IDE mode, it opens the directory directly without searching for workspace files.
-func OpenRepo(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
+func OpenRepo(path string, mode ClickUsage, o Options) error {
 	switch mode {
 	case ClickIDE:
-		cmd := exec.Command(ideCommand, path)
+		cmd := exec.Command(o.IDECommand, path)
 		return cmd.Start()
 	case ClickAICli:
-		return openAICli(path, aiCliCommand, terminal)
+		if o.tmuxEnabled() {
+			return openTmux(path, o, true)
+		}
+		return openAICli(path, o.AICliCommand, o.Terminal)
 	case ClickTerminal:
-		return openTerminal(path, terminal)
+		if o.tmuxEnabled() {
+			return openTmux(path, o, false)
+		}
+		return openTerminal(path, o.Terminal)
 	}
 	return nil
 }
 
 // OpenWorktree opens a worktree path using the specified click usage mode.
-func OpenWorktree(path string, mode ClickUsage, ideCommand, aiCliCommand, terminal string) error {
+// With tmux enabled, AI CLI and Terminal modes converge on one session per
+// worktree (left pane: AI CLI, right pane: shell) — the mode only decides
+// which pane gets focus, so the AI CLI conversation survives reopening.
+func OpenWorktree(path string, mode ClickUsage, o Options) error {
 	switch mode {
 	case ClickIDE:
-		return openIDE(path, ideCommand)
+		return openIDE(path, o.IDECommand)
 	case ClickAICli:
-		return openAICli(path, aiCliCommand, terminal)
+		if o.tmuxEnabled() {
+			return openTmux(path, o, true)
+		}
+		return openAICli(path, o.AICliCommand, o.Terminal)
 	case ClickTerminal:
-		return openTerminal(path, terminal)
+		if o.tmuxEnabled() {
+			return openTmux(path, o, false)
+		}
+		return openTerminal(path, o.Terminal)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/opener"
 	"lts-revamp/internal/version"
 	"os"
 	"strings"
@@ -129,6 +130,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Terminal", Key: "TERMINAL",
 				Value: s.Config.Global.Terminal, Kind: SettingEnum,
 				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
+			SettingsItem{Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
+				Value: s.Config.Global.Multiplexer, Kind: SettingEnum,
+				Options: []string{"none", "tmux"}},
 			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
 				Options: []string{"pnpm", "npm", "yarn", "bun"}},
@@ -213,11 +217,19 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 		binPath = shortenHome(exe)
 	}
 
+	tmuxStatus := "not installed"
+	if v, ok := opener.TmuxVersion(); ok {
+		tmuxStatus = v + " ✓"
+	} else if s.Config.Global.Multiplexer == "tmux" {
+		tmuxStatus = "not found ✗ — install tmux or set Multiplexer to none"
+	}
+
 	return []SettingsItem{
 		{Label: "Git", Key: "DIAG_GIT", Value: gitStatus, Kind: SettingDisplay},
 		{Label: "Working Directory", Key: "DIAG_WORKDIR", Value: shortenHome(s.Config.WorkDir), Kind: SettingDisplay},
 		{Label: "Repositories", Key: "DIAG_REPOS", Value: repoStatus, Kind: SettingDisplay},
 		{Label: "Config File", Key: "DIAG_CONFIG", Value: configStatus, Kind: SettingDisplay},
+		{Label: "Tmux", Key: "DIAG_TMUX", Value: tmuxStatus, Kind: SettingDisplay},
 		{Label: "Build", Key: "DIAG_BUILD", Value: build, Kind: SettingDisplay},
 		{Label: "Binary", Key: "DIAG_BINARY", Value: binPath, Kind: SettingDisplay},
 		{Label: "Last Update Check", Key: "DIAG_UPDATE", Value: formatLastRefresh(s.Config.Global.LastUpdateCheck), Kind: SettingDisplay},
@@ -489,6 +501,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.AutoRefresh = item.Value
 		case "TERMINAL":
 			s.Config.Global.Terminal = item.Value
+		case "TERMINAL_MULTIPLEXER":
+			s.Config.Global.Multiplexer = item.Value
 		case "DAILY_CHECK_FOR_UPDATES":
 			s.Config.Global.CheckForUpdates = item.Value == "true"
 		case "AUTO_UPDATE_NEW_RELEASE":

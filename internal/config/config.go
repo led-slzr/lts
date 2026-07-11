@@ -18,6 +18,7 @@ type GlobalConfig struct {
 	PackageManager  string // pnpm, npm, yarn, bun
 	AutoRefresh     string // 30M, 1H, 24H, etc.
 	Terminal        string // ghostty, iterm, terminal, wezterm, alacritty
+	Multiplexer     string // none, tmux — session layer inside the terminal
 	CheckForUpdates bool   // daily check for new releases
 	AutoUpdate      bool   // automatically install new releases in background
 	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
@@ -48,6 +49,7 @@ func DefaultGlobal() GlobalConfig {
 		PackageManager:  "pnpm",
 		AutoRefresh:     "OFF",
 		Terminal:        "terminal",
+		Multiplexer:     "none",
 		CheckForUpdates: true,
 		AutoUpdate:      true,
 		OpenEnvInIDE:    true,
@@ -252,6 +254,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("PACKAGE_MANAGER=\"%s\"", c.Global.PackageManager),
 		fmt.Sprintf("AUTO_REFRESH=\"%s\"", c.Global.AutoRefresh),
 		fmt.Sprintf("TERMINAL=\"%s\"", c.Global.Terminal),
+		fmt.Sprintf("TERMINAL_MULTIPLEXER=\"%s\"", c.Global.Multiplexer),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
@@ -316,6 +319,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["TERMINAL"]; ok {
 		g.Terminal = v
+	}
+	if v, ok := kv["TERMINAL_MULTIPLEXER"]; ok {
+		g.Multiplexer = v
 	}
 	if v, ok := kv["DAILY_CHECK_FOR_UPDATES"]; ok {
 		g.CheckForUpdates = v != "false"
