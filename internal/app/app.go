@@ -1591,10 +1591,36 @@ func paintBlack(content string, width, height int) string {
 
 // Commands
 
-// basisResolver creates a BasisBranchResolver from the config.
+// basisResolver creates a BasisBranchResolver over a snapshot of the per-repo
+// config, taken on the caller's (Update) thread. Command goroutines must never
+// read cfg.Local directly: settings can write that map while an operation
+// runs, and concurrent map access panics. Call this (and pkgResolver /
+// workspaceOpts) when constructing a command, not inside its goroutine.
 func basisResolver(cfg *config.Config) git.BasisBranchResolver {
+	snap := make(map[string]string, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.BasisBranch
+	}
 	return func(repoName string) string {
-		return cfg.GetRepoBasisBranch(repoName)
+		if b, ok := snap[strings.ToUpper(repoName)]; ok && b != "" {
+			return b
+		}
+		return "main"
+	}
+}
+
+// pkgResolver snapshots the per-repo package-manager config (see basisResolver).
+func pkgResolver(cfg *config.Config) func(string) string {
+	def := cfg.Global.PackageManager
+	snap := make(map[string]string, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.PackageManager
+	}
+	return func(repoName string) string {
+		if pm, ok := snap[strings.ToUpper(repoName)]; ok && pm != "" {
+			return pm
+		}
+		return def
 	}
 }
 
@@ -1615,8 +1641,10 @@ func doMigrationCmd(cfg *config.Config) tea.Cmd {
 }
 
 func loadReposCmd(cfg *config.Config) tea.Cmd {
+	workDir := cfg.WorkDir
+	resolve := basisResolver(cfg)
 	return func() tea.Msg {
-		repos := git.DiscoverRepos(cfg.WorkDir, basisResolver(cfg))
+		repos := git.DiscoverRepos(workDir, resolve)
 		return ReposLoadedMsg{Repos: repos}
 	}
 }
@@ -1659,8 +1687,10 @@ func (m *Model) startLogStream() (git.LogFunc, tea.Cmd) {
 }
 
 func refreshAllCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
+	workDir := cfg.WorkDir
+	resolve := basisResolver(cfg)
 	return func() tea.Msg {
-		count, failed, err := git.RefreshAllRepos(cfg.WorkDir, basisResolver(cfg), logFn)
+		count, failed, err := git.RefreshAllRepos(workDir, resolve, logFn)
 		return RefreshDoneMsg{Count: count, Failed: failed, Err: err}
 	}
 }
@@ -1693,10 +1723,11 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 	}
 }
 
-// workspaceOpts assembles the create-time options from config.
+// workspaceOpts assembles the create-time options from config, snapshotting
+// everything on the caller's (Update) thread — see basisResolver.
 func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 	return git.WorkspaceOptions{
-		PkgManager:   cfg.GetRepoPackageManager,
+		PkgManager:   pkgResolver(cfg),
 		AICliCommand: cfg.Global.AICliCommand,
 		IDECommand:   cfg.Global.IDECommand,
 		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
@@ -1706,10 +1737,12 @@ func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 }
 
 func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, installDeps map[string]bool, cfg *config.Config) tea.Cmd {
+	workDir := cfg.WorkDir
+	resolve := basisResolver(cfg)
+	opts := workspaceOpts(cfg)
 	return func() tea.Msg {
 		log := &git.CreateLog{Stream: logFn}
-		results, err := git.CreateMonorepoWorktrees(repoNames, cfg.WorkDir, branch, basisResolver(cfg), installDeps,
-			workspaceOpts(cfg), log)
+		results, err := git.CreateMonorepoWorktrees(repoNames, workDir, branch, resolve, installDeps, opts, log)
 		if err != nil {
 			logFn("create", "Failed: "+err.Error(), true)
 		} else {
@@ -1720,17 +1753,20 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, ins
 }
 
 func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cmd {
+	workDir := cfg.WorkDir
+	resolve := basisResolver(cfg)
 	return func() tea.Msg {
-		cleaned, err := git.CleanupMergedCleanables(cfg.WorkDir, basisResolver(cfg), deleteRemote, logFn)
+		cleaned, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
 		return CleanupMergedDoneMsg{Cleaned: cleaned, Err: err}
 	}
 }
 
 func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
+	pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
+	aiCli, ide, openEnv := cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
-		pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
 		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
-			pm, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
+			pm, aiCli, ide, openEnv, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
@@ -1739,9 +1775,11 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 }
 
 func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
+	workDir := cfg.WorkDir
+	pm, aiCli, ide, openEnv := cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
-		_, err := git.RenameMonorepoWorktrees(cfg.WorkDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
-			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
+		_, err := git.RenameMonorepoWorktrees(workDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
+			pm, aiCli, ide, openEnv, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
@@ -1750,10 +1788,11 @@ func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []s
 }
 
 func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd {
+	workDir := cfg.WorkDir
+	basis := cfg.GetRepoBasisBranch(filepath.Base(repoPath))
+	opts := workspaceOpts(cfg)
 	return func() tea.Msg {
-		repoName := filepath.Base(repoPath)
-		basis := cfg.GetRepoBasisBranch(repoName)
-		result, err := git.MigrateToWorktree(repoPath, cfg.WorkDir, basis, workspaceOpts(cfg), logFn)
+		result, err := git.MigrateToWorktree(repoPath, workDir, basis, opts, logFn)
 		if err != nil {
 			logFn("migrate", "Failed: "+err.Error(), true)
 		} else {
