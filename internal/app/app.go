@@ -285,6 +285,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout()
 			return m, updateCheckCmd(false)
 		case "RESET_SETUP_ACTION":
+			// Resetting exec-relaunches the process — it would kill a
+			// running operation mid-flight
+			if m.loading {
+				m.settings.SaveError = "Wait for the running operation to finish"
+				return m, nil
+			}
 			m.RelaunchSetup = true
 			return m, tea.Quit
 		}
@@ -945,9 +951,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.hoveredBtn = btn
 		}
 
-		// History suggestion hover (empty state)
+		// History suggestion hover (empty state) — no hover while loading;
+		// the click is blocked then too (relaunch would kill the operation)
 		prevHistory := m.hoveredHistory
-		m.hoveredHistory = ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		m.hoveredHistory = -1
+		if !m.loading {
+			m.hoveredHistory = ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
+		}
 		if prevHistory != m.hoveredHistory {
 			m.recomputeLayout()
 		}
