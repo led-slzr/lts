@@ -122,3 +122,42 @@ func TestSpinnerTickSingleLoop(t *testing.T) {
 		t.Error("second op must not start another spinner loop")
 	}
 }
+
+func TestSortRepos(t *testing.T) {
+	mk := func() []git.Repo {
+		return []git.Repo{
+			{Name: "zeta", Worktrees: []git.Worktree{
+				{Branch: "b", LastActivity: 100, CreatedAt: 900},
+				{Branch: "a", LastActivity: 300, CreatedAt: 100},
+			}},
+			{Name: "alpha", Worktrees: []git.Worktree{
+				{Branch: "x", LastActivity: 200, CreatedAt: 500},
+			}},
+			{Name: "empty"}, // no worktrees — sinks under timestamp sorts
+		}
+	}
+
+	repos := mk()
+	sortRepos(repos, "activity")
+	if repos[0].Name != "zeta" || repos[1].Name != "alpha" || repos[2].Name != "empty" {
+		t.Errorf("activity order = %s,%s,%s", repos[0].Name, repos[1].Name, repos[2].Name)
+	}
+	if repos[0].Worktrees[0].Branch != "a" {
+		t.Errorf("worktrees should be newest-activity first, got %s", repos[0].Worktrees[0].Branch)
+	}
+
+	repos = mk()
+	sortRepos(repos, "created")
+	if repos[0].Name != "zeta" || repos[0].Worktrees[0].Branch != "b" {
+		t.Errorf("created order wrong: repo %s, first wt %s", repos[0].Name, repos[0].Worktrees[0].Branch)
+	}
+
+	repos = mk()
+	sortRepos(repos, "name")
+	if repos[0].Name != "alpha" || repos[1].Name != "empty" || repos[2].Name != "zeta" {
+		t.Errorf("name order = %s,%s,%s", repos[0].Name, repos[1].Name, repos[2].Name)
+	}
+	if repos[2].Worktrees[0].Branch != "a" {
+		t.Errorf("name mode sorts worktrees by branch, got %s", repos[2].Worktrees[0].Branch)
+	}
+}

@@ -22,6 +22,7 @@ type GlobalConfig struct {
 	TmuxAIPaneWidth int    // AI pane width as % of the window (tmux sessions)
 	TmuxRightPanes  int    // stacked panes in the right column (tmux sessions)
 	Layout          string // main view layout: board, explorer
+	SortOrder       string // repo/worktree ordering: activity, created, name
 	AutoCleanModules string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
 	AutoKillTmux     string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
 	CheckForUpdates bool   // daily check for new releases
@@ -58,6 +59,7 @@ func DefaultGlobal() GlobalConfig {
 		TmuxAIPaneWidth: 50,
 		TmuxRightPanes:  1,
 		Layout:          "board",
+		SortOrder:       "activity",
 		AutoCleanModules: "OFF",
 		AutoKillTmux:     "OFF",
 		CheckForUpdates: true,
@@ -268,6 +270,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("TMUX_AI_PANE_WIDTH=\"%d\"", c.Global.TmuxAIPaneWidth),
 		fmt.Sprintf("TMUX_RIGHT_PANES=\"%d\"", c.Global.TmuxRightPanes),
 		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
+		fmt.Sprintf("SORT_ORDER=\"%s\"", c.Global.SortOrder),
 		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
 		fmt.Sprintf("AUTO_KILL_TMUX=\"%s\"", c.Global.AutoKillTmux),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
@@ -350,6 +353,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["LAYOUT"]; ok {
 		g.Layout = v
+	}
+	if v, ok := kv["SORT_ORDER"]; ok {
+		g.SortOrder = v
 	}
 	if v, ok := kv["AUTO_CLEAN_MODULES"]; ok {
 		g.AutoCleanModules = v
