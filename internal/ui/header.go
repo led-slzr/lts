@@ -341,10 +341,13 @@ func renderClickUsage(active opener.ClickUsage, labels UsageLabels, hoveredUsage
 // viewToggleNames are the layout names in display order.
 var viewToggleNames = [2]string{"Board", "Explorer"}
 
+// viewToggleLabel is padded to align with "Click Usage:" above it.
+const viewToggleLabel = "Layout:     "
+
 // renderViewToggle renders the layout switcher line, aligned under the
 // Click Usage line (the label is padded to the same width).
 func renderViewToggle(activeLayout string, hoveredView int) string {
-	label := ClickUsageLabelStyle.Render("View:       ") // aligns with "Click Usage:"
+	label := ClickUsageLabelStyle.Render(viewToggleLabel)
 
 	hoveredStyle := lipgloss.NewStyle().
 		Foreground(ColorWhite).
@@ -388,7 +391,7 @@ func ViewToggleHitZones(termWidth int, labels UsageLabels, updateAvailable ...st
 	}
 	layout := computeHeaderLayout(termWidth, labels, ua)
 
-	labelW := lipgloss.Width(ClickUsageLabelStyle.Render("View:       ")) + 1
+	labelW := lipgloss.Width(ClickUsageLabelStyle.Render(viewToggleLabel)) + 1
 
 	y = 3 // click usage is at y=2; the view line is directly below
 	curX := layout.RightBlockX + labelW

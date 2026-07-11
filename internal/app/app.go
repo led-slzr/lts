@@ -318,7 +318,7 @@ func (m *Model) toggleLayout() {
 		}
 	}
 	m.config.SaveGlobal()
-	m.statusMsg = "View: " + m.config.Global.Layout
+	m.statusMsg = "Layout: " + m.config.Global.Layout
 }
 
 // markSessionLive flips the tmux indicator on immediately after LTS opens a
