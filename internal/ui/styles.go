@@ -18,6 +18,7 @@ var (
 	ColorBtnBg      = lipgloss.Color("#111111")
 	ColorBtnHoverBg = lipgloss.Color("#006400")
 	ColorMagenta    = lipgloss.Color("#CC55CC")
+	ColorTeal       = lipgloss.Color("#00CCCC") // tmux session indicators
 
 	// Title
 	TitleStyle = lipgloss.NewStyle().

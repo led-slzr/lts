@@ -116,6 +116,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	selStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
 	nameStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack)
 	monoStyle := lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack)
+	tealStyle := lipgloss.NewStyle().Foreground(ColorTeal).Background(ColorBlack)
 	busyStyle := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
 	warnStyle := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
 
@@ -271,7 +272,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 		}
 		if showTmux {
 			if tmuxLive[opener.SessionName(wt.Path)] {
-				line += monoStyle.Render("●")
+				line += tealStyle.Render("●")
 			} else {
 				line += dimStyle.Render(" ")
 			}

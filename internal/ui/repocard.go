@@ -154,7 +154,7 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		// Live tmux session indicator
 		sessionDot := ""
 		if tmuxLive[opener.SessionName(wt.Path)] {
-			sessionDot = " " + lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack).Render("●")
+			sessionDot = " " + lipgloss.NewStyle().Foreground(ColorTeal).Background(ColorBlack).Render("●")
 		}
 
 		var line string
@@ -272,7 +272,7 @@ func renderMigrationCard(repo git.Repo, cardWidth, iw int, focused bool, focused
 }
 
 // RenderStatusLegend renders a compact color legend for worktree statuses.
-func RenderStatusLegend(width int) string {
+func RenderStatusLegend(width int, showTmux bool) string {
 	items := []struct {
 		color lipgloss.Color
 		label string
@@ -284,6 +284,12 @@ func RenderStatusLegend(width int) string {
 		{ColorBlue, "new"},
 		{ColorRed, "diverged"},
 		{ColorDim, "no remote"},
+	}
+	if showTmux {
+		items = append(items, struct {
+			color lipgloss.Color
+			label string
+		}{ColorTeal, "tmux session"})
 	}
 
 	var parts []string

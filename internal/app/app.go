@@ -381,7 +381,7 @@ func (m *Model) recomputeLayout() {
 
 	// Status legend and create button (only when repos exist)
 	if len(m.repos) > 0 {
-		legend := ui.RenderStatusLegend(m.width)
+		legend := ui.RenderStatusLegend(m.width, m.config.Global.Multiplexer == "tmux")
 		yPos += lipgloss.Height(legend)
 
 		m.createBtnY = yPos
@@ -1554,7 +1554,7 @@ func (m Model) View() string {
 	var scrollable []string
 	scrollable = append(scrollable, m.gridResult.View)
 	if hasRepos && !m.explorerActive() {
-		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
+		scrollable = append(scrollable, ui.RenderStatusLegend(m.width, m.config.Global.Multiplexer == "tmux"))
 		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT, false))
 	}
 	scrollContent := strings.Join(scrollable, "\n")
