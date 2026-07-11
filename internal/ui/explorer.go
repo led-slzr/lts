@@ -64,8 +64,9 @@ type stripAction struct {
 }
 
 // explorerActions returns the action-strip entries for a worktree of repo.
+// Open isn't listed — clicking the row (or enter) is the primary action.
 func explorerActions(repo git.Repo, hasSession bool) []stripAction {
-	actions := []stripAction{{"⏎ open", BtnOpen}}
+	var actions []stripAction
 	if !repo.IsMonorepo {
 		actions = append(actions, stripAction{"b rebase", BtnRebase})
 	}
