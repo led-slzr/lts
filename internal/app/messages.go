@@ -15,6 +15,7 @@ type ReposLoadedMsg struct {
 type RefreshDoneMsg struct {
 	Count  int
 	Failed []string // repo names that failed
+	Locked []string // repo locks to release
 	Err    error
 }
 
@@ -23,18 +24,21 @@ type RefreshDoneMsg struct {
 // the repo list can be reloaded while an operation is in flight.
 type SingleRefreshDoneMsg struct {
 	RepoName string
+	Locked   []string // repo locks to release
 	Err      error
 }
 
 // RebaseDoneMsg is sent when a rebase completes.
 type RebaseDoneMsg struct {
 	Branch string
+	Locked []string // repo locks to release
 	Err    error
 }
 
 // DeleteDoneMsg is sent when a worktree deletion completes.
 type DeleteDoneMsg struct {
 	Branch string
+	Locked []string // repo locks to release
 	Err    error
 }
 
@@ -43,12 +47,14 @@ type CreateDoneMsg struct {
 	Results []*git.CreateResult
 	Branch  string
 	Log     *git.CreateLog
+	Locked  []string // repo locks to release
 	Err     error
 }
 
 // CleanupMergedDoneMsg is sent when cleanup completes.
 type CleanupMergedDoneMsg struct {
 	Cleaned int
+	Locked  []string // repo locks to release
 	Err     error
 }
 
@@ -70,12 +76,14 @@ type LoaderTickMsg struct{}
 // RenameDoneMsg is sent when a rename completes.
 type RenameDoneMsg struct {
 	NewBranch string
+	Locked    []string // repo locks to release
 	Err       error
 }
 
 // MigrateDoneMsg is sent when a migration to LTS worktree completes.
 type MigrateDoneMsg struct {
 	Result *git.CreateResult
+	Locked []string // repo locks to release
 	Err    error
 }
 

@@ -27,7 +27,6 @@ type Model struct {
 	focusedCard int
 	focusedWT   int // -1=card border, -2=header, 0+=worktree index
 	hoveredBtn  ui.HoverButton
-	loading     bool
 	statusMsg   string
 	statusGen   int // incremented on each statusMsg change; used to avoid stale clears
 
@@ -54,8 +53,9 @@ type Model struct {
 	renameRemoteBranch bool // true = also rename remote branch (push new, delete old)
 
 	// Loading animation
-	initialLoad bool // true until first ReposLoadedMsg
-	loaderFrame int
+	initialLoad   bool // true until first ReposLoadedMsg
+	loaderFrame   int
+	loaderTicking bool // a spinner tick loop is alive (avoid double loops)
 
 	// Context menu — target snapshotted at open (same reason as rename)
 	contextMenu ui.ContextMenuModel
@@ -98,9 +98,15 @@ type Model struct {
 	// RelaunchSetup: quit into the setup wizard, then relaunch here
 	RelaunchSetup bool
 
+	// Busy repos: name → status label of the operation holding the lock.
+	// Operations lock their target repos (constituent names for monorepo
+	// groups); ops on disjoint repos run concurrently. Only the Update
+	// thread touches this map.
+	busy map[string]string
+
 	// Log panel
 	logPanel ui.LogPanelModel
-	logChan  <-chan LogEntryMsg // active log channel (nil when no operation streaming)
+	logChan  chan LogEntryMsg // persistent, shared by all operations
 }
 
 func NewModel(cfg config.Config) Model {
@@ -127,7 +133,10 @@ func NewModel(cfg config.Config) Model {
 		renameInput:       ti,
 		deleteTypedInput:  di,
 		initialLoad:       true,
+		loaderTicking:     true, // Init issues the first tick
+		busy:              make(map[string]string),
 		logPanel:          ui.NewLogPanel(),
+		logChan:           make(chan LogEntryMsg, 64),
 	}
 }
 
@@ -152,7 +161,7 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.usageLabels(), ui.HeaderOpts{
-		Loading:            m.loading,
+		Loading:            m.anyBusy(),
 		Frame:              m.loaderFrame,
 		StatusMsg:          m.statusMsg,
 		VersionHovered:     m.versionHovered,
@@ -165,7 +174,7 @@ func (m *Model) recomputeLayout() {
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
-	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory)
+	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory, m.busyCardNames())
 	gridH := lipgloss.Height(m.gridResult.View)
 	yPos += gridH
 
@@ -175,7 +184,7 @@ func (m *Model) recomputeLayout() {
 		yPos += lipgloss.Height(legend)
 
 		m.createBtnY = yPos
-		createBtn := ui.RenderCreateButton(m.width, false, m.loading)
+		createBtn := ui.RenderCreateButton(m.width, false, false)
 		yPos += lipgloss.Height(createBtn)
 	} else {
 		m.createBtnY = 0
@@ -226,6 +235,7 @@ func (m Model) Init() tea.Cmd {
 		checkMigrationCmd(&m.config),
 		tea.SetWindowTitle("LTS - Led's Tree Script"),
 		loaderTickCmd(),
+		listenForLogs(m.logChan), // persistent listener for all operations
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
 		// Dev builds never auto-replace themselves with the official binary —
@@ -264,11 +274,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 
 	case LoaderTickMsg:
-		if m.initialLoad || m.loading {
+		if m.initialLoad || m.anyBusy() {
 			m.loaderFrame++
 			m.recomputeLayout()
 			return m, loaderTickCmd()
 		}
+		m.loaderTicking = false
 		return m, nil
 
 	case tea.MouseMsg:
@@ -285,10 +296,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.recomputeLayout()
 			return m, updateCheckCmd(false)
 		case "RESET_SETUP_ACTION":
-			// Resetting exec-relaunches the process — it would kill a
-			// running operation mid-flight
-			if m.loading {
-				m.settings.SaveError = "Wait for the running operation to finish"
+			// Resetting exec-relaunches the process — it would kill
+			// running operations mid-flight
+			if m.anyBusy() {
+				m.settings.SaveError = "Wait for running operations to finish"
 				return m, nil
 			}
 			m.RelaunchSetup = true
@@ -324,7 +335,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReposLoadedMsg:
 		m.repos = msg.Repos
-		m.loading = false
 		m.initialLoad = false
 		if msg.Err != nil {
 			m.statusMsg = "Error loading repos: " + msg.Err.Error()
@@ -345,7 +355,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case RefreshDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Refresh error: " + msg.Err.Error()
 		} else {
@@ -378,7 +388,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case SingleRefreshDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Refresh error: " + msg.Err.Error()
 		} else {
@@ -392,7 +402,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case RebaseDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Rebase error: " + msg.Err.Error()
 		} else {
@@ -405,7 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case DeleteDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		m.focusedWT = -1
 		if msg.Err != nil {
 			m.statusMsg = "Delete error: " + msg.Err.Error()
@@ -419,7 +429,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case CreateDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Create error: " + msg.Err.Error()
 			m.recomputeLayout()
@@ -441,7 +451,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, loadReposCmd(&m.config)
 
 	case CleanupMergedDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Cleanup error: " + msg.Err.Error()
 		} else if msg.Cleaned == 0 {
@@ -456,7 +466,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case RenameDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Rename error: " + msg.Err.Error()
 		} else {
@@ -469,7 +479,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 
 	case MigrateDoneMsg:
-		m.loading = false
+		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
 			m.statusMsg = "Migration error: " + msg.Err.Error()
 			m.recomputeLayout()
@@ -497,7 +507,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StatusClearMsg:
 		// Gen 0 = legacy (always clear). Gen > 0 = only clear if matching current gen.
-		if !m.loading && (msg.Gen == 0 || msg.Gen == m.statusGen) {
+		if !m.anyBusy() && (msg.Gen == 0 || msg.Gen == m.statusGen) {
 			m.statusMsg = ""
 			m.recomputeLayout()
 		}
@@ -545,7 +555,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.ModalCreateMsg:
 		if len(msg.RepoNames) > 0 {
-			logFn, startCmd := m.beginLoading("Creating worktree...")
+			// The modal can be opened while other operations run — reject
+			// creation if any selected repo is still busy
+			for _, name := range msg.RepoNames {
+				if op, ok := m.busy[name]; ok {
+					m.statusMsg = name + " is busy (" + op + ") — try again when it finishes"
+					m.recomputeLayout()
+					return m, clearStatusCmd()
+				}
+			}
+			logFn, startCmd := m.beginOp("Creating "+msg.Branch+"...", msg.RepoNames...)
 			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, msg.InstallDeps, &m.config))
 		}
 		return m, nil
@@ -935,7 +954,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				btn = ui.GetFooterMinimalButtonAtX(x, m.width)
 			}
 			// Suppress hover on operation buttons during loading
-			if m.loading && ui.IsOperationBtn(btn) {
+			if m.anyBusy() && ui.IsOperationBtn(btn) {
 				m.hoveredBtn = ui.BtnNone
 			} else {
 				m.hoveredBtn = btn
@@ -947,7 +966,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
-		if btn != ui.BtnNone && !(m.loading && ui.IsOperationBtn(btn)) {
+		if btn != ui.BtnNone && !(m.anyBusy() && ui.IsOperationBtn(btn)) {
 			m.hoveredBtn = btn
 		}
 
@@ -955,17 +974,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// the click is blocked then too (relaunch would kill the operation)
 		prevHistory := m.hoveredHistory
 		m.hoveredHistory = -1
-		if !m.loading {
+		if !m.anyBusy() {
 			m.hoveredHistory = ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
 		}
 		if prevHistory != m.hoveredHistory {
 			m.recomputeLayout()
 		}
 
-		// Detect inline buttons when hovering repo header or worktree (suppress during loading)
+		// Detect inline buttons when hovering repo header or worktree
+		// (suppressed for busy repos — every inline action is a mutation).
 		// Skip for migration cards — they don't have inline context buttons
 		isMigrationCard := repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].NeedsMigration
-		if !isMigrationCard && !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		if !isMigrationCard && repoIdx >= 0 && repoIdx < len(m.repos) && !m.repoBusy(m.repos[repoIdx]) && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -973,8 +993,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Check create button hover (virtual Y + X bounds, only when repos exist; suppress during loading)
-		if !m.loading && len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+		// Check create button hover (virtual Y + X bounds, only when repos exist)
+		if len(m.repos) > 0 && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			cbX, cbW := ui.CreateBtnHitZone(m.width)
 			if x >= cbX && x < cbX+cbW {
 				m.hoveredBtn = ui.BtnCreateWT
@@ -992,14 +1012,14 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		repoIdx, wtIdx, btn := ui.HitTest(m.gridResult.HitZones, x, virtualY)
 		m.focusedCard = repoIdx
 		m.focusedWT = wtIdx
-		if btn != ui.BtnNone && !(m.loading && ui.IsOperationBtn(btn)) {
+		if btn != ui.BtnNone && !(m.anyBusy() && ui.IsOperationBtn(btn)) {
 			m.hoveredBtn = btn
 		}
 
 		// Detect inline buttons on click (suppress during loading)
 		// Skip for migration cards — they don't have inline context buttons
 		isMigrationCard := repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].NeedsMigration
-		if !isMigrationCard && !m.loading && repoIdx >= 0 && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
+		if !isMigrationCard && repoIdx >= 0 && repoIdx < len(m.repos) && !m.repoBusy(m.repos[repoIdx]) && (wtIdx == -2 || wtIdx >= 0) && m.gridResult.CardWidth > 0 {
 			cardX := m.getCardScreenX(repoIdx)
 			inlineBtn := ui.DetectInlineButton(x, cardX, m.gridResult.CardWidth, wtIdx)
 			if inlineBtn != ui.BtnNone {
@@ -1016,13 +1036,13 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			} else {
 				btn = ui.GetFooterMinimalButtonAtX(x, m.width)
 			}
-			if !(m.loading && ui.IsOperationBtn(btn)) {
+			if !(m.anyBusy() && ui.IsOperationBtn(btn)) {
 				m.hoveredBtn = btn
 			}
 		}
 
 		// Check create button (virtual Y + X bounds; suppress during loading)
-		if !m.loading && virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
+		if virtualY >= m.createBtnY && virtualY < m.createBtnY+3 && m.createBtnY > 0 {
 			cbX, cbW := ui.CreateBtnHitZone(m.width)
 			if x >= cbX && x < cbX+cbW {
 				m.hoveredBtn = ui.BtnCreateWT
@@ -1065,8 +1085,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// History suggestion click (empty state) — blocked during operations:
-		// relaunching replaces the process and would kill the running op
-		if !m.loading {
+		// relaunching replaces the process and would kill running ops
+		if !m.anyBusy() {
 			histIdx := ui.HistoryHitTest(m.gridResult.HitZones, x, virtualY)
 			if histIdx >= 0 {
 				suggestions := config.GetHistorySuggestions(m.config.WorkDir)
@@ -1094,13 +1114,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		// Mutation-initiating targets are blocked while an operation runs;
-		// opening repos/worktrees (below) stays available
-		if !m.loading {
-			// Footer buttons (refresh/cleanup only when repos exist)
+		// Refresh-all and cleanup touch every repo — they need all locks free
+		if !m.anyBusy() {
 			if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
-				logFn, startCmd := m.beginLoading("Refreshing all repos...")
-				return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
+				lock := m.allRepoNames()
+				logFn, startCmd := m.beginOp("Refreshing all repos...", lock...)
+				return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config, lock))
 			}
 			if m.hoveredBtn == ui.BtnCleanupMerged && len(m.repos) > 0 {
 				m.cleanupConfirmActive = true
@@ -1108,28 +1127,31 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
 				return m, nil
 			}
+		}
 
-			// Create button (only when repos exist)
-			if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-				m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
-				return m, textinput.Blink
-			}
+		// Create button (only when repos exist) — the modal opens anytime;
+		// busy conflicts are checked when creation is confirmed
+		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+			return m, textinput.Blink
+		}
 
-			// Migrate button
-			if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
-				repo := m.repos[m.focusedCard]
-				if repo.NeedsMigration && repo.Path != "" {
-					logFn, startCmd := m.beginLoading("Migrating " + repo.Name + "...")
-					return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config))
-				}
+		// Migrate button — needs its own repo free
+		if m.hoveredBtn == ui.BtnMigrate && m.focusedCard >= 0 && m.focusedCard < len(m.repos) {
+			repo := m.repos[m.focusedCard]
+			if repo.NeedsMigration && repo.Path != "" && !m.repoBusy(repo) {
+				lock := lockSet(repo)
+				logFn, startCmd := m.beginOp("Migrating "+repo.Name+"...", lock...)
+				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config, lock))
 			}
 		}
 
 		// Context menu trigger [▸] — open context menu (not for migration cards).
 		// The target repo/worktree is snapshotted here; actions never resolve
 		// indices later (the repo list may reload while the menu is open).
-		// Blocked during operations — every menu action is a mutation.
-		if !m.loading && m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && !isMigrationCard {
+		// Blocked for busy repos — every menu action is a mutation.
+		if m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && m.focusedCard < len(m.repos) &&
+			!isMigrationCard && !m.repoBusy(m.repos[m.focusedCard]) {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
 				// Repo header context menu
@@ -1219,7 +1241,7 @@ func (m Model) View() string {
 	scrollable = append(scrollable, m.gridResult.View)
 	if hasRepos {
 		scrollable = append(scrollable, ui.RenderStatusLegend(m.width))
-		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT, m.loading))
+		scrollable = append(scrollable, ui.RenderCreateButton(m.width, m.hoveredBtn == ui.BtnCreateWT, false))
 	}
 	scrollContent := strings.Join(scrollable, "\n")
 
@@ -1258,7 +1280,7 @@ func (m Model) View() string {
 
 	// Footer — fixed at bottom (minimal when no repos)
 	if hasRepos {
-		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn, m.loading))
+		sections = append(sections, ui.RenderFooter(m.width, m.hoveredBtn, m.anyBusy()))
 	} else {
 		sections = append(sections, ui.RenderFooterMinimal(m.width, m.hoveredBtn))
 	}
@@ -1659,13 +1681,63 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	}
 }
 
-// newLogChan creates a log channel and a LogFunc that writes to it.
-func newLogChan() (git.LogFunc, chan LogEntryMsg) {
-	ch := make(chan LogEntryMsg, 32)
-	fn := func(ctx, msg string, isError bool) {
-		ch <- LogEntryMsg{Context: ctx, Message: msg, IsError: isError}
+// anyBusy reports whether any operation is running.
+func (m *Model) anyBusy() bool {
+	return len(m.busy) > 0
+}
+
+// lockSet returns the repo names an operation on repo must lock —
+// the constituent repos for a monorepo group, the repo itself otherwise.
+func lockSet(repo git.Repo) []string {
+	if repo.IsMonorepo {
+		return repo.RepoNames
 	}
-	return fn, ch
+	return []string{repo.Name}
+}
+
+// repoBusy reports whether repo (or any of its constituents) has an
+// operation running.
+func (m *Model) repoBusy(repo git.Repo) bool {
+	for _, n := range lockSet(repo) {
+		if _, ok := m.busy[n]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// clearBusy releases the locks an operation held.
+func (m *Model) clearBusy(names ...string) {
+	for _, n := range names {
+		delete(m.busy, n)
+	}
+}
+
+// allRepoNames returns every real repo name — the lock set for operations
+// that touch everything (refresh all, cleanup merged).
+func (m *Model) allRepoNames() []string {
+	var names []string
+	for _, r := range m.repos {
+		if !r.IsMonorepo {
+			names = append(names, r.Name)
+		}
+	}
+	return names
+}
+
+// busyCardNames returns the display names of cards with a running operation
+// (a monorepo card is busy when any constituent is).
+func (m *Model) busyCardNames() map[string]bool {
+	if len(m.busy) == 0 {
+		return nil
+	}
+	out := make(map[string]bool)
+	for _, r := range m.repos {
+		if m.repoBusy(r) {
+			out[r.Name] = true
+		}
+	}
+	return out
 }
 
 // listenForLogs returns a tea.Cmd that reads one LogEntryMsg from the channel.
@@ -1680,56 +1752,60 @@ func listenForLogs(ch <-chan LogEntryMsg) tea.Cmd {
 	}
 }
 
-// beginLoading sets loading state and starts the spinner tick + log stream.
-// Returns (logFn, batchCmd) where batchCmd includes the listen + tick commands.
-func (m *Model) beginLoading(statusMsg string) (git.LogFunc, tea.Cmd) {
-	m.loading = true
+// beginOp locks the given repos for an operation, sets the status line, and
+// returns the log function (writing to the shared, persistent log channel)
+// plus the spinner command when this is the first running operation.
+// Callers gate on repoBusy/anyBusy before calling — locks must be disjoint.
+func (m *Model) beginOp(statusMsg string, lock ...string) (git.LogFunc, tea.Cmd) {
+	for _, n := range lock {
+		m.busy[n] = statusMsg
+	}
 	m.statusMsg = statusMsg
-	logFn, listenCmd := m.startLogStream()
-	return logFn, tea.Batch(listenCmd, loaderTickCmd())
+	ch := m.logChan
+	logFn := func(ctx, msg string, isError bool) {
+		ch <- LogEntryMsg{Context: ctx, Message: msg, IsError: isError}
+	}
+	if !m.loaderTicking {
+		m.loaderTicking = true
+		return logFn, loaderTickCmd()
+	}
+	return logFn, nil
 }
 
-// startLogStream sets up log streaming on the model and returns the initial listener command.
-func (m *Model) startLogStream() (git.LogFunc, tea.Cmd) {
-	logFn, ch := newLogChan()
-	m.logChan = ch
-	return logFn, listenForLogs(ch)
-}
-
-func refreshAllCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
+func refreshAllCmd(logFn git.LogFunc, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
 		count, failed, err := git.RefreshAllRepos(workDir, resolve, logFn)
-		return RefreshDoneMsg{Count: count, Failed: failed, Err: err}
+		return RefreshDoneMsg{Count: count, Failed: failed, Locked: locked, Err: err}
 	}
 }
 
 func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch, repoName string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.RefreshRepo(repoPath, basisBranch, logFn)
-		return SingleRefreshDoneMsg{RepoName: repoName, Err: err}
+		return SingleRefreshDoneMsg{RepoName: repoName, Locked: []string{repoName}, Err: err}
 	}
 }
 
-func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string) tea.Cmd {
+func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.RebaseWorktree(wtPath, mainBranch, pkgManager, logFn)
-		return RebaseDoneMsg{Branch: branch, Err: err}
+		return RebaseDoneMsg{Branch: branch, Locked: locked, Err: err}
 	}
 }
 
-func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool) tea.Cmd {
+func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)
-		return DeleteDoneMsg{Branch: branch, Err: err}
+		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
 	}
 }
 
-func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool) tea.Cmd {
+func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteLocal, deleteRemote, logFn)
-		return DeleteDoneMsg{Branch: branch, Err: err}
+		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
 	}
 }
 
@@ -1758,20 +1834,20 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, ins
 		} else {
 			logFn("create", "Worktree created successfully", false)
 		}
-		return CreateDoneMsg{Results: results, Branch: branch, Log: log, Err: err}
+		return CreateDoneMsg{Results: results, Branch: branch, Log: log, Locked: repoNames, Err: err}
 	}
 }
 
-func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cmd {
+func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
 		cleaned, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
-		return CleanupMergedDoneMsg{Cleaned: cleaned, Err: err}
+		return CleanupMergedDoneMsg{Cleaned: cleaned, Locked: locked, Err: err}
 	}
 }
 
-func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
+func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
 	pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
 	aiCli, ide, openEnv := cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
@@ -1780,11 +1856,11 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
-		return RenameDoneMsg{NewBranch: newBranch, Err: err}
+		return RenameDoneMsg{NewBranch: newBranch, Locked: locked, Err: err}
 	}
 }
 
-func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
+func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	pm, aiCli, ide, openEnv := cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
@@ -1793,11 +1869,11 @@ func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []s
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
-		return RenameDoneMsg{NewBranch: newBranch, Err: err}
+		return RenameDoneMsg{NewBranch: newBranch, Locked: locked, Err: err}
 	}
 }
 
-func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd {
+func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	basis := cfg.GetRepoBasisBranch(filepath.Base(repoPath))
 	opts := workspaceOpts(cfg)
@@ -1808,7 +1884,7 @@ func migrateCmd(logFn git.LogFunc, repoPath string, cfg *config.Config) tea.Cmd 
 		} else {
 			logFn("migrate", "Migration complete", false)
 		}
-		return MigrateDoneMsg{Result: result, Err: err}
+		return MigrateDoneMsg{Result: result, Locked: locked, Err: err}
 	}
 }
 

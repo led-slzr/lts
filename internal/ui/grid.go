@@ -54,7 +54,7 @@ type GridResult struct {
 // gridYOffset is the screen Y coordinate where the grid section starts (before its own margin).
 var CurrentWorkDir string // set by the app to filter history suggestions
 
-func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int) GridResult {
+func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int, busyCards map[string]bool) GridResult {
 	if len(repos) == 0 {
 		return renderEmptyState(termWidth, gridYOffset, hoveredHistory)
 	}
@@ -113,7 +113,7 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 				wtIdx = focusedWT
 				btn = hoveredBtn
 			}
-			card := RenderCard(repos[i], cardWidth, isFocused, wtIdx, btn)
+			card := RenderCard(repos[i], cardWidth, isFocused, wtIdx, btn, busyCards[repos[i].Name])
 			rowCards = append(rowCards, card)
 			rowCardHeights = append(rowCardHeights, lipgloss.Height(card))
 		}

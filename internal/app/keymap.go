@@ -53,13 +53,14 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		if !m.loading && len(m.repos) > 0 {
-			logFn, startCmd := m.beginLoading("Refreshing all repos...")
-			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config))
+		if !m.anyBusy() && len(m.repos) > 0 {
+			lock := m.allRepoNames()
+			logFn, startCmd := m.beginOp("Refreshing all repos...", lock...)
+			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config, lock))
 		}
 
 	case "c":
-		if !m.loading && len(m.repos) > 0 {
+		if !m.anyBusy() && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false
 			m.statusMsg = "Cleanup merged worktrees? [Y]es / [N]o"
@@ -67,7 +68,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	case "n":
-		if !m.loading && len(m.repos) > 0 {
+		if len(m.repos) > 0 {
 			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
@@ -152,7 +153,7 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			m.statusMsg = "Refresh individual repos instead"
 			return m, clearStatusCmd()
 		}
-		logFn, startCmd := m.beginLoading("Refreshing " + repo.Name + "...")
+		logFn, startCmd := m.beginOp("Refreshing "+repo.Name+"...", repo.Name)
 		return m, tea.Batch(startCmd, singleRefreshCmd(logFn, repo.Path, m.config.GetRepoBasisBranch(repo.Name), repo.Name))
 
 	case ui.BtnBasis:
@@ -173,8 +174,9 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 				m.statusMsg = "Rebase isn't supported for monorepo worktrees yet"
 				return m, clearStatusCmd()
 			}
-			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), wt.Branch))
+			lock := lockSet(repo)
+			logFn, startCmd := m.beginOp("Rebasing "+wt.Branch+"...", lock...)
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), wt.Branch, lock))
 		}
 
 	case ui.BtnRename:
@@ -224,11 +226,12 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, nil
 	}
-	logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
+	lock := lockSet(repo)
+	logFn, startCmd := m.beginOp("Deleting "+wt.Branch+"...", lock...)
 	if repo.IsMonorepo {
-		return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch))
+		return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch, lock))
 	}
-	return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteLocalBranch, m.deleteRemoteBranch))
+	return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteLocalBranch, m.deleteRemoteBranch, lock))
 }
 
 func cancelDelete(m Model) (Model, tea.Cmd) {
@@ -255,8 +258,9 @@ func handleCleanupConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.cleanupConfirmActive = false
 		deleteRemote := m.cleanupRemoteBranch
 		m.cleanupRemoteBranch = false
-		logFn, startCmd := m.beginLoading("Cleaning up merged...")
-		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, deleteRemote))
+		lock := m.allRepoNames()
+		logFn, startCmd := m.beginOp("Cleaning up merged...", lock...)
+		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, deleteRemote, lock))
 	}
 	return m, nil
 }
@@ -438,12 +442,13 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.renameActive = false
 		renameRemote := m.renameRemoteBranch
 		m.renameRemoteBranch = false
-		logFn, startCmd := m.beginLoading("Renaming branch...")
+		lock := lockSet(repo)
+		logFn, startCmd := m.beginOp("Renaming "+wt.Branch+"...", lock...)
 		if repo.IsMonorepo {
 			// wt.Path is the branch subdirectory for monorepo worktrees
-			return m, tea.Batch(startCmd, renameMonorepoCmd(logFn, wt.Path, repo.RepoNames, wt.Branch, value, renameRemote, &m.config))
+			return m, tea.Batch(startCmd, renameMonorepoCmd(logFn, wt.Path, repo.RepoNames, wt.Branch, value, renameRemote, &m.config, lock))
 		}
-		return m, tea.Batch(startCmd, renameCmd(logFn, repo.Path, wt.Path, wt.Branch, value, renameRemote, &m.config))
+		return m, tea.Batch(startCmd, renameCmd(logFn, repo.Path, wt.Path, wt.Branch, value, renameRemote, &m.config, lock))
 	default:
 		var cmd tea.Cmd
 		m.renameInput, cmd = m.renameInput.Update(msg)

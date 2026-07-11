@@ -89,7 +89,8 @@ func statusStyle(status git.WTStatus) lipgloss.Style {
 
 // RenderCard renders a single repository card.
 // focusedWT: index of hovered worktree (-1 = none, -2 = repo header hovered)
-func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton) string {
+// busy: an operation is running on this repo (or one of its constituents)
+func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton, busy bool) string {
 	iw := innerWidth(cardWidth)
 
 	// Migration card: yellow border with centered message and migrate button
@@ -111,6 +112,11 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		header = WTHighlightStyle.Underline(true).Render(repo.Name+" ("+repo.MainBranch+")")
 	} else {
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
+	}
+
+	// Busy marker: an operation is running here
+	if busy {
+		header += lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack).Render(" ⟳")
 	}
 
 	if isHeaderHovered {
