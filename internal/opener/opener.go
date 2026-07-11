@@ -107,17 +107,40 @@ func openAICli(path, aiCliCommand, terminal string) error {
 	fullCmd := strings.Join(parts, " ")
 
 	// Open a new tab in the configured terminal and run the AI CLI command
-	return openTerminalWithCommand(path, terminal, fmt.Sprintf("cd '%s' && %s", path, fullCmd))
+	// (the working directory is handled per-terminal)
+	return openTerminalWithCommand(path, terminal, fullCmd)
 }
 
 func openTerminal(path, terminal string) error {
-	return openTerminalWithCommand(path, terminal, fmt.Sprintf("cd '%s' && clear", path))
+	return openTerminalWithCommand(path, terminal, "")
 }
 
+// userShell returns the user's login shell for running commands with a full
+// environment (PATH from profile — homebrew tools, etc).
+func userShell() string {
+	if sh := os.Getenv("SHELL"); sh != "" {
+		return sh
+	}
+	return "/bin/sh"
+}
+
+// openTerminalWithCommand opens a new window/tab of the configured terminal
+// at path. With an empty command it's a plain interactive shell; otherwise
+// the command runs in the user's login shell and the window lives as long as
+// it does. AppleScript-driven terminals (macOS Ghostty, iTerm2, Terminal.app)
+// instead type the command into an interactive shell.
 func openTerminalWithCommand(path, terminal, command string) error {
 	if terminal == "" {
 		terminal = "terminal"
 	}
+
+	// AppleScript flows type into a fresh shell, so they need the cd; the
+	// native-flag flows below set the working directory themselves.
+	typed := command
+	if typed == "" {
+		typed = "clear"
+	}
+	typed = fmt.Sprintf("cd '%s' && %s", path, typed)
 
 	switch terminal {
 	case "ghostty":
@@ -133,12 +156,15 @@ func openTerminalWithCommand(path, terminal, command string) error {
 					keystroke "%s"
 					key code 36
 				end tell
-			end tell`, command)
+			end tell`, typed)
 			cmd := exec.Command("osascript", "-e", script)
 			return cmd.Start()
 		}
-		cmd := exec.Command("ghostty", fmt.Sprintf("--working-directory=%s", path))
-		return cmd.Start()
+		args := []string{fmt.Sprintf("--working-directory=%s", path)}
+		if command != "" {
+			args = append(args, "-e", userShell(), "-lc", command)
+		}
+		return exec.Command("ghostty", args...).Start()
 
 	case "iterm":
 		script := fmt.Sprintf(`tell application "iTerm2"
@@ -149,21 +175,30 @@ func openTerminalWithCommand(path, terminal, command string) error {
 					write text "%s"
 				end tell
 			end tell
-		end tell`, command)
+		end tell`, typed)
 		cmd := exec.Command("osascript", "-e", script)
 		return cmd.Start()
 
 	case "wezterm":
-		cmd := exec.Command("wezterm", "start", "--cwd", path)
-		return cmd.Start()
+		args := []string{"start", "--cwd", path}
+		if command != "" {
+			args = append(args, "--", userShell(), "-lc", command)
+		}
+		return exec.Command("wezterm", args...).Start()
 
 	case "alacritty":
-		cmd := exec.Command("alacritty", "--working-directory", path)
-		return cmd.Start()
+		args := []string{"--working-directory", path}
+		if command != "" {
+			args = append(args, "-e", userShell(), "-lc", command)
+		}
+		return exec.Command("alacritty", args...).Start()
 
 	case "kitty":
-		cmd := exec.Command("kitty", "--directory", path)
-		return cmd.Start()
+		args := []string{"--directory", path}
+		if command != "" {
+			args = append(args, userShell(), "-lc", command)
+		}
+		return exec.Command("kitty", args...).Start()
 
 	case "terminal":
 		if runtime.GOOS == "darwin" {
@@ -172,12 +207,17 @@ func openTerminalWithCommand(path, terminal, command string) error {
 				tell application "System Events" to tell process "Terminal" to keystroke "t" using command down
 				delay 0.2
 				do script "%s" in front window
-			end tell`, command)
+			end tell`, typed)
 			cmd := exec.Command("osascript", "-e", script)
 			return cmd.Start()
 		}
-		cmd := exec.Command("x-terminal-emulator", "--working-directory", path)
-		return cmd.Start()
+		args := []string{}
+		if command != "" {
+			args = append(args, "-e", userShell(), "-lc", command)
+		} else {
+			args = append(args, "--working-directory", path)
+		}
+		return exec.Command("x-terminal-emulator", args...).Start()
 
 	default:
 		cmd := exec.Command(terminal, path)
