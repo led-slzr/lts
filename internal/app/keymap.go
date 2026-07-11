@@ -132,17 +132,19 @@ func handleContextMenuKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.contextMenu.Active = false
 		if m.contextMenu.CursorIdx >= 0 && m.contextMenu.CursorIdx < len(m.contextMenu.Items) {
 			item := m.contextMenu.Items[m.contextMenu.CursorIdx]
-			return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+			return executeContextAction(m, item.Action)
 		}
 	}
 	return m, nil
 }
 
-func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (Model, tea.Cmd) {
-	if repoIdx < 0 || repoIdx >= len(m.repos) {
-		return m, nil
-	}
-	repo := m.repos[repoIdx]
+// executeContextAction acts on the repo/worktree snapshotted when the context
+// menu opened (m.menuRepo/m.menuWT) — never on indices into m.repos, which a
+// background reload may have shifted since.
+func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
+	repo := m.menuRepo
+	wt := m.menuWT
+	hasWT := m.menuHasWT
 
 	switch action {
 	case ui.BtnRefresh:
@@ -151,30 +153,30 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 			return m, clearStatusCmd()
 		}
 		logFn, startCmd := m.beginLoading("Refreshing " + repo.Name + "...")
-		return m, tea.Batch(startCmd, singleRefreshCmd(logFn, repo.Path, m.config.GetRepoBasisBranch(repo.Name), repoIdx))
+		return m, tea.Batch(startCmd, singleRefreshCmd(logFn, repo.Path, m.config.GetRepoBasisBranch(repo.Name), repo.Name))
 
 	case ui.BtnBasis:
 		// Open rename-style input for basis branch
 		m.renameActive = true
-		m.renameRepoIdx = repoIdx
-		m.renameWTIdx = -2 // flag: this is a basis branch change, not a rename
+		m.renameRepo = repo
+		m.renameIsBasis = true
 		m.renameInput.SetValue(m.config.GetRepoBasisBranch(repo.Name))
 		m.renameInput.Focus()
 		m.statusMsg = "Enter new basis branch for " + repo.Name
 		return m, textinput.Blink
 
 	case ui.BtnRebase:
-		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
-			wt := repo.Worktrees[wtIdx]
+		if hasWT {
 			logFn, startCmd := m.beginLoading("Rebasing " + wt.Branch + "...")
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), repoIdx, wtIdx))
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), wt.Branch))
 		}
 
 	case ui.BtnRename:
-		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
+		if hasWT {
 			m.renameActive = true
-			m.renameRepoIdx = repoIdx
-			m.renameWTIdx = wtIdx
+			m.renameRepo = repo
+			m.renameWT = wt
+			m.renameIsBasis = false
 			m.renameRemoteBranch = false
 			m.renameInput.SetValue("")
 			m.renameInput.Focus()
@@ -182,14 +184,13 @@ func executeContextAction(m Model, action ui.HoverButton, repoIdx, wtIdx int) (M
 		}
 
 	case ui.BtnDelete:
-		if wtIdx >= 0 && wtIdx < len(repo.Worktrees) {
-			wt := repo.Worktrees[wtIdx]
+		if hasWT {
 			// Protected branches: the worktree can be removed, the branch never is
 			protected := git.IsProtectedBranch(wt.Branch)
 			_, dangerous := deleteWarning(wt.Status)
 			m.deleteConfirmActive = true
-			m.deleteRepoIdx = repoIdx
-			m.deleteWTIdx = wtIdx
+			m.deleteRepo = repo
+			m.deleteWT = wt
 			m.deleteDangerous = dangerous
 			m.deleteProtected = protected
 			m.deleteRemoteBranch = false
@@ -212,20 +213,16 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 	m.deleteConfirmActive = false
 	m.deleteDangerous = false
 	m.deleteProtected = false
-	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-		repo := m.repos[m.deleteRepoIdx]
-		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-			wt := repo.Worktrees[m.deleteWTIdx]
-			logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
-			ri, wi := m.deleteRepoIdx, m.deleteWTIdx
-			if repo.IsMonorepo {
-				return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch, ri, wi))
-			}
-			return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteLocalBranch, m.deleteRemoteBranch, ri, wi))
-		}
+	repo, wt := m.deleteRepo, m.deleteWT
+	if wt.Path == "" {
+		m.statusMsg = ""
+		return m, nil
 	}
-	m.statusMsg = ""
-	return m, nil
+	logFn, startCmd := m.beginLoading("Deleting " + wt.Branch + "...")
+	if repo.IsMonorepo {
+		return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch))
+	}
+	return m, tea.Batch(startCmd, deleteCmd(logFn, repo.Path, wt.Path, wt.Branch, m.deleteLocalBranch, m.deleteRemoteBranch))
 }
 
 func cancelDelete(m Model) (Model, tea.Cmd) {
@@ -266,14 +263,9 @@ func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	// Ctrl+d toggles remote branch deletion when remote exists
 	if msg.String() == "ctrl+d" && !m.deleteProtected {
-		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-			repo := m.repos[m.deleteRepoIdx]
-			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch {
-					m.deleteRemoteBranch = !m.deleteRemoteBranch
-					return m, nil
-				}
-			}
+		if deleteHasRemote(m.deleteWT.Status) && m.deleteLocalBranch {
+			m.deleteRemoteBranch = !m.deleteRemoteBranch
+			return m, nil
 		}
 	}
 
@@ -316,14 +308,9 @@ func handleDeleteConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.deleteProtected {
 			return m, nil
 		}
-		if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-			repo := m.repos[m.deleteRepoIdx]
-			if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-				if deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch {
-					m.deleteRemoteBranch = !m.deleteRemoteBranch
-					return m, nil
-				}
-			}
+		if deleteHasRemote(m.deleteWT.Status) && m.deleteLocalBranch {
+			m.deleteRemoteBranch = !m.deleteRemoteBranch
+			return m, nil
 		}
 	case "y", "Y":
 		return confirmDelete(m)
@@ -392,19 +379,12 @@ func openCreatedWorkspaces(m Model, usage opener.ClickUsage) (Model, tea.Cmd) {
 }
 
 func renameHasRemote(m Model) bool {
-	if m.renameRepoIdx < 0 || m.renameRepoIdx >= len(m.repos) || m.renameWTIdx < 0 {
-		return false
-	}
-	repo := m.repos[m.renameRepoIdx]
-	if m.renameWTIdx >= len(repo.Worktrees) {
-		return false
-	}
-	return deleteHasRemote(repo.Worktrees[m.renameWTIdx].Status)
+	return !m.renameIsBasis && deleteHasRemote(m.renameWT.Status)
 }
 
 func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	// Ctrl+d toggles remote rename (only for branch renames with remote)
-	if msg.String() == "ctrl+d" && m.renameWTIdx >= 0 && renameHasRemote(m) {
+	if msg.String() == "ctrl+d" && renameHasRemote(m) {
 		m.renameRemoteBranch = !m.renameRemoteBranch
 		return m, nil
 	}
@@ -417,13 +397,13 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "enter":
 		value := strings.TrimSpace(m.renameInput.Value())
 
-		// Basis branch change (wtIdx == -2)
-		if m.renameWTIdx == -2 && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+		// Basis branch change
+		if m.renameIsBasis {
 			if value == "" {
 				m.statusMsg = "Basis branch cannot be empty"
 				return m, clearStatusCmd()
 			}
-			repo := m.repos[m.renameRepoIdx]
+			repo := m.renameRepo
 			// Validate branch exists in the repo (local or remote)
 			if repo.Path != "" {
 				_, localErr := git.RunGit(repo.Path, "show-ref", "--verify", "--quiet", "refs/heads/"+value)
@@ -444,24 +424,20 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 			m.statusMsg = "Invalid: " + err.Error()
 			return m, clearStatusCmd()
 		}
-		if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) &&
-			m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
+		repo, wt := m.renameRepo, m.renameWT
+		if wt.Path == "" {
 			m.renameActive = false
-			repo := m.repos[m.renameRepoIdx]
-			wt := repo.Worktrees[m.renameWTIdx]
-			repoIdx := m.renameRepoIdx
-			wtIdx := m.renameWTIdx
-			renameRemote := m.renameRemoteBranch
-			m.renameRemoteBranch = false
-			logFn, startCmd := m.beginLoading("Renaming branch...")
-			if repo.IsMonorepo {
-				// wt.Path is the branch subdirectory for monorepo worktrees
-				return m, tea.Batch(startCmd, renameMonorepoCmd(logFn, wt.Path, repo.RepoNames, wt.Branch, value, renameRemote, &m.config, repoIdx, wtIdx))
-			}
-			return m, tea.Batch(startCmd, renameCmd(logFn, repo.Path, wt.Path, wt.Branch, value, renameRemote, &m.config, repoIdx, wtIdx))
+			return m, nil
 		}
 		m.renameActive = false
-		return m, nil
+		renameRemote := m.renameRemoteBranch
+		m.renameRemoteBranch = false
+		logFn, startCmd := m.beginLoading("Renaming branch...")
+		if repo.IsMonorepo {
+			// wt.Path is the branch subdirectory for monorepo worktrees
+			return m, tea.Batch(startCmd, renameMonorepoCmd(logFn, wt.Path, repo.RepoNames, wt.Branch, value, renameRemote, &m.config))
+		}
+		return m, tea.Batch(startCmd, renameCmd(logFn, repo.Path, wt.Path, wt.Branch, value, renameRemote, &m.config))
 	default:
 		var cmd tea.Cmd
 		m.renameInput, cmd = m.renameInput.Update(msg)

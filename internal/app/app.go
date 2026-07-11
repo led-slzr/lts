@@ -44,19 +44,24 @@ type Model struct {
 	modal    ui.ModalModel
 	settings ui.SettingsModel
 
-	// Rename input
+	// Rename input — the target is snapshotted at dialog open so background
+	// repo reloads can't shift what the dialog acts on
 	renameActive       bool
 	renameInput        textinput.Model
-	renameRepoIdx      int
-	renameWTIdx        int
+	renameRepo         git.Repo
+	renameWT           git.Worktree
+	renameIsBasis      bool // true = changing the repo's basis branch, not renaming a worktree
 	renameRemoteBranch bool // true = also rename remote branch (push new, delete old)
 
 	// Loading animation
 	initialLoad bool // true until first ReposLoadedMsg
 	loaderFrame int
 
-	// Context menu
+	// Context menu — target snapshotted at open (same reason as rename)
 	contextMenu ui.ContextMenuModel
+	menuRepo    git.Repo
+	menuWT      git.Worktree
+	menuHasWT   bool
 
 	// Post-creation prompt
 	openPromptActive    bool
@@ -64,10 +69,10 @@ type Model struct {
 	openPromptSelection opener.ClickUsage // option highlighted in the open prompt
 	openPromptHovered   opener.ClickUsage // option under the mouse (-1 = none)
 
-	// Delete confirmation
+	// Delete confirmation — target snapshotted at dialog open
 	deleteConfirmActive bool
-	deleteRepoIdx       int
-	deleteWTIdx         int
+	deleteRepo          git.Repo
+	deleteWT            git.Worktree
 	deleteTypedInput    textinput.Model // for "type DELETE" confirmation
 	deleteDangerous     bool            // true = requires typing DELETE
 	deleteRemoteBranch  bool            // true = also delete remote branch (for merged)
@@ -371,7 +376,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Refresh error: " + msg.Err.Error()
 		} else {
-			m.statusMsg = "Repo refreshed"
+			m.statusMsg = msg.RepoName + " refreshed"
+			m.config.SetRepoLastRefresh(msg.RepoName, time.Now().Unix())
 		}
 		m.recomputeLayout()
 		return m, tea.Batch(
@@ -384,7 +390,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Rebase error: " + msg.Err.Error()
 		} else {
-			m.statusMsg = "Rebase successful"
+			m.statusMsg = "Rebased " + msg.Branch
 		}
 		m.recomputeLayout()
 		return m, tea.Batch(
@@ -398,7 +404,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Delete error: " + msg.Err.Error()
 		} else {
-			m.statusMsg = "Worktree deleted"
+			m.statusMsg = "Deleted " + msg.Branch
 		}
 		m.recomputeLayout()
 		return m, tea.Batch(
@@ -448,7 +454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.statusMsg = "Rename error: " + msg.Err.Error()
 		} else {
-			m.statusMsg = "Branch renamed"
+			m.statusMsg = "Renamed to " + msg.NewBranch
 		}
 		m.recomputeLayout()
 		return m, tea.Batch(
@@ -585,7 +591,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
 				item := m.contextMenu.Items[hoveredItem]
 				m.contextMenu.Active = false
-				return executeContextAction(m, item.Action, m.contextMenu.RepoIdx, m.contextMenu.WTIdx)
+				return executeContextAction(m, item.Action)
 			}
 			m.contextMenu.Active = false
 		}
@@ -656,13 +662,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			// Toggle lines are positioned above Y/N (or above "Type DELETE" in dangerous mode).
 			// Layout from bottom: blank + toggles. Local branch toggle is always present.
 			// Remote toggle appears only when remote exists and local branch is being deleted.
-			hasRemote := false
-			if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-				repo := m.repos[m.deleteRepoIdx]
-				if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-					hasRemote = deleteHasRemote(repo.Worktrees[m.deleteWTIdx].Status) && m.deleteLocalBranch
-				}
-			}
+			hasRemote := deleteHasRemote(m.deleteWT.Status) && m.deleteLocalBranch
 			// In non-dangerous mode: ynY-1 = blank, ynY-2 = last toggle
 			// In dangerous mode: ynY = hint line, ynY-2 = input, ynY-4 = "Type DELETE"
 			//   so toggles are further up
@@ -828,7 +828,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	if m.renameActive {
 		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			if m.renameWTIdx >= 0 && renameHasRemote(m) {
+			if renameHasRemote(m) {
 				modal := m.renderRenameDialog()
 				_, modalTop, modalH := modalMetrics(modal, m.height)
 				toggleY := modalTop + modalH - 3 - 2 // 2 lines above bottom hint
@@ -1110,27 +1110,31 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Context menu trigger [▸] — open context menu (not for migration cards)
+		// Context menu trigger [▸] — open context menu (not for migration cards).
+		// The target repo/worktree is snapshotted here; actions never resolve
+		// indices later (the repo list may reload while the menu is open).
 		if m.hoveredBtn == ui.BtnContextMenu && m.focusedCard >= 0 && !isMigrationCard {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
 				// Repo header context menu
 				m.contextMenu = ui.ContextMenuModel{
-					Active:  true,
-					Items:   ui.RepoContextItems(repo.IsMonorepo),
-					RepoIdx: m.focusedCard,
-					WTIdx:   -2,
-					X:       x, Y: y,
+					Active: true,
+					Items:  ui.RepoContextItems(repo.IsMonorepo),
+					X:      x, Y: y,
 				}
+				m.menuRepo = repo
+				m.menuWT = git.Worktree{}
+				m.menuHasWT = false
 			} else if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
 				// Worktree context menu
 				m.contextMenu = ui.ContextMenuModel{
-					Active:  true,
-					Items:   ui.WorktreeContextItems(),
-					RepoIdx: m.focusedCard,
-					WTIdx:   m.focusedWT,
-					X:       x, Y: y,
+					Active: true,
+					Items:  ui.WorktreeContextItems(),
+					X:      x, Y: y,
 				}
+				m.menuRepo = repo
+				m.menuWT = repo.Worktrees[m.focusedWT]
+				m.menuHasWT = true
 			}
 			return m, nil
 		}
@@ -1310,16 +1314,14 @@ func (m Model) renderRenameDialog() string {
 
 	title := "Rename Branch"
 	context := ""
-	isBasisChange := m.renameWTIdx == -2
-	if isBasisChange && m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) {
+	isBasisChange := m.renameIsBasis
+	if isBasisChange {
 		title = "Change Basis Branch"
-		context = "Repository: " + m.repos[m.renameRepoIdx].Name
-	} else if m.renameRepoIdx >= 0 && m.renameRepoIdx < len(m.repos) && m.renameWTIdx >= 0 && m.renameWTIdx < len(m.repos[m.renameRepoIdx].Worktrees) {
-		repo := m.repos[m.renameRepoIdx]
-		wt := repo.Worktrees[m.renameWTIdx]
-		context = "Current: " + wt.Branch
-		if repo.IsMonorepo {
-			title = "Rename Branch (all " + fmt.Sprintf("%d", len(repo.RepoNames)) + " repos)"
+		context = "Repository: " + m.renameRepo.Name
+	} else if m.renameWT.Path != "" {
+		context = "Current: " + m.renameWT.Branch
+		if m.renameRepo.IsMonorepo {
+			title = "Rename Branch (all " + fmt.Sprintf("%d", len(m.renameRepo.RepoNames)) + " repos)"
 		}
 	}
 
@@ -1451,15 +1453,10 @@ func (m Model) renderDeleteConfirmDialog() string {
 	critStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 
 	branchName := "unknown"
-	var wt git.Worktree
-	hasWT := false
-	if m.deleteRepoIdx >= 0 && m.deleteRepoIdx < len(m.repos) {
-		repo := m.repos[m.deleteRepoIdx]
-		if m.deleteWTIdx >= 0 && m.deleteWTIdx < len(repo.Worktrees) {
-			wt = repo.Worktrees[m.deleteWTIdx]
-			branchName = wt.Branch
-			hasWT = true
-		}
+	wt := m.deleteWT
+	hasWT := wt.Path != ""
+	if hasWT {
+		branchName = wt.Branch
 	}
 
 	content := titleStyle.Render("Delete Worktree") + "\n\n"
@@ -1662,31 +1659,31 @@ func refreshAllCmd(logFn git.LogFunc, cfg *config.Config) tea.Cmd {
 	}
 }
 
-func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch string, repoIdx int) tea.Cmd {
+func singleRefreshCmd(logFn git.LogFunc, repoPath, basisBranch, repoName string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.RefreshRepo(repoPath, basisBranch, logFn)
-		return SingleRefreshDoneMsg{RepoIdx: repoIdx, Err: err}
+		return SingleRefreshDoneMsg{RepoName: repoName, Err: err}
 	}
 }
 
-func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager string, repoIdx, wtIdx int) tea.Cmd {
+func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.RebaseWorktree(wtPath, mainBranch, pkgManager, logFn)
-		return RebaseDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+		return RebaseDoneMsg{Branch: branch, Err: err}
 	}
 }
 
-func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)
-		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+		return DeleteDoneMsg{Branch: branch, Err: err}
 	}
 }
 
-func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool, repoIdx, wtIdx int) tea.Cmd {
+func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string, repoNames []string, deleteLocal, deleteRemote bool) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteMonorepoWorktree(scriptDir, branchSubdir, branch, repoNames, deleteLocal, deleteRemote, logFn)
-		return DeleteDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+		return DeleteDoneMsg{Branch: branch, Err: err}
 	}
 }
 
@@ -1723,7 +1720,7 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool) tea.Cm
 	}
 }
 
-func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
+func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
 		_, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
@@ -1731,18 +1728,18 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
-		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+		return RenameDoneMsg{NewBranch: newBranch, Err: err}
 	}
 }
 
-func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, repoIdx, wtIdx int) tea.Cmd {
+func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		_, err := git.RenameMonorepoWorktrees(cfg.WorkDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
 			cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE, logFn)
 		if err != nil {
 			logFn(newBranch, "Rename failed: "+err.Error(), true)
 		}
-		return RenameDoneMsg{RepoIdx: repoIdx, WTIdx: wtIdx, Err: err}
+		return RenameDoneMsg{NewBranch: newBranch, Err: err}
 	}
 }
 

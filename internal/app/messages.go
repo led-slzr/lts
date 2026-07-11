@@ -19,23 +19,23 @@ type RefreshDoneMsg struct {
 }
 
 // SingleRefreshDoneMsg is sent when a single repo refresh completes.
+// Operations identify their target by name, not by index into m.repos —
+// the repo list can be reloaded while an operation is in flight.
 type SingleRefreshDoneMsg struct {
-	RepoIdx int
-	Err     error
+	RepoName string
+	Err      error
 }
 
 // RebaseDoneMsg is sent when a rebase completes.
 type RebaseDoneMsg struct {
-	RepoIdx int
-	WTIdx   int
-	Err     error
+	Branch string
+	Err    error
 }
 
 // DeleteDoneMsg is sent when a worktree deletion completes.
 type DeleteDoneMsg struct {
-	RepoIdx int
-	WTIdx   int
-	Err     error
+	Branch string
+	Err    error
 }
 
 // CreateDoneMsg is sent when worktree creation completes.
@@ -69,9 +69,8 @@ type LoaderTickMsg struct{}
 
 // RenameDoneMsg is sent when a rename completes.
 type RenameDoneMsg struct {
-	RepoIdx int
-	WTIdx   int
-	Err     error
+	NewBranch string
+	Err       error
 }
 
 // MigrateDoneMsg is sent when a migration to LTS worktree completes.

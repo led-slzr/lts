@@ -13,12 +13,11 @@ type ContextMenuItem struct {
 }
 
 // ContextMenuModel holds the state of an active context menu.
+// The target repo/worktree is snapshotted by the app when the menu opens.
 type ContextMenuModel struct {
 	Active    bool
 	Items     []ContextMenuItem
 	CursorIdx int
-	RepoIdx   int
-	WTIdx     int // -2 = repo header, 0+ = worktree
 	X, Y      int // screen position to render at
 }
 
