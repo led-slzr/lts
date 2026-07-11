@@ -203,6 +203,14 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			return m, textinput.Blink
 		}
 
+	case ui.BtnKillSession:
+		if hasWT {
+			opener.KillSession(wt.Path)
+			delete(m.tmuxLive, opener.SessionName(wt.Path))
+			m.statusMsg = "Killed tmux session for " + wt.Branch
+			return m, clearStatusCmd()
+		}
+
 	case ui.BtnDelete:
 		if hasWT {
 			// Protected branches: the worktree can be removed, the branch never is
@@ -554,6 +562,11 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 			m2, cmd := explorerAction(m, ui.BtnDelete)
 			return true, m2, cmd
 		}
+	case "x":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnKillSession)
+			return true, m2, cmd
+		}
 	}
 	return false, m, nil
 }
@@ -569,6 +582,13 @@ func explorerAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 		return m, nil
 	}
 	wt := repo.Worktrees[m.explorer.SelectedWT]
+
+	if action == ui.BtnKillSession {
+		opener.KillSession(wt.Path)
+		delete(m.tmuxLive, opener.SessionName(wt.Path))
+		m.statusMsg = "Killed tmux session for " + wt.Branch
+		return m, clearStatusCmd()
+	}
 
 	if action == ui.BtnOpen {
 		err := opener.OpenWorktree(wt.Path, m.clickUsage, m.openerOpts())

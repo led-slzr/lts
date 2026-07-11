@@ -496,6 +496,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusGen++
 			m.recomputeLayout()
 			return m, updateCheckCmd(false)
+		case "KILL_TMUX_SESSIONS_ACTION":
+			killed := opener.KillAllSessions()
+			m.tmuxLive = nil
+			m.settings.SaveStatus = fmt.Sprintf("Killed %d tmux session(s)", killed)
+			m.recomputeLayout()
+			return m, nil
 		case "RESET_SETUP_ACTION":
 			// Resetting exec-relaunches the process — it would kill
 			// running operations mid-flight
@@ -1475,9 +1481,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				m.menuHasWT = false
 			} else if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
 				// Worktree context menu
+				wt := repo.Worktrees[m.focusedWT]
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.WorktreeContextItems(repo.IsMonorepo),
+					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)]),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo

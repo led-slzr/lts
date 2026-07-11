@@ -247,6 +247,7 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 		{Label: "Binary", Key: "DIAG_BINARY", Value: binPath, Kind: SettingDisplay},
 		{Label: "Last Update Check", Key: "DIAG_UPDATE", Value: formatLastRefresh(s.Config.Global.LastUpdateCheck), Kind: SettingDisplay},
 		{Label: "Check for Update", Key: "CHECK_FOR_UPDATE_ACTION", Value: "Press enter to check", Kind: SettingAction},
+		{Label: "Kill All Tmux Sessions", Key: "KILL_TMUX_SESSIONS_ACTION", Value: "Press enter to kill all lts- sessions", Kind: SettingAction},
 		{Label: "Reset LTS (Open Setup Wizard)", Key: "RESET_SETUP_ACTION", Value: "Press enter to rerun setup", Kind: SettingAction},
 	}
 }

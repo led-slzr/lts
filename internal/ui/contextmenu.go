@@ -37,16 +37,21 @@ func RepoContextItems(isMonorepo bool) []ContextMenuItem {
 // WorktreeContextItems returns context menu items for a worktree.
 // Monorepo worktree paths are branch subdirectories (containers of per-repo
 // worktrees, not git worktrees themselves), so Rebase can't run there —
-// per-repo monorepo rebase is a future feature.
-func WorktreeContextItems(isMonorepo bool) []ContextMenuItem {
+// per-repo monorepo rebase is a future feature. hasSession adds the tmux
+// session kill entry.
+func WorktreeContextItems(isMonorepo, hasSession bool) []ContextMenuItem {
 	items := []ContextMenuItem{}
 	if !isMonorepo {
 		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
 	}
-	return append(items,
+	items = append(items,
 		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},
 		ContextMenuItem{Label: "Delete", Action: BtnDelete},
 	)
+	if hasSession {
+		items = append(items, ContextMenuItem{Label: "Kill Tmux Session", Action: BtnKillSession})
+	}
+	return items
 }
 
 // RenderContextMenu renders the context menu as a centered dialog.

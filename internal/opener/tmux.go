@@ -206,6 +206,15 @@ func LiveSessions() map[string]bool {
 	return live
 }
 
+// KillAllSessions kills every LTS-managed tmux session and returns how many.
+func KillAllSessions() int {
+	live := LiveSessions()
+	for name := range live {
+		exec.Command("tmux", "kill-session", "-t", "="+name).Run()
+	}
+	return len(live)
+}
+
 // KillSession removes the tmux session of a deleted worktree (best-effort).
 func KillSession(path string) {
 	if !TmuxAvailable() {

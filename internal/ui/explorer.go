@@ -57,33 +57,25 @@ func ExplorerSidebarWidth(termWidth int) int {
 	return w
 }
 
-// explorerActions returns the action-strip entries for a worktree of repo.
-func explorerActions(repo git.Repo) []struct {
+// stripAction is one entry of the Explorer's selected-row action strip.
+type stripAction struct {
 	Label string
 	Btn   HoverButton
-} {
-	actions := []struct {
-		Label string
-		Btn   HoverButton
-	}{
-		{"⏎ open", BtnOpen},
-	}
+}
+
+// explorerActions returns the action-strip entries for a worktree of repo.
+func explorerActions(repo git.Repo, hasSession bool) []stripAction {
+	actions := []stripAction{{"⏎ open", BtnOpen}}
 	if !repo.IsMonorepo {
-		actions = append(actions, struct {
-			Label string
-			Btn   HoverButton
-		}{"b rebase", BtnRebase})
+		actions = append(actions, stripAction{"b rebase", BtnRebase})
 	}
 	actions = append(actions,
-		struct {
-			Label string
-			Btn   HoverButton
-		}{"m rename", BtnRename},
-		struct {
-			Label string
-			Btn   HoverButton
-		}{"d delete", BtnDelete},
+		stripAction{"m rename", BtnRename},
+		stripAction{"d delete", BtnDelete},
 	)
+	if hasSession {
+		actions = append(actions, stripAction{"x session", BtnKillSession})
+	}
 	return actions
 }
 
@@ -286,9 +278,11 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 
 		// Action strip under the selected row
 		if isSel {
+			hasSession := tmuxLive[opener.SessionName(wt.Path)]
+			actions := explorerActions(repo, hasSession)
 			strip := "    "
 			x := sheetX + 2 + lipgloss.Width(strip)
-			for ai, a := range explorerActions(repo) {
+			for ai, a := range actions {
 				seg := "[" + a.Label + "]"
 				style := dimStyle
 				if hoveredBtn != BtnNone && hoveredBtn == a.Btn {
@@ -301,7 +295,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 					Type: ZoneExplorerAction, RepoIdx: sel, WTIdx: i, Button: a.Btn,
 				})
 				x += segW
-				if ai < len(explorerActions(repo))-1 {
+				if ai < len(actions)-1 {
 					strip += " "
 					x++
 				}

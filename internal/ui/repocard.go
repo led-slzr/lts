@@ -43,6 +43,8 @@ const (
 	BtnMigrate
 	// Explorer action strip: open selected worktree
 	BtnOpen
+	// Kill a worktree's tmux session
+	BtnKillSession
 )
 
 // innerWidth returns the usable content width inside a card.
