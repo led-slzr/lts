@@ -177,6 +177,7 @@ func NewModel(cfg config.Config) Model {
 	hi.Width = 10
 
 	ui.CurrentWorkDir = cfg.WorkDir
+	ui.ApplyTheme(ui.ThemeByKey(cfg.Global.Theme))
 
 	return Model{
 		config:            cfg,
@@ -2737,9 +2738,9 @@ func (m Model) getCardScreenX(repoIdx int) int {
 // 3. Padding each line to full terminal width
 // 4. Filling remaining vertical space with black lines
 func paintBlack(content string, width, height int) string {
-	blackBg := "\033[48;2;0;0;0m"
+	blackBg := ui.ThemeBgSeq()
 
-	// After every ANSI reset, re-apply black background
+	// After every ANSI reset, re-apply the theme canvas background
 	content = strings.ReplaceAll(content, "\033[0m", "\033[0m"+blackBg)
 
 	lines := strings.Split(content, "\n")
