@@ -30,15 +30,21 @@ const (
 	ZoneFooterBtn
 	ZoneMigrateBtn
 	ZoneHistoryItem
+	// Explorer layout zones
+	ZoneExplorerRepo   // sidebar repo item (RepoIdx)
+	ZoneExplorerRow    // sheet worktree row (RepoIdx = selected repo, WTIdx = row)
+	ZoneExplorerAction // action-strip item (Button, WTIdx)
+	ZoneExplorerNew    // [+ new] in the sheet header (RepoIdx)
+	ZoneClone          // "+ Clone a Repo" tile / sidebar entry
 )
 
 // HitZone represents a clickable/hoverable region on screen.
 type HitZone struct {
 	X, Y, W, H int
-	Type        HitZoneType
-	RepoIdx     int
-	WTIdx       int // -1 for card-level, -2 for header
-	Button      HoverButton
+	Type       HitZoneType
+	RepoIdx    int
+	WTIdx      int // -1 for card-level, -2 for header
+	Button     HoverButton
 }
 
 // GridResult contains the rendered grid and its hit zones.
@@ -54,20 +60,27 @@ type GridResult struct {
 // gridYOffset is the screen Y coordinate where the grid section starts (before its own margin).
 var CurrentWorkDir string // set by the app to filter history suggestions
 
-func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int) GridResult {
+func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail) GridResult {
 	if len(repos) == 0 {
-		return renderEmptyState(termWidth, gridYOffset, hoveredHistory)
+		return renderEmptyState(termWidth, gridYOffset, hoveredHistory, hoveredBtn, ghState)
 	}
 
 	availWidth := termWidth - (MarginH * 2)
+
+	// The clone tile renders as one extra grid cell after the repos —
+	// hollowed out (with the reason) when gh isn't ready
+	totalCells := len(repos) + 1
+	if ghState == CloneDisabled {
+		totalCells = len(repos)
+	}
 
 	// Calculate columns
 	cols := availWidth / (MinCardWidth + CardGap)
 	if cols < 1 {
 		cols = 1
 	}
-	if cols > len(repos) {
-		cols = len(repos)
+	if cols > totalCells {
+		cols = totalCells
 	}
 
 	// Calculate actual card width
@@ -80,7 +93,7 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 	}
 
 	// Arrange into rows
-	numRows := (len(repos) + cols - 1) / cols
+	numRows := (totalCells + cols - 1) / cols
 
 	var hitZones []HitZone
 	var renderedRows []string
@@ -98,14 +111,20 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 	for row := 0; row < numRows; row++ {
 		start := row * cols
 		end := start + cols
-		if end > len(repos) {
-			end = len(repos)
+		if end > totalCells {
+			end = totalCells
 		}
 
 		rowCards := make([]string, 0, end-start)
 		rowCardHeights := make([]int, 0, end-start)
 
 		for i := start; i < end; i++ {
+			if i >= len(repos) {
+				tile := renderCloneTile(cardWidth, hoveredBtn == BtnClone, ghState)
+				rowCards = append(rowCards, tile)
+				rowCardHeights = append(rowCardHeights, lipgloss.Height(tile))
+				continue
+			}
 			isFocused := focusedCard == i
 			wtIdx := -1
 			btn := BtnNone
@@ -113,7 +132,7 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 				wtIdx = focusedWT
 				btn = hoveredBtn
 			}
-			card := RenderCard(repos[i], cardWidth, isFocused, wtIdx, btn)
+			card := RenderCard(repos[i], cardWidth, isFocused, wtIdx, btn, busyCards[repos[i].Name], tmuxLive)
 			rowCards = append(rowCards, card)
 			rowCardHeights = append(rowCardHeights, lipgloss.Height(card))
 		}
@@ -150,6 +169,16 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 
 			screenCardX := baseX + contentX
 			screenCardY := baseY + contentY
+
+			// Clone tile: one zone, no card internals
+			if repoIdx >= len(repos) {
+				hitZones = append(hitZones, HitZone{
+					X: screenCardX, Y: screenCardY, W: cardWidth, H: maxH,
+					Type: ZoneClone, RepoIdx: -1, WTIdx: -1, Button: BtnClone,
+				})
+				contentX += cardWidth + CardGap
+				continue
+			}
 
 			// Full card zone (entire rendered card area)
 			hitZones = append(hitZones, HitZone{
@@ -328,13 +357,13 @@ func HistoryHitTest(zones []HitZone, x, y int) int {
 }
 
 // renderEmptyState renders the "no repos" message with history suggestions.
-func renderEmptyState(termWidth, gridYOffset, hoveredHistory int) GridResult {
+func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn HoverButton, ghState CloneAvail) GridResult {
 	suggestions := config.GetHistorySuggestions(CurrentWorkDir)
 
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorBlack)
 	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
-	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 
 	var lines []string
 	lines = append(lines, "")
@@ -371,8 +400,74 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int) GridResult {
 		lines = append(lines, dimStyle.Render("  No previous locations found."))
 	}
 
+	// Clone entry — the empty state is exactly when cloning matters most
+	if ghState == CloneDisabled {
+		content := strings.Join(lines, "\n")
+		view := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(content)
+		return GridResult{View: view, HitZones: hitZones}
+	}
+	lines = append(lines, "")
+	switch ghState {
+	case CloneReady:
+		cloneStyle := greenStyle.Bold(true)
+		if hoveredBtn == BtnClone {
+			cloneStyle = hoverStyle
+		}
+		lines = append(lines, cloneStyle.Render("  (c) Clone a Repo from GitHub"))
+	case CloneNoAuth:
+		lines = append(lines, dimStyle.Render("  (c) Clone a Repo from GitHub — run: gh auth login"))
+	default:
+		lines = append(lines, dimStyle.Render("  (c) Clone a Repo from GitHub — install gh to enable"))
+	}
+	hitZones = append(hitZones, HitZone{
+		X: MarginH, Y: baseY + len(lines) - 1, W: termWidth - MarginH*2, H: 1,
+		Type: ZoneClone, RepoIdx: -1, WTIdx: -1, Button: BtnClone,
+	})
+
 	content := strings.Join(lines, "\n")
 	view := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(content)
 
 	return GridResult{View: view, HitZones: hitZones}
+}
+
+// CloneAvail describes whether the GitHub clone integration is usable.
+type CloneAvail int
+
+const (
+	CloneReady    CloneAvail = iota
+	CloneNoAuth              // gh installed but not authenticated
+	CloneMissing             // gh not installed
+	CloneDisabled            // GitHub integration turned off in Settings — no surfaces at all
+)
+
+// renderCloneTile draws the "+ Clone a Repo" grid cell. When gh isn't
+// ready the tile is hollowed out with the reason; clicking it explains.
+func renderCloneTile(cardWidth int, hovered bool, state CloneAvail) string {
+	iw := innerWidth(cardWidth)
+	center := lipgloss.NewStyle().Width(iw).Align(lipgloss.Center).Background(ColorBlack)
+	dim := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+
+	const label = "(c) Clone a Repo"
+	labelStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
+	sub := ""
+	switch state {
+	case CloneReady:
+		if hovered {
+			labelStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
+		}
+	case CloneNoAuth:
+		labelStyle, sub = dim, "run: gh auth login"
+	default:
+		labelStyle, sub = dim, "install gh to enable"
+	}
+
+	content := center.Render(labelStyle.Render(label))
+	if sub != "" {
+		content += "\n" + center.Render(dim.Render(sub))
+	}
+	border := CardBorderNormal
+	if hovered && state == CloneReady {
+		border = CardBorderFocused
+	}
+	return border.Width(cardWidth - 2).Render(content)
 }

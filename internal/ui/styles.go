@@ -2,178 +2,219 @@ package ui
 
 import "github.com/charmbracelet/lipgloss"
 
+// Colors are assigned by ApplyTheme (theme.go) — every color in the UI
+// flows through these vars, so themes are a hot swap. The derived styles
+// below capture color values at construction, hence rebuildStyles().
 var (
-	// Colors
-	ColorDarkGreen  = lipgloss.Color("#006400")
-	ColorGreen      = lipgloss.Color("#00AA00")
-	ColorClean      = lipgloss.Color("#5F875F")
-	ColorCyan       = lipgloss.Color("#00CCCC")
-	ColorRed        = lipgloss.Color("#CC3333")
-	ColorYellow     = lipgloss.Color("#CCAA00")
-	ColorBlue       = lipgloss.Color("#3388FF")
-	ColorWhite      = lipgloss.Color("#FFFFFF")
-	ColorGray       = lipgloss.Color("#555555")
-	ColorDim        = lipgloss.Color("#666666")
-	ColorBlack      = lipgloss.Color("#000000")
-	ColorBtnBg      = lipgloss.Color("#111111")
-	ColorBtnHoverBg = lipgloss.Color("#006400")
-	ColorMagenta    = lipgloss.Color("#CC55CC")
+	ColorDarkGreen  lipgloss.Color
+	ColorGreen      lipgloss.Color
+	ColorClean      lipgloss.Color
+	ColorCyan       lipgloss.Color
+	ColorRed        lipgloss.Color
+	ColorYellow     lipgloss.Color
+	ColorBlue       lipgloss.Color
+	ColorWhite      lipgloss.Color
+	ColorGray       lipgloss.Color
+	ColorDim        lipgloss.Color
+	ColorBlack      lipgloss.Color
+	ColorBtnBg      lipgloss.Color
+	ColorBtnHoverBg lipgloss.Color
+	ColorSelBg      lipgloss.Color // selection/hover background (Text reads on it)
+	ColorMagenta    lipgloss.Color
+	ColorTeal       lipgloss.Color // tmux session indicators
 
-	// Title
-	TitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorDarkGreen).
-			Background(ColorBlack)
-
-	// Card borders
-	CardBorderNormal = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorGray).
-				BorderBackground(ColorBlack).
-				Background(ColorBlack).
-				Padding(0, 1)
-
-	CardBorderFocused = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorWhite).
-				BorderBackground(ColorBlack).
-				Background(ColorBlack).
-				Padding(0, 1)
-
-	CardBorderMigration = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorYellow).
-				BorderBackground(ColorBlack).
-				Background(ColorBlack).
-				Padding(0, 1)
-
-	MigrateBtnStyle = lipgloss.NewStyle().
-				Foreground(ColorYellow).
-				Background(ColorBlack).
-				Bold(true)
-
-	MigrateBtnHoverStyle = lipgloss.NewStyle().
-				Foreground(ColorBlack).
-				Background(ColorYellow).
-				Bold(true)
-
-	// Repo name in card
-	RepoNameStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorWhite).
-			Background(ColorBlack)
-
-	BranchDimStyle = lipgloss.NewStyle().
-			Foreground(ColorDim).
-			Background(ColorBlack)
+	// Derived styles — rebuilt on every theme apply
+	TitleStyle           lipgloss.Style
+	CardBorderNormal     lipgloss.Style
+	CardBorderFocused    lipgloss.Style
+	CardBorderMigration  lipgloss.Style
+	MigrateBtnStyle      lipgloss.Style
+	MigrateBtnHoverStyle lipgloss.Style
+	RepoNameStyle        lipgloss.Style
+	BranchDimStyle       lipgloss.Style
 
 	// Worktree status colors
-	StatusCleanStyle     = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
-	StatusChangedStyle   = lipgloss.NewStyle().Foreground(ColorCyan).Background(ColorBlack)
-	StatusDivergedStyle  = lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
-	StatusMissingStyle   = lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
-	StatusToPushStyle    = lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
-	StatusToPullStyle    = lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
-	StatusNewStyle       = lipgloss.NewStyle().Foreground(ColorBlue).Background(ColorBlack)
-	StatusNoRemoteStyle  = lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
-	StatusMergedStyle    = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
-	StatusMergedDirStyle = lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack)
+	StatusCleanStyle     lipgloss.Style
+	StatusChangedStyle   lipgloss.Style
+	StatusDivergedStyle  lipgloss.Style
+	StatusMissingStyle   lipgloss.Style
+	StatusToPushStyle    lipgloss.Style
+	StatusToPullStyle    lipgloss.Style
+	StatusNewStyle       lipgloss.Style
+	StatusNoRemoteStyle  lipgloss.Style
+	StatusMergedStyle    lipgloss.Style
+	StatusMergedDirStyle lipgloss.Style
 
-	// Worktree branch name (normal)
-	WTBranchStyle = lipgloss.NewStyle().Foreground(ColorCyan).Background(ColorBlack)
+	WTBranchStyle    lipgloss.Style
+	WTHighlightStyle lipgloss.Style
+	TreeCharStyle    lipgloss.Style
 
-	// Highlighted worktree (hovered)
-	WTHighlightStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(ColorWhite).
-				Background(ColorBlack)
+	ButtonStyle         lipgloss.Style
+	ButtonHoverStyle    lipgloss.Style
+	InlineBtnStyle      lipgloss.Style
+	InlineBtnHoverStyle lipgloss.Style
 
-	// Tree character
-	TreeCharStyle = lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	FooterStyle    lipgloss.Style
+	StatusBarStyle lipgloss.Style
 
-	// Buttons
-	ButtonStyle = lipgloss.NewStyle().
-			Foreground(ColorWhite).
-			Background(ColorBtnBg).
-			Padding(0, 1)
+	ClickUsageActiveStyle   lipgloss.Style
+	ClickUsageInactiveStyle lipgloss.Style
+	ClickUsageLabelStyle    lipgloss.Style
 
-	ButtonHoverStyle = lipgloss.NewStyle().
-				Foreground(ColorWhite).
-				Background(ColorBtnHoverBg).
-				Bold(true).
-				Padding(0, 1)
+	ModalStyle lipgloss.Style
 
-	// Inline action buttons
-	InlineBtnStyle = lipgloss.NewStyle().
-			Foreground(ColorDim).
-			Background(ColorBlack)
+	CreateBtnStyle      lipgloss.Style
+	CreateBtnHoverStyle lipgloss.Style
 
-	InlineBtnHoverStyle = lipgloss.NewStyle().
-				Foreground(ColorWhite).
-				Background(ColorBlack).
-				Bold(true)
-
-	// Footer
-	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorDim).
-			Background(ColorBlack)
-
-	// Status bar
-	StatusBarStyle = lipgloss.NewStyle().
-			Foreground(ColorGreen).
-			Background(ColorBlack).
-			Italic(true)
-
-	// Click usage
-	ClickUsageActiveStyle = lipgloss.NewStyle().
-				Foreground(ColorWhite).
-				Background(ColorDarkGreen).
-				Bold(true).
-				Padding(0, 1)
-
-	ClickUsageInactiveStyle = lipgloss.NewStyle().
-				Foreground(ColorDim).
-				Background(ColorBlack).
-				Padding(0, 1)
-
-	// Click usage label
-	ClickUsageLabelStyle = lipgloss.NewStyle().
-				Foreground(ColorDim).
-				Background(ColorBlack)
-
-	// Modal overlay
-	ModalStyle = lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(ColorGreen).
-			BorderBackground(ColorBlack).
-			Background(ColorBlack).
-			Padding(1, 2).
-			Width(50)
-
-	// Create button
-	CreateBtnStyle = lipgloss.NewStyle().
-			Foreground(ColorWhite).
-			Background(ColorBlack).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorGray).
-			BorderBackground(ColorBlack).
-			Padding(0, 2)
-
-	CreateBtnHoverStyle = lipgloss.NewStyle().
-				Foreground(ColorWhite).
-				Background(ColorDarkGreen).
-				Bold(true).
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(ColorWhite).
-				BorderBackground(ColorBlack).
-				Padding(0, 2)
-
-	// Empty state
-	EmptyStyle = lipgloss.NewStyle().
-			Foreground(ColorDim).
-			Background(ColorBlack).
-			Italic(true)
+	EmptyStyle lipgloss.Style
 
 	// Margin wrapper
 	MarginH = 2
 )
+
+func init() {
+	ApplyTheme(ClassicLTS)
+}
+
+// rebuildStyles reconstructs every derived style from the current color
+// vars. Called by ApplyTheme — styles capture colors at construction.
+func rebuildStyles() {
+	TitleStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorDarkGreen).
+		Background(ColorBlack)
+
+	CardBorderNormal = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorGray).
+		BorderBackground(ColorBlack).
+		Background(ColorBlack).
+		Padding(0, 1)
+
+	CardBorderFocused = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorWhite).
+		BorderBackground(ColorBlack).
+		Background(ColorBlack).
+		Padding(0, 1)
+
+	CardBorderMigration = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorYellow).
+		BorderBackground(ColorBlack).
+		Background(ColorBlack).
+		Padding(0, 1)
+
+	MigrateBtnStyle = lipgloss.NewStyle().
+		Foreground(ColorYellow).
+		Background(ColorBlack).
+		Bold(true)
+
+	MigrateBtnHoverStyle = lipgloss.NewStyle().
+		Foreground(ColorBlack).
+		Background(ColorYellow).
+		Bold(true)
+
+	RepoNameStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorWhite).
+		Background(ColorBlack)
+
+	BranchDimStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack)
+
+	StatusCleanStyle = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
+	StatusChangedStyle = lipgloss.NewStyle().Foreground(ColorCyan).Background(ColorBlack)
+	StatusDivergedStyle = lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
+	StatusMissingStyle = lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
+	StatusToPushStyle = lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
+	StatusToPullStyle = lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
+	StatusNewStyle = lipgloss.NewStyle().Foreground(ColorBlue).Background(ColorBlack)
+	StatusNoRemoteStyle = lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+	StatusMergedStyle = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
+	StatusMergedDirStyle = lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack)
+
+	WTBranchStyle = lipgloss.NewStyle().Foreground(ColorCyan).Background(ColorBlack)
+
+	WTHighlightStyle = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(ColorWhite).
+		Background(ColorBlack)
+
+	TreeCharStyle = lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
+
+	ButtonStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBtnBg).
+		Padding(0, 1)
+
+	ButtonHoverStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBtnHoverBg).
+		Bold(true).
+		Padding(0, 1)
+
+	InlineBtnStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack)
+
+	InlineBtnHoverStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBlack).
+		Bold(true)
+
+	FooterStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack)
+
+	StatusBarStyle = lipgloss.NewStyle().
+		Foreground(ColorGreen).
+		Background(ColorBlack).
+		Italic(true)
+
+	ClickUsageActiveStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorSelBg).
+		Bold(true).
+		Padding(0, 1)
+
+	ClickUsageInactiveStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack).
+		Padding(0, 1)
+
+	ClickUsageLabelStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack)
+
+	ModalStyle = lipgloss.NewStyle().
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(ColorGreen).
+		BorderBackground(ColorBlack).
+		Background(ColorBlack).
+		Padding(1, 2).
+		Width(50)
+
+	CreateBtnStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorBlack).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorGray).
+		BorderBackground(ColorBlack).
+		Padding(0, 2)
+
+	CreateBtnHoverStyle = lipgloss.NewStyle().
+		Foreground(ColorWhite).
+		Background(ColorSelBg).
+		Bold(true).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorWhite).
+		BorderBackground(ColorBlack).
+		Padding(0, 2)
+
+	EmptyStyle = lipgloss.NewStyle().
+		Foreground(ColorDim).
+		Background(ColorBlack).
+		Italic(true)
+}

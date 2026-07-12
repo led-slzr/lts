@@ -16,6 +16,22 @@ DIM='\033[2m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
+# Ask a yes/no question on the terminal. Works when the script itself is
+# piped via `curl | bash` (stdin is the script) by reading from /dev/tty.
+# Returns 1 when no terminal is available (non-interactive).
+ask_yes_no() {
+    local prompt="$1" reply
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        return 1
+    fi
+    printf "%b" "$prompt" > /dev/tty
+    read -r reply < /dev/tty || return 1
+    case "$reply" in
+        [yY]|[yY][eE][sS]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # Detect if updating or fresh install
 IS_UPDATE=false
 OLD_VERSION=""
@@ -123,15 +139,38 @@ install_from_source() {
     git clone --depth 1 "https://github.com/${REPO}.git" "$build_dir" 2>/dev/null
 
     echo -e "Building LTS..."
-    cd "$build_dir"
-    go build -o lts .
+    (cd "$build_dir" && go build -o lts .)
 
     mkdir -p "$INSTALL_DIR"
-    mv lts "$INSTALL_DIR/lts"
+    mv "$build_dir/lts" "$INSTALL_DIR/lts"
     chmod +x "$INSTALL_DIR/lts"
 }
 
 # --- Main ---
+
+# A running LTS instance keeps the old binary until restarted — offer to
+# exit it first so the new version takes effect immediately.
+if pgrep -x lts >/dev/null 2>&1; then
+    if [ -r /dev/tty ]; then
+        if ask_yes_no "${YELLOW}LTS is currently running.${NC} Exit it and continue installing? [y/N] "; then
+            pkill -x lts 2>/dev/null || true
+            for _ in $(seq 1 50); do
+                pgrep -x lts >/dev/null 2>&1 || break
+                sleep 0.1
+            done
+            if pgrep -x lts >/dev/null 2>&1; then
+                pkill -9 -x lts 2>/dev/null || true
+                sleep 0.5
+            fi
+            echo -e "${DIM}Running instance exited.${NC}"
+        else
+            echo -e "Install cancelled — LTS is still running."
+            exit 0
+        fi
+    else
+        echo -e "${DIM}Note: LTS is running; it keeps the old version until restarted.${NC}"
+    fi
+fi
 
 PLATFORM=$(detect_platform)
 echo -e "${DIM}Platform: ${PLATFORM}${NC}"
@@ -184,4 +223,9 @@ if ! $IS_UPDATE; then
     echo -e "${DIM}If 'lts' is not found, restart your terminal or run:${NC}"
     echo -e "  source ~/.zshrc  ${DIM}(or ~/.bashrc)${NC}"
     echo ""
+fi
+
+# Offer to launch right away (interactive installs only)
+if ask_yes_no "Open LTS now? [y/N] "; then
+    exec "${INSTALL_DIR}/lts" < /dev/tty
 fi

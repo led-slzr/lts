@@ -13,21 +13,39 @@ import (
 // GlobalConfig holds settings that apply regardless of working directory.
 // Stored at ~/.config/lts/config
 type GlobalConfig struct {
-	IDECommand      string // windsurf, code, cursor, zed
-	AICliCommand    string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager  string // pnpm, npm, yarn, bun
-	AutoRefresh     string // 30M, 1H, 24H, etc.
-	Terminal        string // ghostty, iterm, terminal, wezterm, alacritty
-	CheckForUpdates bool   // daily check for new releases
-	AutoUpdate      bool   // automatically install new releases in background
-	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
-	LastUpdateCheck int64  // unix timestamp of last update check
+	IDECommand        string // windsurf, code, cursor, zed
+	AICliCommand      string // claude, opencode, "claude --dangerously-skip-permissions"
+	PackageManager    string // pnpm, npm, yarn, bun
+	AutoRefresh       string // 30M, 1H, 24H, etc.
+	Terminal          string // ghostty, iterm, terminal, wezterm, alacritty
+	Multiplexer       string // none, tmux — session layer inside the terminal
+	TmuxAIPaneWidth   int    // AI pane width as % of the window (tmux sessions)
+	TmuxRightPanes    int    // stacked panes in the right column (tmux sessions)
+	Layout            string // main view layout: board, explorer
+	ClickUsage        string // header click mode: ide, ai, terminal — restored on launch
+	Theme             string // color theme key (see internal/ui/theme.go registry)
+	SortOrder         string // repo/worktree ordering: activity, created, name
+	DoneSound         string // completion sound: off, glass, submarine, ping, pop, hero, bell
+	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
+	AutoKillTmux      string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
+	CheckForUpdates   bool   // daily check for new releases
+	AutoUpdate        bool   // automatically install new releases in background (opt-in)
+	OpenEnvInIDE      bool   // auto-open .env files when opening workspace
+	InstallOnCreate   bool   // default for the package-install toggle when creating worktrees
+	CopyEnvFiles      bool   // copy .env* files into new worktrees
+	CopyMCPJson       bool   // copy .mcp.json files into new worktrees
+	EnableHibernate   bool   // show the destructive Hibernate Repo action (opt-in)
+	GithubIntegration bool   // gh-powered surfaces: clone browser, PRs, header login, hibernate
+	LaunchGreeting    bool   // greeting line in the header banner
+	SizeScanning      bool   // background worktree size scan (SIZE column, disk detail)
+	LastUpdateCheck   int64  // unix timestamp of last update check
 }
 
 // RepoLocalConfig holds per-repo settings.
 type RepoLocalConfig struct {
-	BasisBranch string // main, dev, master, etc.
-	LastRefresh int64  // unix timestamp
+	BasisBranch    string // main, dev, master, etc.
+	PackageManager string // per-repo override; empty = use global default
+	LastRefresh    int64  // unix timestamp
 }
 
 // Config is the merged configuration used by the app.
@@ -39,15 +57,32 @@ type Config struct {
 
 func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
-		IDECommand:      "windsurf",
-		AICliCommand:    "claude",
-		PackageManager:  "pnpm",
-		AutoRefresh:     "OFF",
-		Terminal:        "terminal",
-		CheckForUpdates: true,
-		AutoUpdate:      true,
-		OpenEnvInIDE:    true,
-		LastUpdateCheck: 0,
+		IDECommand:        "windsurf",
+		AICliCommand:      "claude",
+		PackageManager:    "pnpm",
+		AutoRefresh:       "OFF",
+		Terminal:          "terminal",
+		Multiplexer:       "none",
+		TmuxAIPaneWidth:   50,
+		TmuxRightPanes:    1,
+		Layout:            "board",
+		ClickUsage:        "ide",
+		Theme:             "classic-lts",
+		SortOrder:         "activity",
+		DoneSound:         "off",
+		AutoCleanModules:  "OFF",
+		AutoKillTmux:      "OFF",
+		CheckForUpdates:   true,
+		AutoUpdate:        false,
+		OpenEnvInIDE:      true,
+		InstallOnCreate:   true,
+		CopyEnvFiles:      true,
+		CopyMCPJson:       false,
+		EnableHibernate:   false,
+		GithubIntegration: true,
+		LaunchGreeting:    true,
+		SizeScanning:      true,
+		LastUpdateCheck:   0,
 	}
 }
 
@@ -166,30 +201,71 @@ func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
 	return c.SaveLocal()
 }
 
+// GetRepoPackageManager returns the repo's package manager override,
+// or the global default when unset.
+func (c *Config) GetRepoPackageManager(repoName string) string {
+	key := strings.ToUpper(repoName)
+	if rc, ok := c.Local[key]; ok && rc.PackageManager != "" {
+		return rc.PackageManager
+	}
+	return c.Global.PackageManager
+}
+
+// SetRepoPackageManager updates a repo's package manager override and saves.
+// Empty means "use the global default".
+func (c *Config) SetRepoPackageManager(repoName, pm string) error {
+	key := strings.ToUpper(repoName)
+	rc := c.Local[key]
+	rc.PackageManager = pm
+	if rc.BasisBranch == "" {
+		rc.BasisBranch = "main"
+	}
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
 	c.Global.LastUpdateCheck = ts
 	return c.SaveGlobal()
 }
 
+// commandLabel derives a display label from a command string: first word
+// (before any flags), title-cased, with overrides for known tools whose
+// display name differs from their command.
+func commandLabel(cmd, fallback string, special map[string]string) string {
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return fallback
+	}
+	name := parts[0]
+	if label, ok := special[strings.ToLower(name)]; ok {
+		return label
+	}
+	return strings.ToUpper(name[:1]) + name[1:]
+}
+
 // AICliLabel returns a display label derived from the AI CLI command.
 // e.g. "claude" → "Claude", "opencode" → "Opencode", "claude --dangerously-skip-permissions" → "Claude"
 func (c *Config) AICliLabel() string {
-	cmd := c.Global.AICliCommand
-	if cmd == "" {
-		return "AI CLI"
-	}
-	// Take first word (before any flags)
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return "AI CLI"
-	}
-	name := parts[0]
-	// Title case
-	if len(name) > 0 {
-		return strings.ToUpper(name[:1]) + name[1:]
-	}
-	return name
+	return commandLabel(c.Global.AICliCommand, "AI CLI", nil)
+}
+
+// IDELabel returns a display label derived from the IDE command.
+// e.g. "code" → "VSCode", "windsurf" → "Windsurf"
+func (c *Config) IDELabel() string {
+	return commandLabel(c.Global.IDECommand, "IDE", map[string]string{
+		"code": "VSCode",
+	})
+}
+
+// TerminalLabel returns a display label derived from the terminal setting.
+// e.g. "ghostty" → "Ghostty", "iterm" → "iTerm"
+func (c *Config) TerminalLabel() string {
+	return commandLabel(c.Global.Terminal, "Terminal", map[string]string{
+		"iterm":   "iTerm",
+		"wezterm": "WezTerm",
+	})
 }
 
 // SaveGlobal writes the global config to ~/.config/lts/config
@@ -204,9 +280,26 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("PACKAGE_MANAGER=\"%s\"", c.Global.PackageManager),
 		fmt.Sprintf("AUTO_REFRESH=\"%s\"", c.Global.AutoRefresh),
 		fmt.Sprintf("TERMINAL=\"%s\"", c.Global.Terminal),
+		fmt.Sprintf("TERMINAL_MULTIPLEXER=\"%s\"", c.Global.Multiplexer),
+		fmt.Sprintf("TMUX_AI_PANE_WIDTH=\"%d\"", c.Global.TmuxAIPaneWidth),
+		fmt.Sprintf("TMUX_RIGHT_PANES=\"%d\"", c.Global.TmuxRightPanes),
+		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
+		fmt.Sprintf("CLICK_USAGE=\"%s\"", c.Global.ClickUsage),
+		fmt.Sprintf("THEME=\"%s\"", c.Global.Theme),
+		fmt.Sprintf("SORT_ORDER=\"%s\"", c.Global.SortOrder),
+		fmt.Sprintf("DONE_SOUND=\"%s\"", c.Global.DoneSound),
+		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
+		fmt.Sprintf("AUTO_KILL_TMUX=\"%s\"", c.Global.AutoKillTmux),
 		fmt.Sprintf("DAILY_CHECK_FOR_UPDATES=\"%t\"", c.Global.CheckForUpdates),
 		fmt.Sprintf("AUTO_UPDATE_NEW_RELEASE=\"%t\"", c.Global.AutoUpdate),
 		fmt.Sprintf("OPEN_ENV_IDE=\"%t\"", c.Global.OpenEnvInIDE),
+		fmt.Sprintf("NEW_WT_PACKAGE_INSTALL=\"%t\"", c.Global.InstallOnCreate),
+		fmt.Sprintf("COPY_ENV_FILES=\"%t\"", c.Global.CopyEnvFiles),
+		fmt.Sprintf("COPY_MCP_JSON=\"%t\"", c.Global.CopyMCPJson),
+		fmt.Sprintf("ENABLE_HIBERNATE=\"%t\"", c.Global.EnableHibernate),
+		fmt.Sprintf("GITHUB_INTEGRATION=\"%t\"", c.Global.GithubIntegration),
+		fmt.Sprintf("LAUNCH_GREETING=\"%t\"", c.Global.LaunchGreeting),
+		fmt.Sprintf("SIZE_SCANNING=\"%t\"", c.Global.SizeScanning),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -225,6 +318,9 @@ func (c *Config) SaveLocal() error {
 	for _, key := range keys {
 		rc := c.Local[key]
 		lines = append(lines, fmt.Sprintf("%s_BASIS_BRANCH=\"%s\"", key, rc.BasisBranch))
+		if rc.PackageManager != "" {
+			lines = append(lines, fmt.Sprintf("%s_PACKAGE_MANAGER=\"%s\"", key, rc.PackageManager))
+		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
 	return os.WriteFile(LocalConfigPath(c.WorkDir), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -263,14 +359,69 @@ func loadGlobal(g *GlobalConfig) {
 	if v, ok := kv["TERMINAL"]; ok {
 		g.Terminal = v
 	}
+	if v, ok := kv["TERMINAL_MULTIPLEXER"]; ok {
+		g.Multiplexer = v
+	}
+	if v, ok := kv["TMUX_AI_PANE_WIDTH"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			g.TmuxAIPaneWidth = n
+		}
+	}
+	if v, ok := kv["TMUX_RIGHT_PANES"]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			g.TmuxRightPanes = n
+		}
+	}
+	if v, ok := kv["CLICK_USAGE"]; ok {
+		g.ClickUsage = v
+	}
+	if v, ok := kv["THEME"]; ok {
+		g.Theme = v
+	}
+	if v, ok := kv["LAYOUT"]; ok {
+		g.Layout = v
+	}
+	if v, ok := kv["SORT_ORDER"]; ok {
+		g.SortOrder = v
+	}
+	if v, ok := kv["DONE_SOUND"]; ok {
+		g.DoneSound = v
+	}
+	if v, ok := kv["AUTO_CLEAN_MODULES"]; ok {
+		g.AutoCleanModules = v
+	}
+	if v, ok := kv["AUTO_KILL_TMUX"]; ok {
+		g.AutoKillTmux = v
+	}
 	if v, ok := kv["DAILY_CHECK_FOR_UPDATES"]; ok {
 		g.CheckForUpdates = v != "false"
 	}
 	if v, ok := kv["AUTO_UPDATE_NEW_RELEASE"]; ok {
-		g.AutoUpdate = v != "false"
+		g.AutoUpdate = v == "true"
 	}
 	if v, ok := kv["OPEN_ENV_IDE"]; ok {
 		g.OpenEnvInIDE = v != "false"
+	}
+	if v, ok := kv["NEW_WT_PACKAGE_INSTALL"]; ok {
+		g.InstallOnCreate = v != "false"
+	}
+	if v, ok := kv["COPY_ENV_FILES"]; ok {
+		g.CopyEnvFiles = v != "false"
+	}
+	if v, ok := kv["COPY_MCP_JSON"]; ok {
+		g.CopyMCPJson = v == "true"
+	}
+	if v, ok := kv["ENABLE_HIBERNATE"]; ok {
+		g.EnableHibernate = v == "true"
+	}
+	if v, ok := kv["GITHUB_INTEGRATION"]; ok {
+		g.GithubIntegration = v != "false"
+	}
+	if v, ok := kv["LAUNCH_GREETING"]; ok {
+		g.LaunchGreeting = v != "false"
+	}
+	if v, ok := kv["SIZE_SCANNING"]; ok {
+		g.SizeScanning = v != "false"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
@@ -292,6 +443,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			repo := strings.TrimSuffix(k, "_BASIS_BRANCH")
 			rc := local[repo]
 			rc.BasisBranch = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_PACKAGE_MANAGER") {
+			repo := strings.TrimSuffix(k, "_PACKAGE_MANAGER")
+			rc := local[repo]
+			rc.PackageManager = v
 			local[repo] = rc
 		} else if strings.HasSuffix(k, "_LAST_REFRESH") {
 			repo := strings.TrimSuffix(k, "_LAST_REFRESH")
@@ -330,7 +486,7 @@ func HistoryPath() string {
 
 // HistoryEntry represents a previously-used LTS directory.
 type HistoryEntry struct {
-	Path     string
+	Path      string
 	RepoCount int
 }
 

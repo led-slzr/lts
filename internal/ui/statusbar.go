@@ -7,7 +7,7 @@ func RenderStatusBar(msg string, width int) string {
 		return ""
 	}
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Center).
 		Margin(0, MarginH).
 		Render(StatusBarStyle.Render(msg))

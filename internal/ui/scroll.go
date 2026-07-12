@@ -16,7 +16,7 @@ func RenderScrollIndicator(width int, canUp, canDown bool) string {
 	}
 
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Center).
 		Margin(0, MarginH).
 		Render(style.Render(hint))

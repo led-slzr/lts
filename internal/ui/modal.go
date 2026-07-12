@@ -21,19 +21,26 @@ const (
 )
 
 type ModalModel struct {
-	Active      bool
-	Step        ModalStep
-	Repos       []git.Repo
-	Selected    map[int]bool // multi-select: repo indices
-	CursorIdx   int
-	Input       textinput.Model
-	Error       string
-	Branch      string
+	Active    bool
+	Step      ModalStep
+	Repos     []git.Repo
+	Selected  map[int]bool // multi-select: repo indices
+	CursorIdx int
+	Input     textinput.Model
+	Error     string
+	Branch    string
 
 	// Pre-computed plan info for confirmation
-	PlanSingle  bool   // true if single-repo mode
-	PlanLTSDir  string // e.g. "core-lts" or "core-erp-ui-lts"
+	PlanSingle  bool     // true if single-repo mode
+	PlanLTSDir  string   // e.g. "core-lts" or "core-erp-ui-lts"
 	PlanWTNames []string // planned worktree folder names
+	PlanRepos   []string // repo name per plan row (aligned with PlanWTNames)
+
+	// Per-repo package-install toggles shown in the confirm step
+	InstallDeps    map[string]bool     // repo name → run package install
+	InstallDefault bool                // initial toggle value (from settings)
+	PkgFor         func(string) string // repo name → package manager (for display)
+	ConfirmCursor  int                 // focused plan row in the confirm step
 
 	// Branch suggestions (populated when entering ModalEnterBranch)
 	AllBranches      []git.BranchInfo // all branches from selected repos
@@ -42,36 +49,108 @@ type ModalModel struct {
 	BranchHovered    int              // hovered branch index (-1 = none)
 	ScrollbarHovered bool             // true when mouse is over the scrollbar thumb
 	ScriptDir        string           // for loading branches
+	FetchingBranches bool             // a background fetch is refreshing the list
+}
+
+// ModalBranchesFetchedMsg carries the refreshed branch list after the
+// background `git fetch` completes. Key identifies the repo selection the
+// fetch was started for, so a stale result can't overwrite a newer list.
+type ModalBranchesFetchedMsg struct {
+	Key      string
+	Branches []git.BranchInfo
 }
 
 // Messages
 type ModalCreateMsg struct {
-	RepoNames []string // selected repo names
-	Branch    string
+	RepoNames   []string // selected repo names
+	Branch      string
+	InstallDeps map[string]bool // repo name → run package install
 }
 
 type ModalCancelMsg struct{}
 
-func NewModal(repos []git.Repo, scriptDir string) ModalModel {
+func NewModal(repos []git.Repo, scriptDir string, pkgFor func(string) string, installDefault bool) ModalModel {
+	// Only real repos are selectable; monorepo cards are synthetic entries
+	// derived from *-lts dirs (multi-select of real repos recreates them).
+	selectable := make([]git.Repo, 0, len(repos))
+	for _, r := range repos {
+		if r.IsMonorepo {
+			continue
+		}
+		selectable = append(selectable, r)
+	}
+
 	ti := textinput.New()
 	ti.Placeholder = "type or pick a branch below"
 	ti.CharLimit = 100
 	ti.Width = 50
 
 	return ModalModel{
-		Active:        true,
-		Step:          ModalSelectRepos,
-		Repos:         repos,
-		Selected:      make(map[int]bool),
-		CursorIdx:     0,
-		Input:         ti,
-		BranchHovered: -1,
-		ScriptDir:     scriptDir,
+		Active:         true,
+		Step:           ModalSelectRepos,
+		Repos:          selectable,
+		Selected:       make(map[int]bool),
+		CursorIdx:      0,
+		Input:          ti,
+		BranchHovered:  -1,
+		ScriptDir:      scriptDir,
+		PkgFor:         pkgFor,
+		InstallDefault: installDefault,
+	}
+}
+
+// pkgForRepo resolves the display package manager for a repo (nil-safe).
+func (m ModalModel) pkgForRepo(repo string) string {
+	if m.PkgFor == nil {
+		return ""
+	}
+	return m.PkgFor(repo)
+}
+
+// HasInstallToggles reports whether the confirm step shows package-install
+// toggles — true when any planned repo has a package manager.
+func (m ModalModel) HasInstallToggles() bool {
+	for _, r := range m.PlanRepos {
+		if m.pkgForRepo(r) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// ConfirmRowsOffset returns the number of content lines before the worktree
+// rows in the ModalConfirm view. Must match the rendering order:
+// title, blank, "Confirm creation:", blank, Directory, [Mode], Branch, blank.
+func (m ModalModel) ConfirmRowsOffset() int {
+	if m.PlanSingle {
+		return 7
+	}
+	return 8 // + Mode line
+}
+
+// ToggleInstall flips the package-install flag for plan row i.
+// Rows whose repo has no package manager have nothing to toggle.
+func (m *ModalModel) ToggleInstall(i int) {
+	if i >= 0 && i < len(m.PlanRepos) && m.InstallDeps != nil {
+		repo := m.PlanRepos[i]
+		if m.pkgForRepo(repo) == "" {
+			return
+		}
+		m.InstallDeps[repo] = !m.InstallDeps[repo]
 	}
 }
 
 func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ModalBranchesFetchedMsg:
+		// Ignore results from a fetch started for a different repo selection
+		if msg.Key == strings.Join(m.selectedRepoPaths(), "\x00") {
+			m.FetchingBranches = false
+			m.AllBranches = msg.Branches
+			m.FilterBranches()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "esc":
@@ -85,9 +164,15 @@ func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 			if m.Step == ModalSelectRepos && m.CursorIdx > 0 {
 				m.CursorIdx--
 			}
+			if m.Step == ModalConfirm && m.ConfirmCursor > 0 {
+				m.ConfirmCursor--
+			}
 		case "down", "j":
 			if m.Step == ModalSelectRepos && m.CursorIdx < len(m.Repos)-1 {
 				m.CursorIdx++
+			}
+			if m.Step == ModalConfirm && m.ConfirmCursor < len(m.PlanWTNames)-1 {
+				m.ConfirmCursor++
 			}
 		case " ", "tab":
 			// Toggle selection in multi-select
@@ -97,6 +182,10 @@ func (m ModalModel) Update(msg tea.Msg) (ModalModel, tea.Cmd) {
 				} else {
 					m.Selected[m.CursorIdx] = true
 				}
+			}
+			// Toggle package install for the focused row
+			if m.Step == ModalConfirm && m.HasInstallToggles() {
+				m.ToggleInstall(m.ConfirmCursor)
 			}
 		case "backspace":
 			if m.Step == ModalEnterBranch {
@@ -150,8 +239,11 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 		m.Step = ModalEnterBranch
 		m.Input.Focus()
+		// Show what the local ref database knows immediately, then refresh
+		// from the remote in the background.
 		m.loadBranches()
-		return m, textinput.Blink
+		m.FetchingBranches = true
+		return m, tea.Batch(textinput.Blink, fetchBranchesCmd(m.selectedRepoPaths()))
 
 	case ModalEnterBranch:
 		branch := strings.TrimSpace(m.Input.Value())
@@ -161,6 +253,11 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 		}
 		m.Branch = branch
 		m.computePlan()
+		m.InstallDeps = make(map[string]bool, len(m.PlanRepos))
+		for _, r := range m.PlanRepos {
+			m.InstallDeps[r] = m.InstallDefault
+		}
+		m.ConfirmCursor = 0
 		m.Step = ModalConfirm
 		return m, nil
 
@@ -171,8 +268,9 @@ func (m ModalModel) handleEnter() (ModalModel, tea.Cmd) {
 			repoNames = append(repoNames, m.Repos[idx].Name)
 		}
 		branch := m.Branch
+		installDeps := m.InstallDeps
 		return m, func() tea.Msg {
-			return ModalCreateMsg{RepoNames: repoNames, Branch: branch}
+			return ModalCreateMsg{RepoNames: repoNames, Branch: branch, InstallDeps: installDeps}
 		}
 	}
 	return m, nil
@@ -191,7 +289,8 @@ func isValidBranchChar(r rune) bool {
 	return false
 }
 
-func (m *ModalModel) loadBranches() {
+// selectedRepoPaths returns the filesystem paths of the selected repos.
+func (m *ModalModel) selectedRepoPaths() []string {
 	var repoPaths []string
 	for idx := range m.Selected {
 		repo := m.Repos[idx]
@@ -205,8 +304,29 @@ func (m *ModalModel) loadBranches() {
 			}
 		}
 	}
-	m.AllBranches = git.GetBranchesWithDates(repoPaths)
+	sort.Strings(repoPaths)
+	return repoPaths
+}
+
+func (m *ModalModel) loadBranches() {
+	m.AllBranches = git.GetBranchesWithDates(m.selectedRepoPaths())
 	m.FilterBranches()
+}
+
+// fetchBranchesCmd fetches origin for each repo in the background, then
+// returns the refreshed branch list. The local ref database only learns
+// about new remote branches on fetch, so without this the suggestion list
+// misses branches pushed since the repo's last fetch.
+func fetchBranchesCmd(repoPaths []string) tea.Cmd {
+	return func() tea.Msg {
+		for _, p := range repoPaths {
+			git.RunGit(p, "fetch", "origin")
+		}
+		return ModalBranchesFetchedMsg{
+			Key:      strings.Join(repoPaths, "\x00"),
+			Branches: git.GetBranchesWithDates(repoPaths),
+		}
+	}
 }
 
 func (m *ModalModel) FilterBranches() {
@@ -257,27 +377,31 @@ func (m *ModalModel) computePlan() {
 		selectedNames = append(selectedNames, m.Repos[idx].Name)
 	}
 
-	suffix := git.ExtractSuffix(m.Branch)
-	safeSuffix := git.SanitizeForFilename(suffix)
+	// Mirror the names the create operations actually use (BranchToDirName),
+	// so the confirmation shows the real directories.
+	branchDir := git.BranchToDirName(m.Branch)
 
 	if len(selectedNames) == 1 {
 		m.PlanSingle = true
 		repo := selectedNames[0]
 		m.PlanLTSDir = repo + "-lts"
-		m.PlanWTNames = []string{repo + "-" + safeSuffix}
+		m.PlanWTNames = []string{branchDir}
+		m.PlanRepos = []string{repo}
 	} else {
 		m.PlanSingle = false
 		sorted := make([]string, len(selectedNames))
 		copy(sorted, selectedNames)
 		sort.Strings(sorted)
 		ltsPrefix := strings.Join(sorted, "-")
-		m.PlanLTSDir = ltsPrefix + "-lts"
-		branchSubdir := ltsPrefix + "-" + safeSuffix
+		// The branch subdir is common to every worktree — show it as part of
+		// the directory so the per-repo rows stay short (they carry toggles).
+		m.PlanLTSDir = ltsPrefix + "-lts/" + branchDir
 		var names []string
 		for _, repo := range sorted {
-			names = append(names, branchSubdir+"/"+repo+"-"+safeSuffix)
+			names = append(names, repo+"-"+branchDir)
 		}
 		m.PlanWTNames = names
+		m.PlanRepos = sorted
 	}
 }
 
@@ -361,7 +485,11 @@ func (m ModalModel) View(width, height int) string {
 			content += cyanStyle.Render(strings.Join(selectedNames, ", ")) + "\n"
 		}
 
-		content += "\n" + dimStyle.Render("Branch name:") + "\n\n"
+		branchLabel := "Branch name:"
+		if m.FetchingBranches {
+			branchLabel += "  (updating from remote…)"
+		}
+		content += "\n" + dimStyle.Render(branchLabel) + "\n\n"
 		content += m.Input.View() + "\n"
 		if m.Error != "" {
 			content += "\n" + errorStyle.Render(m.Error)
@@ -374,7 +502,7 @@ func (m ModalModel) View(width, height int) string {
 			localTag := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
 			remoteTag := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
 			dateStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Italic(true)
-			hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+			hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 			normalStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack)
 			normalDimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 
@@ -465,7 +593,7 @@ func (m ModalModel) View(width, height int) string {
 
 				trackChar := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("│")
 				thumbChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true).Render("┃")
-				thumbHoverChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorDarkGreen).Bold(true).Render("█")
+				thumbHoverChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorSelBg).Bold(true).Render("█")
 
 				var scrollLines []string
 				for idx := 0; idx < visible; idx++ {
@@ -510,16 +638,46 @@ func (m ModalModel) View(width, height int) string {
 		}
 		content += dimStyle.Render("Branch:    ") + cyanStyle.Render(m.Branch) + "\n\n"
 
+		hasToggles := m.HasInstallToggles()
+		maxName := 0
 		for _, name := range m.PlanWTNames {
-			content += dimStyle.Render("  → ") + whiteStyle.Render(name) + "\n"
+			if len(name) > maxName {
+				maxName = len(name)
+			}
+		}
+		for i, name := range m.PlanWTNames {
+			cursor := "  "
+			if hasToggles && i == m.ConfirmCursor {
+				cursor = "▸ "
+			}
+			line := whiteStyle.Render(cursor) + dimStyle.Render("→ ") + whiteStyle.Render(fmt.Sprintf("%-*s", maxName, name))
+			if hasToggles {
+				pm := m.pkgForRepo(m.PlanRepos[i])
+				switch {
+				case pm == "":
+					line += dimStyle.Render("  no package manager")
+				case m.InstallDeps[m.PlanRepos[i]]:
+					line += cyanStyle.Render("  [✓] " + pm + " install")
+				default:
+					line += dimStyle.Render("  [ ] " + pm + " install")
+				}
+			}
+			content += line + "\n"
 		}
 
-		content += "\n" + dimStyle.Render("enter create • esc cancel")
+		hint := "enter create • esc cancel"
+		if hasToggles {
+			hint = "↑/↓ • space toggle • " + hint
+		}
+		content += "\n" + dimStyle.Render(hint)
 	}
 
 	style := ModalStyle
 	if m.Step == ModalEnterBranch {
 		style = style.Width(60) // wider for branch list with dates
+	}
+	if m.Step == ModalConfirm {
+		style = style.Width(60) // room for worktree rows with install toggles
 	}
 	return style.Render(content)
 }

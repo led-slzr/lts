@@ -13,35 +13,55 @@ type ContextMenuItem struct {
 }
 
 // ContextMenuModel holds the state of an active context menu.
+// The target repo/worktree is snapshotted by the app when the menu opens.
 type ContextMenuModel struct {
 	Active    bool
 	Items     []ContextMenuItem
 	CursorIdx int
-	RepoIdx   int
-	WTIdx     int // -2 = repo header, 0+ = worktree
 	X, Y      int // screen position to render at
 }
 
 // RepoContextItems returns context menu items for a repo header.
-func RepoContextItems(isMonorepo bool) []ContextMenuItem {
+// canHibernate adds the hibernate entry (GitHub-remote repo with gh ready —
+// the premise is that GitHub holds everything the local copy does).
+func RepoContextItems(isMonorepo, canHibernate bool) []ContextMenuItem {
 	if isMonorepo {
 		return []ContextMenuItem{
 			{Label: "Refresh", Action: BtnRefresh},
 		}
 	}
-	return []ContextMenuItem{
+	items := []ContextMenuItem{
 		{Label: "Refresh", Action: BtnRefresh},
 		{Label: "Change Basis Branch", Action: BtnBasis},
 	}
+	if canHibernate {
+		items = append(items, ContextMenuItem{Label: "Hibernate Repo", Action: BtnHibernate})
+	}
+	return items
 }
 
 // WorktreeContextItems returns context menu items for a worktree.
-func WorktreeContextItems() []ContextMenuItem {
-	return []ContextMenuItem{
-		{Label: "Rebase", Action: BtnRebase},
-		{Label: "Rename Branch", Action: BtnRename},
-		{Label: "Delete", Action: BtnDelete},
+// Monorepo worktree paths are branch subdirectories (containers of per-repo
+// worktrees, not git worktrees themselves), so Rebase can't run there —
+// per-repo monorepo rebase is a future feature. hasSession adds the tmux
+// session kill entry.
+func WorktreeContextItems(isMonorepo, hasSession, canPR bool) []ContextMenuItem {
+	items := []ContextMenuItem{}
+	if !isMonorepo {
+		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
 	}
+	if canPR {
+		items = append(items, ContextMenuItem{Label: "Create PR", Action: BtnCreatePR})
+	}
+	items = append(items,
+		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},
+		ContextMenuItem{Label: "Clean Modules", Action: BtnCleanModules},
+		ContextMenuItem{Label: "Delete", Action: BtnDelete},
+	)
+	if hasSession {
+		items = append(items, ContextMenuItem{Label: "Kill Tmux Session", Action: BtnKillSession})
+	}
+	return items
 }
 
 // RenderContextMenu renders the context menu as a centered dialog.
@@ -57,7 +77,7 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 
 	cursorStyle := lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(ColorDarkGreen).
+		Background(ColorSelBg).
 		Bold(true).
 		Padding(0, 1)
 
@@ -82,7 +102,7 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 	for i, item := range menu.Items {
 		if i == menu.CursorIdx {
 			lines = append(lines, cursorStyle.Render("▸ "+item.Label))
-		} else if item.Action == BtnDelete {
+		} else if item.Action == BtnDelete || item.Action == BtnHibernate {
 			lines = append(lines, deleteStyle.Render("  "+item.Label))
 		} else {
 			lines = append(lines, itemStyle.Render("  "+item.Label))

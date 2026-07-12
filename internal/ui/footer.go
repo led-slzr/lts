@@ -23,7 +23,7 @@ type footerButton struct {
 var (
 	footerLeft = []footerButton{
 		{"r", "Refresh All", BtnRefreshAll},
-		{"c", "Cleanup Merged", BtnCleanupMerged},
+		{"C", "Cleanup Merged", BtnCleanupMerged},
 	}
 	footerRight = []footerButton{
 		{"s", "Settings", BtnSettings},
@@ -161,7 +161,7 @@ func RenderFooterMinimal(width int, hoveredBtn HoverButton) string {
 		renderBtn(footerRight[1], hoveredBtn == footerRight[1].Btn)
 
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Right).
 		Margin(0, MarginH).
 		Render(right)
@@ -213,7 +213,7 @@ func RenderCreateButton(width int, hovered bool, loading bool) string {
 	}
 
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Center).
 		Margin(0, MarginH).
 		Render(btn)

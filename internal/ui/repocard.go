@@ -2,6 +2,7 @@ package ui
 
 import (
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/opener"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -40,6 +41,18 @@ const (
 	BtnSettings
 	// Migrate button
 	BtnMigrate
+	// Explorer action strip: open selected worktree
+	BtnOpen
+	// Kill a worktree's tmux session
+	BtnKillSession
+	// Remove node_modules from a worktree
+	BtnCleanModules
+	// Clone-a-repo tile / sidebar entry
+	BtnClone
+	// Create a GitHub PR for a worktree's branch
+	BtnCreatePR
+
+	BtnHibernate
 )
 
 // innerWidth returns the usable content width inside a card.
@@ -89,7 +102,8 @@ func statusStyle(status git.WTStatus) lipgloss.Style {
 
 // RenderCard renders a single repository card.
 // focusedWT: index of hovered worktree (-1 = none, -2 = repo header hovered)
-func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton) string {
+// busy: an operation is running on this repo (or one of its constituents)
+func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hoveredBtn HoverButton, busy bool, tmuxLive map[string]bool) string {
 	iw := innerWidth(cardWidth)
 
 	// Migration card: yellow border with centered message and migrate button
@@ -108,9 +122,14 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("(") + monoLabel + BranchDimStyle.Render(")")
 	} else if isHeaderHovered && repo.Path != "" {
 		// Highlighted header (hovered, clickable repo)
-		header = WTHighlightStyle.Underline(true).Render(repo.Name+" ("+repo.MainBranch+")")
+		header = WTHighlightStyle.Underline(true).Render(repo.Name + " (" + repo.MainBranch + ")")
 	} else {
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
+	}
+
+	// Busy marker: an operation is running here
+	if busy {
+		header += lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack).Render(" ⟳")
 	}
 
 	if isHeaderHovered {
@@ -142,6 +161,12 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 			branchStyled += " " + statusStyle(wt.Status).Render(changedBadge)
 		}
 
+		// Live tmux session indicator
+		sessionDot := ""
+		if tmuxLive[opener.SessionName(wt.Path)] {
+			sessionDot = " " + lipgloss.NewStyle().Foreground(ColorTeal).Background(ColorBlack).Render("●")
+		}
+
 		var line string
 		if isHovered {
 			hoverDisplay := branchDisplay
@@ -150,10 +175,10 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 			}
 			branchStyled = WTHighlightStyle.Render(hoverDisplay)
 			triggerBtn := renderInlineBtn("[⋮]", hoveredBtn == BtnContextMenu)
-			textPart := TreeCharStyle.Render(treeChar) + branchStyled
+			textPart := TreeCharStyle.Render(treeChar) + branchStyled + sessionDot
 			line = rightAlignButtons(textPart, triggerBtn, iw)
 		} else {
-			line = TreeCharStyle.Render(treeChar) + branchStyled
+			line = TreeCharStyle.Render(treeChar) + branchStyled + sessionDot
 		}
 
 		lines = append(lines, truncate(line, iw))
@@ -257,7 +282,7 @@ func renderMigrationCard(repo git.Repo, cardWidth, iw int, focused bool, focused
 }
 
 // RenderStatusLegend renders a compact color legend for worktree statuses.
-func RenderStatusLegend(width int) string {
+func RenderStatusLegend(width int, showTmux bool) string {
 	items := []struct {
 		color lipgloss.Color
 		label string
@@ -270,6 +295,12 @@ func RenderStatusLegend(width int) string {
 		{ColorRed, "diverged"},
 		{ColorDim, "no remote"},
 	}
+	if showTmux {
+		items = append(items, struct {
+			color lipgloss.Color
+			label string
+		}{ColorTeal, "tmux session"})
+	}
 
 	var parts []string
 	for _, item := range items {
@@ -280,7 +311,7 @@ func RenderStatusLegend(width int) string {
 
 	legend := strings.Join(parts, "  ")
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Center).
 		Margin(0, MarginH).
 		Render(legend)

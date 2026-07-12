@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v2.7.0](https://img.shields.io/badge/version-2.7.0-green)
+![LTS v3.0.0](https://img.shields.io/badge/version-3.0.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -30,12 +30,22 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 
 ## Features
 
-- **One-click worktree creation** — Stash, pull, branch, copy `.env`, install deps, and generate workspace in one step
-- **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows
+- **One-click worktree creation** — Stash, pull, branch, copy `.env`/`.mcp.json`, install deps, and generate workspace in one step (per-repo install toggles included)
+- **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows, each repo using its own basis branch and package manager
 - **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
-- **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches
-- **Rebase, rename, delete** — Manage worktrees and branches from context menus without leaving the TUI
-- **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings
+- **Tmux sessions per worktree** — With the tmux multiplexer enabled, AI CLI and Terminal opens share one persistent session per worktree (AI pane + shells, configurable layout); reopening reattaches, so AI conversations survive closing the terminal
+- **Clone from GitHub** — With the [GitHub CLI](https://cli.github.com) installed and authenticated, press `c` (or click the "(c) Clone a Repo" tile) to browse and clone any repo you can access, sorted by recency
+- **Create PRs** — Pushed, unmerged worktrees on GitHub repos gain a "Create PR" action (context menu / Explorer `g`) that opens the prefilled compare page in your browser, based against the repo's basis branch; if a PR already exists it opens that instead
+- **Themes** — Ten built-in color themes with a live-preview **Theme Studio** (Settings → Preferences → Theme, then enter): LTS originals — Classic LTS, Led There Be Light, Jela My Love, Photosynthesis, Lights Out — plus Dracula, Nord, Gruvbox Dark, Catppuccin Mocha and Solarized Light. Browsing re-skins the whole screen instantly; a synthetic repo shows every worktree status, the action strip, a Board card and the status bar so you see exactly what you're choosing
+- **Personal-taste toggles** — The launch greeting, background worktree size scanning (the SIZE column), the Board/Explorer layout, and the whole GitHub integration each have a switch in Settings → Preferences, so LTS stays out of your way where you want it to
+- **Hibernate repos** — Free disk space by deleting a GitHub-synced repo locally, gated behind a safety audit (every branch pushed or merged, no stashes, everything clean); untracked `.env` files are backed up first and offered back on re-clone
+- **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches, plus tmux-session and busy indicators
+- **Rebase, rename, delete, clean modules, kill sessions** — Manage worktrees from context menus (Board) or the action strip (Explorer) without leaving the TUI
+- **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with full status text, age, and tmux columns); switch with `shift+tab`
+- **Per-repo concurrency** — Operations lock only the repos they touch; rebase one repo while another creates, with live logs for everything
+- **Auto-maintenance** — Optionally clean `node_modules` and kill idle tmux sessions by age, on startup and hourly
+- **Storage awareness** — A disk gauge in the header (green/yellow/red by fullness) and an Explorer SIZE column showing each worktree as `code+node_modules` (e.g. `300M+1.1G`), scanned in the background
+- **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings (Preferences / Workspace / Worktrees / Diagnostics)
 
 ## Platform Support
 
@@ -66,8 +76,7 @@ The installer downloads a pre-built binary for your platform. If no pre-built bi
 ```bash
 git clone https://github.com/led-slzr/lts.git
 cd lts
-go build -o lts .
-mv lts ~/.local/bin/
+go build -o ~/.local/bin/lts .
 ```
 
 </details>
@@ -95,14 +104,18 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
-| `n` | Create new worktree |
+| `Tab` | Cycle click usage: IDE → AI CLI → Terminal (remembered across launches, like the layout) |
+| `Shift+Tab` | Switch layout: Board ↔ Explorer |
+| `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet; Board: scroll) |
+| `Enter`, `b`, `g`, `m`, `p`, `d`, `x` | Explorer selected row: open, rebase, create PR, rename, purge modules, delete, kill tmux session |
+| `n` | Create new worktree (Explorer: pre-seeded with the selected repo) |
+| `c` | Clone a repo from GitHub (requires `gh`) |
 | `r` | Refresh all repos |
-| `c` | Cleanup merged worktrees |
+| `Shift+C` | Cleanup merged worktrees |
 | `l` | Clear log panel |
 | `s` | Open settings |
 | `q` / `Ctrl+C` | Quit |
-| `Esc` | Close modal / clear selection |
+| `Esc` | Close modal / clear selection / focus Explorer sidebar |
 
 ## Mouse
 
@@ -113,6 +126,8 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 | Click `[▸]` | Context menu (Rebase / Rename / Delete) |
 | Click worktree | Opens in active click usage mode |
 | Click footer buttons | Refresh All, Cleanup Merged, Settings, Exit |
+| Click "+ Clone a Repo" | Opens the GitHub clone browser (Board tile / Explorer sidebar entry) |
+| Explorer: hover row | Selects it and reveals the action strip |
 | Scroll wheel (main area) | Scroll through repo grid |
 | Scroll wheel (log area) | Scroll through log history |
 | Scroll wheel (settings) | Scroll through settings list |
@@ -127,8 +142,20 @@ AI_CLI_COMMAND="claude"
 PACKAGE_MANAGER="pnpm"
 AUTO_REFRESH="24H"
 TERMINAL="terminal"
+TERMINAL_MULTIPLEXER="none"
+TMUX_AI_PANE_WIDTH="50"
+TMUX_RIGHT_PANES="1"
+LAYOUT="board"
+SORT_ORDER="activity"
+DONE_SOUND="off"
+AUTO_CLEAN_MODULES="OFF"
+AUTO_KILL_TMUX="OFF"
 DAILY_CHECK_FOR_UPDATES="true"
 AUTO_UPDATE_NEW_RELEASE="true"
+OPEN_ENV_IDE="true"
+NEW_WT_PACKAGE_INSTALL="true"
+COPY_ENV_FILES="true"
+COPY_MCP_JSON="false"
 ```
 
 Supported values:
@@ -137,6 +164,14 @@ Supported values:
 - **Package Manager**: `pnpm`, `npm`, `yarn`, `bun`
 - **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
+- **Layout** (`LAYOUT`): `board` (default) or `explorer` — also toggled in-app with `shift+tab` or by clicking the Layout switcher in the header
+- **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.
+- **Tmux AI Pane Width** (`TMUX_AI_PANE_WIDTH`): AI pane width as a percent of the window, `20`–`90` (default `50`).
+- **Tmux Right Panes** (`TMUX_RIGHT_PANES`): `1`, `2`, or `3` evenly stacked shell panes in the right column (default `1`). Tmux layout changes apply the next time a worktree is opened — existing sessions are resized (and missing right panes added) without touching running processes; panes are never removed automatically.
+- **Sort Repos & Worktrees** (`SORT_ORDER`): `activity` (default — most recently touched first), `created` (newest first), `name` (alphabetical); applies to Board cards, the Explorer sidebar, and worktree lists
+- **Completion Sound** (`DONE_SOUND`): `off` (default), `glass`, `submarine`, `ping`, `pop`, `hero` (macOS system sounds; Linux plays the freedesktop completion sound), or `bell` (terminal bell, works everywhere) — plays when a worktree finishes creating; changing the setting previews it
+- **Auto Clean Modules By Age** (`AUTO_CLEAN_MODULES`): `OFF` (default), `1D`, `3D`, `7D`, `14D`, `30D` — on startup, remove `node_modules` from worktrees idle longer than the threshold (by last git activity; worktrees with an attached tmux session are skipped)
+- **Auto Kill Tmux By Age** (`AUTO_KILL_TMUX`): `OFF` (default), `8H`, `1D`, `3D`, `7D` — on startup, kill unattached LTS tmux sessions idle longer than the threshold (by tmux's own activity clock; attached sessions are never killed)
 - **Check for Updates**: `true` / `false` — daily check for new releases on startup
 - **Auto Update**: `true` / `false` — silently download and install new releases in the background
 
@@ -150,6 +185,12 @@ ERP_LAST_REFRESH="1711612800"
 ```
 
 Both configs are editable from the Settings UI inside LTS. Changes save immediately and reflect in the running app.
+
+## GitHub Integration (optional)
+
+LTS integrates with GitHub through the [GitHub CLI](https://cli.github.com) — install `gh` and run `gh auth login`, and the "+ Clone a Repo" tile (Board) / sidebar entry (Explorer) and the `c` key open a browser of every repo you can access, sorted by recent activity and filterable as you type. Without `gh`, the tile shows what's missing and everything else works normally; the Diagnostics tab reports install/auth state. The whole integration can also be switched off in Settings → Preferences (GitHub Integration) — every GitHub surface disappears and LTS makes no gh calls at all. Auth lives entirely in `gh` — LTS never stores credentials.
+
+**Hibernate** (repo header context menu; enable it first in Settings → Preferences — it ships disabled) is the release valve for disk space: it deletes a repo's local copy and all its worktrees, betting on GitHub having everything — and proves that bet first. The audit fetches origin and checks that every local branch is pushed or merged, there are no stashes, the main checkout and every worktree are clean, and the repo isn't part of a live monorepo group (delete those monorepo worktrees first). Any failed check names the offender and disables confirmation — there is no force path; fix it and press `r` to re-audit. The one thing git can't vouch for — untracked `.env*` files — is backed up to `~/.config/lts/env-backup/<repo>/<timestamp>/` with directory structure preserved (nested monorepo envs like `apps/web/.env` included, worktree envs under `worktrees/<dir>/`), before anything is deleted. When you later re-clone the repo through LTS, it offers to restore those files right back to where they lived. Confirmation requires typing `DELETE`.
 
 ## License
 

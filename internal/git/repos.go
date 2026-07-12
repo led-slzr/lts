@@ -31,15 +31,18 @@ type Worktree struct {
 	Status     WTStatus
 	StatusText string
 	LTSDir     string // which LTS dir this came from
+
+	LastActivity int64 // unix: newest of tip commit time and index mtime ("last touched")
+	CreatedAt    int64 // unix: recorded by LTS at creation (0 = unknown/pre-metadata)
 }
 
 type Repo struct {
 	Name       string
 	Path       string // empty for monorepo cards
 	MainBranch string
-	LTSDir     string // e.g. "repo-lts" or "core-erp-ui-lts"
-	LTSType    string // "single", "erp", "monorepo"
-	IsMonorepo bool   // true for multi-repo LTS cards
+	LTSDir     string   // e.g. "repo-lts" or "core-erp-ui-lts"
+	LTSType    string   // "single", "erp", "monorepo"
+	IsMonorepo bool     // true for multi-repo LTS cards
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
 
@@ -208,13 +211,26 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 
 			status, statusText := GetWorktreeStatus(wtPath, basisBranch)
 
+			// Last activity: newest across the branch's per-repo worktrees
+			var activity int64
+			for _, se2 := range subEntries {
+				p := filepath.Join(branchSubdir, se2.Name())
+				if se2.IsDir() && isWorktreeDir(p) {
+					if a := worktreeLastActivity(p); a > activity {
+						activity = a
+					}
+				}
+			}
+
 			wts = append(wts, Worktree{
-				Name:       branch,
-				Branch:     branch,
-				Path:       branchSubdir, // point to the branch subdir (contains all repo worktrees)
-				Status:     status,
-				StatusText: statusText,
-				LTSDir:     ltsDir,
+				Name:         branch,
+				Branch:       branch,
+				Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
+				Status:       status,
+				StatusText:   statusText,
+				LTSDir:       ltsDir,
+				LastActivity: activity,
+				CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
 			})
 		}
 	}
@@ -247,6 +263,14 @@ func checkMigrationNeeded(repoPath, mainBranch string) (needsMigration bool, bra
 
 	// If on the main branch, no migration needed
 	if currentBranch == mainBranch {
+		return false, "", ""
+	}
+
+	// Never offer to migrate a protected branch (main, master, develop, ...) —
+	// even when the configured basis branch differs, e.g. basis "dev" with the
+	// repo sitting on main. Migrating it creates a worktree that pins the
+	// protected branch outside the repo dir.
+	if IsProtectedBranch(currentBranch) {
 		return false, "", ""
 	}
 
@@ -464,11 +488,51 @@ func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string) Worktree
 	status, statusText := GetWorktreeStatus(path, basisBranch)
 
 	return Worktree{
-		Name:       displayName,
-		Branch:     branch,
-		Path:       path,
-		Status:     status,
-		StatusText: statusText,
-		LTSDir:     ltsDir,
+		Name:         displayName,
+		Branch:       branch,
+		Path:         path,
+		Status:       status,
+		StatusText:   statusText,
+		LTSDir:       ltsDir,
+		LastActivity: worktreeLastActivity(path),
+		CreatedAt:    lookupCreatedAt(path),
 	}
+}
+
+// worktreeLastActivity approximates when a worktree was last touched: the
+// newer of the branch tip's commit time and the worktree's git index mtime
+// (the index changes on add/checkout/etc, so uncommitted activity counts).
+func worktreeLastActivity(wtPath string) int64 {
+	var ts int64
+	if out, err := RunGit(wtPath, "log", "-1", "--format=%ct"); err == nil {
+		var n int64
+		if _, perr := fmt.Sscanf(strings.TrimSpace(out), "%d", &n); perr == nil {
+			ts = n
+		}
+	}
+	// A worktree's .git is a file pointing at the real git dir
+	if data, err := os.ReadFile(filepath.Join(wtPath, ".git")); err == nil {
+		content := strings.TrimSpace(string(data))
+		if strings.HasPrefix(content, "gitdir: ") {
+			gitDir := strings.TrimPrefix(content, "gitdir: ")
+			if info, err := os.Stat(filepath.Join(gitDir, "index")); err == nil {
+				if mt := info.ModTime().Unix(); mt > ts {
+					ts = mt
+				}
+			}
+		}
+	}
+	return ts
+}
+
+// lookupCreatedAt finds the recorded creation time for a worktree path,
+// checking the containing LTS dir and (for nested monorepo layouts) the
+// branch subdir entry one level up.
+func lookupCreatedAt(wtPath string) int64 {
+	dir := filepath.Dir(wtPath)
+	if ts := worktreeCreatedAt(dir, filepath.Base(wtPath)); ts != 0 {
+		return ts
+	}
+	parent := filepath.Dir(dir)
+	return worktreeCreatedAt(parent, filepath.Base(dir))
 }

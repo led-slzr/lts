@@ -52,6 +52,25 @@ func (l *CreateLog) AddError(msg string) {
 	}
 }
 
+// WorkspaceOptions carries create-time options shared across repos: which
+// commands the generated workspace embeds, which support files get copied
+// into new worktrees, and how each repo's package manager is resolved.
+type WorkspaceOptions struct {
+	PkgManager   func(repoName string) string
+	AICliCommand string
+	IDECommand   string
+	OpenEnvInIDE bool
+	CopyEnv      bool // copy .env* files
+	CopyMCP      bool // copy .mcp.json files
+}
+
+func (o WorkspaceOptions) pkgFor(repoName string) string {
+	if o.PkgManager == nil {
+		return ""
+	}
+	return o.PkgManager(repoName)
+}
+
 // ValidateBranchName checks if a branch name is valid.
 func ValidateBranchName(branch string) error {
 	branch = strings.TrimSpace(branch)
@@ -117,7 +136,7 @@ func generateUniqueName(baseName, parentDir string) string {
 // BranchInfo holds a branch name with its source and last commit date.
 type BranchInfo struct {
 	Name     string
-	IsLocal  bool // true = local, false = remote-only
+	IsLocal  bool   // true = local, false = remote-only
 	Date     string // formatted date string (e.g. "2025-03-28")
 	UnixTime int64  // for sorting by recency
 }
@@ -299,9 +318,9 @@ func CheckOngoingOperations(repoPath string) error {
 	}
 
 	checks := map[string]string{
-		"rebase-merge":  "rebase",
-		"rebase-apply":  "rebase",
-		"MERGE_HEAD":    "merge",
+		"rebase-merge":     "rebase",
+		"rebase-apply":     "rebase",
+		"MERGE_HEAD":       "merge",
 		"CHERRY_PICK_HEAD": "cherry-pick",
 	}
 	for file, op := range checks {
@@ -314,8 +333,9 @@ func CheckOngoingOperations(repoPath string) error {
 
 // CreateSingleRepoWorktree creates a worktree for a single repository.
 // This matches mode_create_worktrees from lts.sh (for 1 worktree).
-func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) (*CreateResult, error) {
+func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, opts WorkspaceOptions, installDeps bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
+	pkgManager := opts.pkgFor(repoName)
 	ltsDir := repoName + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 
@@ -361,17 +381,24 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 	if err != nil {
 		return nil, err
 	}
+	recordWorktreeCreated(ltsPath, wtName, time.Now().Unix())
 
-	// Copy .env files
-	log.Add("Copying .env files")
-	copyEnvFilesRecursive(repoPath, wtPath)
+	// Copy support files (.env*, .mcp.json)
+	if opts.CopyEnv || opts.CopyMCP {
+		log.Add("Copying support files")
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
+	}
 
 	// Install dependencies
-	runPackageInstall(wtPath, pkgManager, log)
+	if installDeps {
+		runPackageInstall(wtPath, pkgManager, log)
+	} else {
+		log.Add("Skipping dependency install")
+	}
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 	result.WorkspaceFile = wsFile
 
 	return result, nil
@@ -379,15 +406,23 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManag
 
 // CreateMonorepoWorktrees creates worktrees across multiple repos with the same branch.
 // This matches mode_create_monorepo_worktrees from lts.sh.
-func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, log *CreateLog) ([]*CreateResult, error) {
+// Each repo uses its own configured basis branch via getBasis. installDeps
+// controls package install per repo name; nil means install for all.
+func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBasis BasisBranchResolver, installDeps map[string]bool, opts WorkspaceOptions, log *CreateLog) ([]*CreateResult, error) {
 	if len(repoNames) == 0 {
 		return nil, fmt.Errorf("no repositories selected")
+	}
+	installFor := func(repoName string) bool {
+		if installDeps == nil {
+			return true
+		}
+		return installDeps[repoName]
 	}
 
 	// Single repo shortcut — use standard naming
 	if len(repoNames) == 1 {
 		repoPath := filepath.Join(scriptDir, repoNames[0])
-		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch, pkgManager, aiCliCommand, ideCommand, openEnvInIDE, log)
+		result, err := CreateSingleRepoWorktree(repoPath, scriptDir, branch, getBasis(repoNames[0]), opts, installFor(repoNames[0]), log)
 		if err != nil {
 			return nil, err
 		}
@@ -421,6 +456,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 	for _, repoName := range sorted {
 		repoPath := filepath.Join(scriptDir, repoName)
+		basisBranch := getBasis(repoName)
 
 		log.Context = repoName
 		log.Add("Processing")
@@ -469,11 +505,15 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 			continue
 		}
 
-		// Copy .env files
-		copyEnvFilesRecursive(repoPath, wtPath)
+		// Copy support files (.env*, .mcp.json)
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
 
 		// Install dependencies
-		runPackageInstall(wtPath, pkgManager, log)
+		if installFor(repoName) {
+			runPackageInstall(wtPath, opts.pkgFor(repoName), log)
+		} else {
+			log.Add("Skipping dependency install")
+		}
 
 		results = append(results, &CreateResult{
 			WorktreePath: wtPath,
@@ -496,9 +536,10 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch, basisBranch,
 
 	// Write/merge .lts-repos metadata
 	writeReposMetadata(ltsPath, sorted)
+	recordWorktreeCreated(ltsPath, branchSubdir, time.Now().Unix())
 
 	// Generate monorepo workspace (only workspace file for monorepo setups)
-	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateMonorepoWorkspace(branchSubdirPath, branchDirName, repoWTPairs, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 	for _, r := range results {
 		r.WorkspaceFile = wsFile
 	}
@@ -578,8 +619,12 @@ func shellQuotePaths(paths []string) string {
 	return strings.Join(quoted, " ")
 }
 
-// copyEnvFilesRecursive copies .env* files preserving directory structure.
-func copyEnvFilesRecursive(srcRoot, dstRoot string) {
+// copySupportFiles copies untracked support files (.env*, .mcp.json) into a
+// new worktree, preserving directory structure.
+func copySupportFiles(srcRoot, dstRoot string, copyEnv, copyMCP bool) {
+	if !copyEnv && !copyMCP {
+		return
+	}
 	filepath.Walk(srcRoot, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -592,8 +637,9 @@ func copyEnvFilesRecursive(srcRoot, dstRoot string) {
 			}
 			return nil
 		}
-		// Match .env* files
-		if strings.HasPrefix(info.Name(), ".env") {
+		match := (copyEnv && strings.HasPrefix(info.Name(), ".env")) ||
+			(copyMCP && info.Name() == ".mcp.json")
+		if match {
 			relPath, _ := filepath.Rel(srcRoot, path)
 			dstPath := filepath.Join(dstRoot, relPath)
 			os.MkdirAll(filepath.Dir(dstPath), 0755)
@@ -1061,6 +1107,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 	// Clean up empty LTS parent
 	log(ctx, "Cleaning up empty directories", false)
+	removeWorktreeMeta(filepath.Dir(branchSubdir), filepath.Base(branchSubdir))
 	cleanEmptyLTSDirs(filepath.Dir(branchSubdir))
 
 	return nil
@@ -1127,9 +1174,15 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 
 	// Clean up empty parent directories inside -lts structure
 	log(ctx, "Cleaning up empty directories", false)
+	removeWorktreeMeta(filepath.Dir(wtPath), filepath.Base(wtPath))
 	cleanEmptyLTSDirs(filepath.Dir(wtPath))
 
 	return nil
+}
+
+// isJunkFile reports OS-generated files that shouldn't block directory cleanup.
+func isJunkFile(name string) bool {
+	return name == ".DS_Store"
 }
 
 // cleanEmptyLTSDirs removes empty directories up to and including the -lts root.
@@ -1148,7 +1201,7 @@ func cleanEmptyLTSDirs(dir string) {
 			hasContent := false
 			for _, e := range entries {
 				name := e.Name()
-				if name == ".lts-type" || name == ".lts-repos" {
+				if name == ".lts-type" || name == ".lts-repos" || name == ltsMetaFile || isJunkFile(name) {
 					continue
 				}
 				if strings.HasSuffix(name, ".code-workspace") {
@@ -1162,12 +1215,17 @@ func cleanEmptyLTSDirs(dir string) {
 			}
 			return
 		}
-		// Not the -lts root — remove if empty
+		// Not the -lts root — remove if empty (ignoring junk files)
 		entries, err := os.ReadDir(dir)
-		if err != nil || len(entries) > 0 {
+		if err != nil {
 			return
 		}
-		os.Remove(dir)
+		for _, e := range entries {
+			if !isJunkFile(e.Name()) {
+				return
+			}
+		}
+		os.RemoveAll(dir)
 		dir = filepath.Dir(dir)
 	}
 }
@@ -1294,6 +1352,10 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 			}
 			RunGit(repoPath, "worktree", "repair")
 		}
+	}
+
+	if newWtName != oldWtName {
+		renameWorktreeMeta(ltsDir, oldWtName, newWtName)
 	}
 
 	// 3. Rename the workspace file and regenerate its contents
@@ -1450,6 +1512,8 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 			log(ctx, "Branch subdir rename failed: "+err.Error(), true)
 			// Non-fatal — worktrees still work at old subdir path
 			newBranchSubdirPath = branchSubdirPath
+		} else {
+			renameWorktreeMeta(ltsPath, filepath.Base(branchSubdirPath), newBranchDirName)
 		}
 		// Repair all worktrees after moving the parent directory
 		for _, wt := range worktrees {
@@ -1484,8 +1548,10 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 }
 
 // CleanupMergedCleanables finds and deletes all merged/cleanable worktrees.
-// Also cleans up workspace files and empty directories.
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, error) {
+// Also cleans up workspace files and empty directories. Returns the count and
+// the paths of the deleted worktrees (so callers can release attached
+// resources like tmux sessions).
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
@@ -1494,6 +1560,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	log("cleanup", "Discovering repos and scanning worktree statuses...", false)
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
 	cleaned := 0
+	var deletedPaths []string
 
 	// Count candidates first
 	candidates := 0
@@ -1506,7 +1573,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 	}
 	if candidates == 0 {
 		log("cleanup", "No merged cleanable worktrees found", false)
-		return 0, nil
+		return 0, nil, nil
 	}
 	log("cleanup", fmt.Sprintf("Found %d merged cleanable worktrees", candidates), false)
 
@@ -1518,6 +1585,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 					err := DeleteMonorepoWorktree(scriptDir, wt.Path, wt.Branch, repo.RepoNames, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
+						deletedPaths = append(deletedPaths, wt.Path)
 					} else {
 						log(wt.Branch, "Failed: "+err.Error(), true)
 					}
@@ -1529,6 +1597,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 					err := DeleteWorktree(repo.Path, wt.Path, wt.Branch, true, deleteRemote, log)
 					if err == nil {
 						cleaned++
+						deletedPaths = append(deletedPaths, wt.Path)
 					} else {
 						log(wt.Branch, "Failed: "+err.Error(), true)
 					}
@@ -1537,7 +1606,105 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 		}
 	}
 
-	return cleaned, nil
+	return cleaned, deletedPaths, nil
+}
+
+// CleanModules removes every node_modules directory inside a worktree
+// (nested ones included, npkill-style) and reports how many were removed
+// and how many bytes were freed. Safe to re-run; skips .git.
+func CleanModules(wtPath string, logFn ...LogFunc) (int, int64, error) {
+	log := noopLog
+	if len(logFn) > 0 && logFn[0] != nil {
+		log = logFn[0]
+	}
+	ctx := filepath.Base(wtPath)
+
+	if _, err := os.Stat(wtPath); err != nil {
+		return 0, 0, fmt.Errorf("worktree not found: %s", wtPath)
+	}
+
+	removed := 0
+	var freed int64
+	filepath.Walk(wtPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() {
+			return nil
+		}
+		switch filepath.Base(path) {
+		case ".git":
+			return filepath.SkipDir
+		case "node_modules":
+			size := dirSize(path)
+			log(ctx, fmt.Sprintf("Removing %s (%s)", relOrSelf(wtPath, path), HumanBytes(size)), false)
+			if rmErr := os.RemoveAll(path); rmErr != nil {
+				log(ctx, "Failed: "+rmErr.Error(), true)
+			} else {
+				removed++
+				freed += size
+			}
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if removed == 0 {
+		log(ctx, "No node_modules found", false)
+	} else {
+		log(ctx, fmt.Sprintf("Freed %s across %d node_modules", HumanBytes(freed), removed), false)
+	}
+	return removed, freed, nil
+}
+
+// WorktreeSize walks a worktree once, returning its total size and the
+// share held by node_modules directories (identified by path prefix — Walk
+// has no directory exit hook). Expensive I/O — call from a background
+// goroutine and cache.
+func WorktreeSize(path string) (total, modules int64) {
+	marker := string(filepath.Separator) + "node_modules" + string(filepath.Separator)
+	filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		size := info.Size()
+		total += size
+		if strings.Contains(p, marker) {
+			modules += size
+		}
+		return nil
+	})
+	return total, modules
+}
+
+// dirSize sums the file sizes under a directory.
+func dirSize(root string) int64 {
+	var total int64
+	filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// relOrSelf returns path relative to root for display, or the base name.
+func relOrSelf(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return rel
+	}
+	return filepath.Base(path)
+}
+
+// HumanBytes formats a byte count compactly (B, KB, MB, GB).
+func HumanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMG"[exp])
 }
 
 // MigrateToWorktree migrates existing work from the main repo directory into
@@ -1554,7 +1721,7 @@ func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolve
 //
 // Every failure path restores the original state or tells the user exactly
 // where their data is (commits on the branch, uncommitted work in git stash list).
-func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliCommand, ideCommand string, openEnvInIDE bool, logFn LogFunc) (*CreateResult, error) {
+func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOptions, logFn LogFunc) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	ctx := repoName
 
@@ -1571,6 +1738,9 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 	mainBranch := detectMainBranch(repoPath, basisBranch)
 	if currentBranch == mainBranch {
 		return nil, fmt.Errorf("%s is already on %s — nothing to migrate", repoName, mainBranch)
+	}
+	if IsProtectedBranch(currentBranch) {
+		return nil, fmt.Errorf("%s is on protected branch %s — nothing to migrate", repoName, currentBranch)
 	}
 
 	// Check for ongoing operations
@@ -1703,16 +1873,20 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch, pkgManager, aiCliComman
 		}
 	}
 
-	// Copy .env files
-	logFn(ctx, "Copying .env files", false)
-	copyEnvFilesRecursive(repoPath, wtPath)
+	// Copy support files (.env*, .mcp.json)
+	if opts.CopyEnv || opts.CopyMCP {
+		logFn(ctx, "Copying support files", false)
+		copySupportFiles(repoPath, wtPath, opts.CopyEnv, opts.CopyMCP)
+	}
 
 	// Install dependencies
+	pkgManager := opts.pkgFor(repoName)
 	runPackageInstall(wtPath, pkgManager, &CreateLog{Stream: logFn, Context: ctx})
 
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)
-	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, aiCliCommand, ideCommand, openEnvInIDE)
+	wsFile := generateIndividualWorkspace(ltsPath, wtName, pkgManager, opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
+	recordWorktreeCreated(ltsPath, wtName, time.Now().Unix())
 
 	logFn(ctx, "Migration complete — "+currentBranch+" is now an LTS worktree", false)
 

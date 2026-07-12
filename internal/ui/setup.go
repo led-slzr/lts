@@ -11,14 +11,14 @@ import (
 )
 
 type setupOption struct {
-	Label   string
-	Value   string
+	Label    string
+	Value    string
 	IsCustom bool // true = "Type here" option
 }
 
 type setupStep struct {
-	Question string
-	Options  []setupOption
+	Question  string
+	Options   []setupOption
 	ConfigKey string
 }
 
@@ -259,11 +259,11 @@ func (s SetupModel) View() string {
 		for _, line := range ltsBanner {
 			lines = append(lines, bannerStyle.Render(line))
 		}
-		lines = append(lines, dimStyle.Render("v"+version.Version))
+		lines = append(lines, dimStyle.Render("v"+version.Display()))
 		lines = append(lines, "")
 		lines = append(lines, titleStyle.Render("Welcome! Let's configure LTS."))
 	} else {
-		lines = append(lines, titleStyle.Render("LTS")+" "+dimStyle.Render("v"+version.Version)+" "+titleStyle.Render("— Setup"))
+		lines = append(lines, titleStyle.Render("LTS")+" "+dimStyle.Render("v"+version.Display())+" "+titleStyle.Render("— Setup"))
 	}
 	lines = append(lines, "")
 
