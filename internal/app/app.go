@@ -2756,9 +2756,11 @@ func (m Model) getCardScreenX(repoIdx int) int {
 // 3. Padding each line to full terminal width
 // 4. Filling remaining vertical space with black lines
 func paintBlack(content string, width, height int) string {
-	blackBg := ui.ThemeBgSeq()
+	blackBg := ui.ThemeBgSeq() + ui.ThemeFgSeq()
 
-	// After every ANSI reset, re-apply the theme canvas background
+	// After every ANSI reset, re-apply the theme canvas background and its
+	// default text color — unstyled runes must never inherit the terminal
+	// profile's foreground (invisible on light themes in dark terminals)
 	content = strings.ReplaceAll(content, "\033[0m", "\033[0m"+blackBg)
 
 	lines := strings.Split(content, "\n")

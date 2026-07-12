@@ -189,6 +189,15 @@ func ThemeBgSeq() string {
 	return fmt.Sprintf("\033[48;2;%d;%d;%dm", r, g, b)
 }
 
+// ThemeFgSeq is the matching default-foreground sequence: the painter
+// re-asserts it after resets so raw, unstyled runes (and any future ones)
+// fall back to the theme's Text color instead of the terminal default —
+// which may be light-on-light once the canvas is paper.
+func ThemeFgSeq() string {
+	r, g, b := hexRGB(CurrentTheme.Text)
+	return fmt.Sprintf("\033[38;2;%d;%d;%dm", r, g, b)
+}
+
 func hexRGB(hex string) (int, int, int) {
 	if len(hex) == 7 && hex[0] == '#' {
 		r, err1 := strconv.ParseUint(hex[1:3], 16, 8)
