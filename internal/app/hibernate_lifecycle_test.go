@@ -339,3 +339,35 @@ func TestClickUsagePersistsAcrossLaunches(t *testing.T) {
 		t.Fatalf("fresh launch should restore AI CLI, got %v", fresh.clickUsage)
 	}
 }
+
+// The open-workspace prompt is raised by a background completion
+// (CreateDoneMsg), so it can fire while settings is open — it must wait
+// its turn instead of rendering over settings while settings keeps the keys.
+func TestOpenPromptDefersToSettings(t *testing.T) {
+	m := hibernateTestModel()
+	m.settings = ui.NewSettings(&m.config, []string{"core"})
+	m.settings.ViewHeight = m.height
+	m.settings.ViewWidth = m.width
+
+	updated, _ := m.Update(CreateDoneMsg{
+		Results: []*git.CreateResult{{RepoName: "core", Branch: "feat/x", WorktreePath: "/x/core-lts/core-feat-x"}},
+		Branch:  "feat/x", Locked: []string{"core"},
+	})
+	m2 := updated.(Model)
+	if !m2.openPromptActive {
+		t.Fatal("prompt state should be set even while settings is open")
+	}
+	m2.recomputeLayout()
+	if strings.Contains(stripStudioANSI(m2.View()), "Worktree Created") {
+		t.Fatal("open prompt must not render over settings")
+	}
+
+	updated, _ = m2.Update(key("esc")) // close settings
+	m3 := updated.(Model)
+	if m3.settings.Active || !m3.openPromptActive {
+		t.Fatal("settings should close with the prompt still pending")
+	}
+	if !strings.Contains(stripStudioANSI(m3.View()), "Worktree Created") {
+		t.Fatal("prompt should render once settings closes")
+	}
+}

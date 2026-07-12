@@ -1529,6 +1529,30 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Open prompt: hover/click the IDE │ AI CLI │ Terminal options
+	// (after settings/studio, matching key and render priority)
+	if m.openPromptActive {
+		modal := m.renderOpenPromptDialog()
+		_, modalTop, modalH := modalMetrics(modal, m.height)
+		modalLeft := (m.width - lipgloss.Width(modal)) / 2
+		optionsY := modalTop + modalH - 5 // options line: above blank + hint line
+		m.openPromptHovered = -1
+		if msg.Y == optionsY {
+			relX := msg.X - modalLeft
+			for _, opt := range m.openPromptOptions() {
+				if relX >= opt.x && relX < opt.x+opt.w {
+					m.openPromptHovered = opt.usage
+					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+						m.openPromptSelection = opt.usage
+						return openCreatedWorkspaces(m, opt.usage)
+					}
+					break
+				}
+			}
+		}
+		return m, nil
+	}
+
 	// Post-clone env restore prompt: Y/N click (matches key priority —
 	// after settings, before every other surface)
 	if m.envRestoreActive {
@@ -1599,29 +1623,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				return executeContextAction(m, item.Action)
 			}
 			m.contextMenu.Active = false
-		}
-		return m, nil
-	}
-
-	// Open prompt: hover/click the IDE │ AI CLI │ Terminal options
-	if m.openPromptActive {
-		modal := m.renderOpenPromptDialog()
-		_, modalTop, modalH := modalMetrics(modal, m.height)
-		modalLeft := (m.width - lipgloss.Width(modal)) / 2
-		optionsY := modalTop + modalH - 5 // options line: above blank + hint line
-		m.openPromptHovered = -1
-		if msg.Y == optionsY {
-			relX := msg.X - modalLeft
-			for _, opt := range m.openPromptOptions() {
-				if relX >= opt.x && relX < opt.x+opt.w {
-					m.openPromptHovered = opt.usage
-					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-						m.openPromptSelection = opt.usage
-						return openCreatedWorkspaces(m, opt.usage)
-					}
-					break
-				}
-			}
 		}
 		return m, nil
 	}
@@ -2450,11 +2451,6 @@ func (m Model) View() string {
 		return paintBlack(placeDialog(m.renderRenameDialog()), m.width, m.height)
 	}
 
-	// Open workspace prompt
-	if m.openPromptActive {
-		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
-	}
-
 	// Cleanup confirmation
 	if m.cleanupConfirmActive {
 		return paintBlack(placeDialog(m.renderCleanupConfirmDialog()), m.width, m.height)
@@ -2480,6 +2476,13 @@ func (m Model) View() string {
 	if m.settings.Active {
 		dialog := m.settings.View(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Open-workspace prompt. Below settings/studio for the same reason as
+	// the env restore prompt: a create finishing in the background can
+	// raise it while they're open — it waits its turn.
+	if m.openPromptActive {
+		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
 	}
 
 	// Post-clone env restore prompt. Deliberately below settings: a clone
