@@ -180,6 +180,7 @@ func NewModel(cfg config.Config) Model {
 
 	return Model{
 		config:            cfg,
+		clickUsage:        clickUsageFromString(cfg.Global.ClickUsage),
 		focusedCard:       -1,
 		focusedWT:         -1,
 		hoveredBtn:        ui.BtnNone,
@@ -765,6 +766,35 @@ func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.modal, cmd = m.modal.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	return m, cmd
+}
+
+// clickUsageFromString restores the persisted click mode ("ide" default).
+func clickUsageFromString(s string) opener.ClickUsage {
+	switch s {
+	case "ai":
+		return opener.ClickAICli
+	case "terminal":
+		return opener.ClickTerminal
+	}
+	return opener.ClickIDE
+}
+
+func clickUsageString(u opener.ClickUsage) string {
+	switch u {
+	case opener.ClickAICli:
+		return "ai"
+	case opener.ClickTerminal:
+		return "terminal"
+	}
+	return "ide"
+}
+
+// setClickUsage switches the click mode and persists it — like Layout,
+// it's "where I left off" state restored on the next launch.
+func (m *Model) setClickUsage(u opener.ClickUsage) {
+	m.clickUsage = u
+	m.config.Global.ClickUsage = clickUsageString(u)
+	m.config.SaveGlobal()
 }
 
 // toggleLayout switches Board ↔ Explorer and persists the choice.
@@ -2102,7 +2132,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if y == usageY {
 			for _, z := range usageZones {
 				if x >= z.X && x < z.X+z.W && z.Usage != m.clickUsage {
-					m.clickUsage = z.Usage
+					m.setClickUsage(z.Usage)
 					m.statusMsg = fmt.Sprintf("Click usage: %s", m.clickUsage)
 					m.recomputeLayout()
 					return m, clearStatusCmd()

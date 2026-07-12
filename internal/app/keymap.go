@@ -74,7 +74,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "tab":
-		m.clickUsage = m.clickUsage.Next()
+		m.setClickUsage(m.clickUsage.Next())
 		return m, nil
 
 	case "shift+tab":

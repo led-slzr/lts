@@ -103,7 +103,7 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
+| `Tab` | Cycle click usage: IDE → AI CLI → Terminal (remembered across launches, like the layout) |
 | `Shift+Tab` | Switch layout: Board ↔ Explorer |
 | `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet; Board: scroll) |
 | `Enter`, `b`, `g`, `m`, `p`, `d`, `x` | Explorer selected row: open, rebase, create PR, rename, purge modules, delete, kill tmux session |

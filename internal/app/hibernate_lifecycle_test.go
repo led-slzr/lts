@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"lts-revamp/internal/config"
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -316,5 +318,24 @@ func TestCloneOfNeverHibernatedRepoSkipsPrompt(t *testing.T) {
 	m2 := updated.(Model)
 	if m2.envRestoreActive {
 		t.Fatal("no backup → no prompt")
+	}
+}
+
+// Click usage is "where I left off" state: cycling it persists, and a new
+// model restores it (same contract as the Layout toggle).
+func TestClickUsagePersistsAcrossLaunches(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	m := testModel()
+
+	m2, _ := handleKeyPress(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m2.clickUsage != opener.ClickAICli || m2.config.Global.ClickUsage != "ai" {
+		t.Fatalf("tab should advance to AI CLI and persist, got %v / %q", m2.clickUsage, m2.config.Global.ClickUsage)
+	}
+
+	// "Relaunch": a fresh load must land on the saved mode.
+	reloaded := config.Load(m2.config.WorkDir)
+	fresh := NewModel(reloaded)
+	if fresh.clickUsage != opener.ClickAICli {
+		t.Fatalf("fresh launch should restore AI CLI, got %v", fresh.clickUsage)
 	}
 }

@@ -22,6 +22,7 @@ type GlobalConfig struct {
 	TmuxAIPaneWidth   int    // AI pane width as % of the window (tmux sessions)
 	TmuxRightPanes    int    // stacked panes in the right column (tmux sessions)
 	Layout            string // main view layout: board, explorer
+	ClickUsage        string // header click mode: ide, ai, terminal — restored on launch
 	SortOrder         string // repo/worktree ordering: activity, created, name
 	DoneSound         string // completion sound: off, glass, submarine, ping, pop, hero, bell
 	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
@@ -64,6 +65,7 @@ func DefaultGlobal() GlobalConfig {
 		TmuxAIPaneWidth:   50,
 		TmuxRightPanes:    1,
 		Layout:            "board",
+		ClickUsage:        "ide",
 		SortOrder:         "activity",
 		DoneSound:         "off",
 		AutoCleanModules:  "OFF",
@@ -280,6 +282,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("TMUX_AI_PANE_WIDTH=\"%d\"", c.Global.TmuxAIPaneWidth),
 		fmt.Sprintf("TMUX_RIGHT_PANES=\"%d\"", c.Global.TmuxRightPanes),
 		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
+		fmt.Sprintf("CLICK_USAGE=\"%s\"", c.Global.ClickUsage),
 		fmt.Sprintf("SORT_ORDER=\"%s\"", c.Global.SortOrder),
 		fmt.Sprintf("DONE_SOUND=\"%s\"", c.Global.DoneSound),
 		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
@@ -365,6 +368,9 @@ func loadGlobal(g *GlobalConfig) {
 		if n, err := strconv.Atoi(v); err == nil {
 			g.TmuxRightPanes = n
 		}
+	}
+	if v, ok := kv["CLICK_USAGE"]; ok {
+		g.ClickUsage = v
 	}
 	if v, ok := kv["LAYOUT"]; ok {
 		g.Layout = v
