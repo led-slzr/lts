@@ -127,6 +127,9 @@ type Model struct {
 	ghUser      string        // authenticated GitHub login (fetched once)
 	ghUserHover bool
 
+	// Repo name → origin is a GitHub remote (drives PR surfaces)
+	githubRemotes map[string]bool
+
 	// Disk gauge + background worktree size scanning
 	diskUsed, diskTotal uint64
 	sizeCache           map[string]sizeEntry
@@ -574,6 +577,25 @@ func scanSizesCmd(paths []string) tea.Cmd {
 	}
 }
 
+// prAble reports whether a worktree is ready for a PR: single GitHub repo,
+// remote branch exists, not already merged.
+func (m *Model) prAble(repo git.Repo, wt git.Worktree) bool {
+	return m.ghState == ui.CloneReady &&
+		!repo.IsMonorepo &&
+		m.githubRemotes[repo.Name] &&
+		deleteHasRemote(wt.Status) &&
+		wt.Status != git.StatusMergedCleanable &&
+		wt.Status != git.StatusMergedDirty
+}
+
+// prCreateCmd opens the browser's PR page (create, or the existing PR).
+func prCreateCmd(wtPath, base, branch string) tea.Cmd {
+	return func() tea.Msg {
+		err := gh.PRCreateWeb(wtPath, base)
+		return PRDoneMsg{Branch: branch, Err: err}
+	}
+}
+
 // ghUserCmd fetches the authenticated GitHub login (network — async).
 func ghUserCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -767,7 +789,14 @@ func (m *Model) recomputeLayout() {
 		}
 		exH := m.height - m.headerH - 2 - logReserve
 		m.clampExplorer()
-		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive, m.ghState, m.wtSizes())
+		canPR := false
+		if m.explorer.SelectedRepo < len(m.repos) {
+			r := m.repos[m.explorer.SelectedRepo]
+			if m.explorer.SelectedWT >= 0 && m.explorer.SelectedWT < len(r.Worktrees) {
+				canPR = m.prAble(r, r.Worktrees[m.explorer.SelectedWT])
+			}
+		}
+		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive, m.ghState, m.wtSizes(), canPR)
 		m.createBtnY = 0
 		m.contentHeight = lipgloss.Height(m.gridResult.View)
 		m.footerY = m.headerH + m.contentHeight
@@ -952,6 +981,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
 		m.diskUsed, m.diskTotal = msg.DiskUsed, msg.DiskTotal
+		m.githubRemotes = msg.GithubRemotes
 		wasGhReady := m.ghState == ui.CloneReady
 		m.ghState = msg.GhState
 		m.initialLoad = false
@@ -1260,6 +1290,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ghUser = msg.Login
 		m.recomputeLayout()
 		return m, nil
+
+	case PRDoneMsg:
+		if msg.Err != nil {
+			m.statusMsg = "PR error: " + msg.Err.Error()
+		} else {
+			m.statusMsg = "Opened PR page for " + msg.Branch
+		}
+		m.recomputeLayout()
+		return m, clearStatusCmd()
 
 	case GhRepoListMsg:
 		if msg.Err == nil {
@@ -2102,7 +2141,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				wt := repo.Worktrees[m.focusedWT]
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)]),
+					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)], m.prAble(repo, wt)),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo
@@ -2622,7 +2661,17 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
 		repos := git.DiscoverRepos(workDir, resolve)
 		used, total := diskUsage(workDir)
-		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: ghAvailability(), DiskUsed: used, DiskTotal: total}
+		state := ghAvailability()
+		var remotes map[string]bool
+		if state == ui.CloneReady {
+			remotes = make(map[string]bool)
+			for _, r := range repos {
+				if !r.IsMonorepo && r.Path != "" {
+					remotes[r.Name] = gh.RemoteIsGitHub(r.Path)
+				}
+			}
+		}
+		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: state, DiskUsed: used, DiskTotal: total, GithubRemotes: remotes}
 	}
 }
 

@@ -9,12 +9,13 @@ import (
 
 // ReposLoadedMsg is sent when repo discovery completes.
 type ReposLoadedMsg struct {
-	Repos     []git.Repo
-	TmuxLive  map[string]bool // live LTS tmux sessions (piggybacked on discovery)
-	GhState   ui.CloneAvail   // gh install/auth state (piggybacked on discovery)
-	DiskUsed  uint64          // workdir volume usage (piggybacked on discovery)
-	DiskTotal uint64
-	Err       error
+	Repos         []git.Repo
+	TmuxLive      map[string]bool // live LTS tmux sessions (piggybacked on discovery)
+	GhState       ui.CloneAvail   // gh install/auth state (piggybacked on discovery)
+	DiskUsed      uint64          // workdir volume usage (piggybacked on discovery)
+	DiskTotal     uint64
+	GithubRemotes map[string]bool // repo name → origin points at github.com
+	Err           error
 }
 
 // SizesScannedMsg carries freshly scanned worktree sizes (background walker).
@@ -82,6 +83,12 @@ type CleanModulesDoneMsg struct {
 // GhUserMsg carries the authenticated GitHub login (fetched once at startup).
 type GhUserMsg struct {
 	Login string
+}
+
+// PRDoneMsg is sent after attempting to open a PR page.
+type PRDoneMsg struct {
+	Branch string
+	Err    error
 }
 
 // GhRepoListMsg carries the cloneable-repo list fetched from GitHub.

@@ -221,6 +221,13 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			return m, clearStatusCmd()
 		}
 
+	case ui.BtnCreatePR:
+		if hasWT {
+			base := m.config.GetRepoBasisBranch(repo.Name)
+			m.statusMsg = "Opening PR page for " + wt.Branch + "..."
+			return m, tea.Batch(clearStatusCmd(), prCreateCmd(wt.Path, base, wt.Branch))
+		}
+
 	case ui.BtnCleanModules:
 		if hasWT {
 			lock := lockSet(repo)
@@ -593,6 +600,11 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 			m2, cmd := explorerAction(m, ui.BtnCleanModules)
 			return true, m2, cmd
 		}
+	case "g":
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnCreatePR)
+			return true, m2, cmd
+		}
 	}
 	return false, m, nil
 }
@@ -608,6 +620,16 @@ func explorerAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 		return m, nil
 	}
 	wt := repo.Worktrees[m.explorer.SelectedWT]
+
+	if action == ui.BtnCreatePR {
+		if !m.prAble(repo, wt) {
+			m.statusMsg = "No PR to create for " + wt.Branch + " (needs a pushed, unmerged branch on a GitHub repo)"
+			return m, clearStatusCmd()
+		}
+		base := m.config.GetRepoBasisBranch(repo.Name)
+		m.statusMsg = "Opening PR page for " + wt.Branch + "..."
+		return m, tea.Batch(clearStatusCmd(), prCreateCmd(wt.Path, base, wt.Branch))
+	}
 
 	if action == ui.BtnKillSession {
 		opener.KillSession(wt.Path)

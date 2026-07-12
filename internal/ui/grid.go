@@ -41,10 +41,10 @@ const (
 // HitZone represents a clickable/hoverable region on screen.
 type HitZone struct {
 	X, Y, W, H int
-	Type        HitZoneType
-	RepoIdx     int
-	WTIdx       int // -1 for card-level, -2 for header
-	Button      HoverButton
+	Type       HitZoneType
+	RepoIdx    int
+	WTIdx      int // -1 for card-level, -2 for header
+	Button     HoverButton
 }
 
 // GridResult contains the rendered grid and its hit zones.
@@ -421,7 +421,6 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn Hov
 
 	return GridResult{View: view, HitZones: hitZones}
 }
-
 
 // CloneAvail describes whether the GitHub clone integration is usable.
 type CloneAvail int

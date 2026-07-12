@@ -144,9 +144,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				SettingsItem{Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxRightPanes), Kind: SettingEnum,
 					Options: []string{"1", "2", "3"}},
-			SettingsItem{Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
-				Value: s.Config.Global.AutoKillTmux, Kind: SettingEnum,
-				Options: []string{"OFF", "8H", "1D", "3D", "7D"}},
+				SettingsItem{Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
+					Value: s.Config.Global.AutoKillTmux, Kind: SettingEnum,
+					Options: []string{"OFF", "8H", "1D", "3D", "7D"}},
 			)
 		}
 		s.Items = append(s.Items,

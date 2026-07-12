@@ -11,14 +11,14 @@ import (
 )
 
 type setupOption struct {
-	Label   string
-	Value   string
+	Label    string
+	Value    string
 	IsCustom bool // true = "Type here" option
 }
 
 type setupStep struct {
-	Question string
-	Options  []setupOption
+	Question  string
+	Options   []setupOption
 	ConfigKey string
 }
 

@@ -39,10 +39,13 @@ func RepoContextItems(isMonorepo bool) []ContextMenuItem {
 // worktrees, not git worktrees themselves), so Rebase can't run there —
 // per-repo monorepo rebase is a future feature. hasSession adds the tmux
 // session kill entry.
-func WorktreeContextItems(isMonorepo, hasSession bool) []ContextMenuItem {
+func WorktreeContextItems(isMonorepo, hasSession, canPR bool) []ContextMenuItem {
 	items := []ContextMenuItem{}
 	if !isMonorepo {
 		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
+	}
+	if canPR {
+		items = append(items, ContextMenuItem{Label: "Create PR", Action: BtnCreatePR})
 	}
 	items = append(items,
 		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},

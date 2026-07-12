@@ -34,7 +34,8 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 - **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows, each repo using its own basis branch and package manager
 - **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
 - **Tmux sessions per worktree** — With the tmux multiplexer enabled, AI CLI and Terminal opens share one persistent session per worktree (AI pane + shells, configurable layout); reopening reattaches, so AI conversations survive closing the terminal
-- **Clone from GitHub** — With the [GitHub CLI](https://cli.github.com) installed and authenticated, press `c` (or click the "+ Clone a Repo" tile) to browse and clone any repo you can access, sorted by recency
+- **Clone from GitHub** — With the [GitHub CLI](https://cli.github.com) installed and authenticated, press `c` (or click the "(c) Clone a Repo" tile) to browse and clone any repo you can access, sorted by recency
+- **Create PRs** — Pushed, unmerged worktrees on GitHub repos gain a "Create PR" action (context menu / Explorer `g`) that opens the prefilled compare page in your browser, based against the repo's basis branch; if a PR already exists it opens that instead
 - **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches, plus tmux-session and busy indicators
 - **Rebase, rename, delete, clean modules, kill sessions** — Manage worktrees from context menus (Board) or the action strip (Explorer) without leaving the TUI
 - **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with full status text, age, and tmux columns); switch with `shift+tab`
@@ -103,7 +104,7 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 | `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
 | `Shift+Tab` | Switch layout: Board ↔ Explorer |
 | `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet; Board: scroll) |
-| `Enter`, `b`, `m`, `p`, `d`, `x` | Explorer selected row: open, rebase, rename, purge modules, delete, kill tmux session |
+| `Enter`, `b`, `g`, `m`, `p`, `d`, `x` | Explorer selected row: open, rebase, create PR, rename, purge modules, delete, kill tmux session |
 | `n` | Create new worktree (Explorer: pre-seeded with the selected repo) |
 | `c` | Clone a repo from GitHub (requires `gh`) |
 | `r` | Refresh all repos |

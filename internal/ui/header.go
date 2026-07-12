@@ -87,9 +87,9 @@ type ClickUsageZone struct {
 
 // headerLayout holds the computed positions shared between rendering and hit testing.
 type headerLayout struct {
-	BannerWidth  int
-	RightBlockX  int // screen X where the right block starts
-	Gap          int
+	BannerWidth int
+	RightBlockX int // screen X where the right block starts
+	Gap         int
 }
 
 // UsageLabels holds the display names of the three click-usage targets,
@@ -433,7 +433,6 @@ func ViewToggleHitZones(termWidth int, labels UsageLabels, updateAvailable ...st
 	return y, zones
 }
 
-
 // ghUserLabel prefixes the GitHub line; shared with the hit zone below.
 const ghUserLabel = "Github: "
 
@@ -461,7 +460,6 @@ func GhUserHitZone(termWidth int, labels UsageLabels, login string, updateAvaila
 	w = lipgloss.Width(truncatePlain(login, 24))
 	return x, y, w
 }
-
 
 // renderDiskGauge draws the volume capacity bar: green under 70%, yellow
 // under 90%, red beyond — worktrees eat disks, this keeps it visible.

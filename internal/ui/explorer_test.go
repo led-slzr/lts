@@ -27,7 +27,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 0, SelectedWT: 1, FocusSheet: true}
 	yOffset := 8
-	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil, CloneReady, nil)
+	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil, CloneReady, nil, true)
 
 	lines := strings.Split(res.View, "\n")
 	rowText := func(y int) string {
@@ -81,10 +81,19 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 	if seenRows != 2 {
 		t.Errorf("expected 2 row zones, got %d", seenRows)
 	}
-	// selected row's strip: rebase, rename, modules, delete
+	// selected row's strip: rebase, pr, rename, modules, delete
 	// (open isn't listed — clicking the row is the primary action)
-	if seenActions != 4 {
-		t.Errorf("expected 4 action zones, got %d", seenActions)
+	if seenActions != 5 {
+		t.Errorf("expected 5 action zones, got %d", seenActions)
+	}
+	hasPR := false
+	for _, z := range res.HitZones {
+		if z.Type == ZoneExplorerAction && z.Button == BtnCreatePR {
+			hasPR = true
+		}
+	}
+	if !hasPR {
+		t.Error("expected a PR action when canPR is set")
 	}
 	if seenNew != 1 {
 		t.Errorf("expected 1 [+ new] zone, got %d", seenNew)
@@ -105,7 +114,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 func TestExplorerMonorepoActions(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 2, SelectedWT: 0, FocusSheet: true}
-	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil, CloneReady, nil)
+	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil, CloneReady, nil, false)
 	actions := 0
 	for _, z := range res.HitZones {
 		if z.Type == ZoneExplorerAction {

@@ -49,9 +49,9 @@ var (
 				Padding(0, 1)
 
 	MigrateBtnStyle = lipgloss.NewStyle().
-				Foreground(ColorYellow).
-				Background(ColorBlack).
-				Bold(true)
+			Foreground(ColorYellow).
+			Background(ColorBlack).
+			Bold(true)
 
 	MigrateBtnHoverStyle = lipgloss.NewStyle().
 				Foreground(ColorBlack).

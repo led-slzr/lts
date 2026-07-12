@@ -49,6 +49,8 @@ const (
 	BtnCleanModules
 	// Clone-a-repo tile / sidebar entry
 	BtnClone
+	// Create a GitHub PR for a worktree's branch
+	BtnCreatePR
 )
 
 // innerWidth returns the usable content width inside a card.
@@ -118,7 +120,7 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("(") + monoLabel + BranchDimStyle.Render(")")
 	} else if isHeaderHovered && repo.Path != "" {
 		// Highlighted header (hovered, clickable repo)
-		header = WTHighlightStyle.Underline(true).Render(repo.Name+" ("+repo.MainBranch+")")
+		header = WTHighlightStyle.Underline(true).Render(repo.Name + " (" + repo.MainBranch + ")")
 	} else {
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("("+repo.MainBranch+")")
 	}
@@ -307,7 +309,7 @@ func RenderStatusLegend(width int, showTmux bool) string {
 
 	legend := strings.Join(parts, "  ")
 	return lipgloss.NewStyle().
-		Width(width - (MarginH * 2)).
+		Width(width-(MarginH*2)).
 		Align(lipgloss.Center).
 		Margin(0, MarginH).
 		Render(legend)

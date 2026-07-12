@@ -124,6 +124,29 @@ func Clone(nameWithOwner, destDir string) (string, error) {
 	return parts[len(parts)-1], nil
 }
 
+// PRCreateWeb opens the browser's PR-creation page for the worktree's
+// current branch against base (prefilled compare view). When a PR already
+// exists for the branch, gh errors — fall through to opening that PR.
+func PRCreateWeb(wtPath, base string) error {
+	create := exec.Command("gh", "pr", "create", "--web", "--base", base)
+	create.Dir = wtPath
+	if out, err := create.CombinedOutput(); err != nil {
+		if strings.Contains(string(out), "already exists") {
+			view := exec.Command("gh", "pr", "view", "--web")
+			view.Dir = wtPath
+			if view.Run() == nil {
+				return nil
+			}
+		}
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 160 {
+			msg = msg[:160]
+		}
+		return fmt.Errorf("gh pr create failed: %s", msg)
+	}
+	return nil
+}
+
 // RemoteIsGitHub reports whether a repo's origin points at github.com —
 // GitHub surfaces are per-repo, not global (a GitLab repo next door
 // shouldn't grow PR buttons).

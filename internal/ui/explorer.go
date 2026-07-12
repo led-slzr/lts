@@ -102,10 +102,13 @@ type stripAction struct {
 
 // explorerActions returns the action-strip entries for a worktree of repo.
 // Open isn't listed — clicking the row (or enter) is the primary action.
-func explorerActions(repo git.Repo, hasSession bool) []stripAction {
+func explorerActions(repo git.Repo, hasSession, canPR bool) []stripAction {
 	var actions []stripAction
 	if !repo.IsMonorepo {
 		actions = append(actions, stripAction{"b rebase", BtnRebase})
+	}
+	if canPR {
+		actions = append(actions, stripAction{"g pr", BtnCreatePR})
 	}
 	actions = append(actions,
 		stripAction{"m rename", BtnRename},
@@ -122,7 +125,7 @@ func explorerActions(repo git.Repo, hasSession bool) []stripAction {
 // a worktree sheet (right) with status, age, and tmux columns. The block is
 // exactly `height` lines tall; panes scroll internally. Hit zones are in
 // absolute screen coordinates (yOffset = first content line).
-func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail, sizes map[string]WTSize) GridResult {
+func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail, sizes map[string]WTSize, canPR bool) GridResult {
 	if height < 6 {
 		height = 6
 	}
@@ -346,7 +349,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 		// Action strip under the selected row
 		if isSel {
 			hasSession := tmuxLive[opener.SessionName(wt.Path)]
-			actions := explorerActions(repo, hasSession)
+			actions := explorerActions(repo, hasSession, canPR)
 			strip := "    "
 			x := sheetX + 2 + lipgloss.Width(strip)
 			for ai, a := range actions {

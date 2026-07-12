@@ -21,14 +21,14 @@ const (
 )
 
 type ModalModel struct {
-	Active      bool
-	Step        ModalStep
-	Repos       []git.Repo
-	Selected    map[int]bool // multi-select: repo indices
-	CursorIdx   int
-	Input       textinput.Model
-	Error       string
-	Branch      string
+	Active    bool
+	Step      ModalStep
+	Repos     []git.Repo
+	Selected  map[int]bool // multi-select: repo indices
+	CursorIdx int
+	Input     textinput.Model
+	Error     string
+	Branch    string
 
 	// Pre-computed plan info for confirmation
 	PlanSingle  bool     // true if single-repo mode
