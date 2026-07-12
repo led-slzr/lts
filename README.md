@@ -36,6 +36,7 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 - **Tmux sessions per worktree** — With the tmux multiplexer enabled, AI CLI and Terminal opens share one persistent session per worktree (AI pane + shells, configurable layout); reopening reattaches, so AI conversations survive closing the terminal
 - **Clone from GitHub** — With the [GitHub CLI](https://cli.github.com) installed and authenticated, press `c` (or click the "(c) Clone a Repo" tile) to browse and clone any repo you can access, sorted by recency
 - **Create PRs** — Pushed, unmerged worktrees on GitHub repos gain a "Create PR" action (context menu / Explorer `g`) that opens the prefilled compare page in your browser, based against the repo's basis branch; if a PR already exists it opens that instead
+- **Hibernate repos** — Free disk space by deleting a GitHub-synced repo locally, gated behind a safety audit (every branch pushed or merged, no stashes, everything clean); untracked `.env` files are backed up first and offered back on re-clone
 - **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches, plus tmux-session and busy indicators
 - **Rebase, rename, delete, clean modules, kill sessions** — Manage worktrees from context menus (Board) or the action strip (Explorer) without leaving the TUI
 - **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with full status text, age, and tmux columns); switch with `shift+tab`
@@ -186,6 +187,8 @@ Both configs are editable from the Settings UI inside LTS. Changes save immediat
 ## GitHub Integration (optional)
 
 LTS integrates with GitHub through the [GitHub CLI](https://cli.github.com) — install `gh` and run `gh auth login`, and the "+ Clone a Repo" tile (Board) / sidebar entry (Explorer) and the `c` key open a browser of every repo you can access, sorted by recent activity and filterable as you type. Without `gh`, the tile shows what's missing and everything else works normally; the Diagnostics tab reports install/auth state. Auth lives entirely in `gh` — LTS never stores credentials.
+
+**Hibernate** (repo header context menu) is the release valve for disk space: it deletes a repo's local copy and all its worktrees, betting on GitHub having everything — and proves that bet first. The audit fetches origin and checks that every local branch is pushed or merged, there are no stashes, the main checkout and every worktree are clean, and the repo isn't part of a live monorepo group (delete those monorepo worktrees first). Any failed check names the offender and disables confirmation — there is no force path; fix it and press `r` to re-audit. The one thing git can't vouch for — untracked `.env*` files — is backed up to `~/.config/lts/env-backup/<repo>/<timestamp>/` with directory structure preserved (nested monorepo envs like `apps/web/.env` included, worktree envs under `worktrees/<dir>/`), before anything is deleted. When you later re-clone the repo through LTS, it offers to restore those files right back to where they lived. Confirmation requires typing `DELETE`.
 
 ## License
 

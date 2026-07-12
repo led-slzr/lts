@@ -51,6 +51,8 @@ const (
 	BtnClone
 	// Create a GitHub PR for a worktree's branch
 	BtnCreatePR
+
+	BtnHibernate
 )
 
 // innerWidth returns the usable content width inside a card.

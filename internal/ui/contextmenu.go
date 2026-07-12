@@ -22,16 +22,22 @@ type ContextMenuModel struct {
 }
 
 // RepoContextItems returns context menu items for a repo header.
-func RepoContextItems(isMonorepo bool) []ContextMenuItem {
+// canHibernate adds the hibernate entry (GitHub-remote repo with gh ready —
+// the premise is that GitHub holds everything the local copy does).
+func RepoContextItems(isMonorepo, canHibernate bool) []ContextMenuItem {
 	if isMonorepo {
 		return []ContextMenuItem{
 			{Label: "Refresh", Action: BtnRefresh},
 		}
 	}
-	return []ContextMenuItem{
+	items := []ContextMenuItem{
 		{Label: "Refresh", Action: BtnRefresh},
 		{Label: "Change Basis Branch", Action: BtnBasis},
 	}
+	if canHibernate {
+		items = append(items, ContextMenuItem{Label: "Hibernate Repo", Action: BtnHibernate})
+	}
+	return items
 }
 
 // WorktreeContextItems returns context menu items for a worktree.
@@ -96,7 +102,7 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 	for i, item := range menu.Items {
 		if i == menu.CursorIdx {
 			lines = append(lines, cursorStyle.Render("▸ "+item.Label))
-		} else if item.Action == BtnDelete {
+		} else if item.Action == BtnDelete || item.Action == BtnHibernate {
 			lines = append(lines, deleteStyle.Render("  "+item.Label))
 		} else {
 			lines = append(lines, itemStyle.Render("  "+item.Label))

@@ -104,6 +104,24 @@ type CloneDoneMsg struct {
 	Err      error
 }
 
+// HibernateAuditMsg carries the completed hibernate safety audit. Locked
+// travels with it: when the dialog was closed mid-audit, the handler
+// releases the locks the audit was still holding.
+type HibernateAuditMsg struct {
+	RepoName string
+	Audit    git.HibernateAudit
+	Locked   []string
+}
+
+// HibernateDoneMsg is sent when a hibernate (backup + delete) completes.
+type HibernateDoneMsg struct {
+	RepoName  string
+	Freed     int64
+	EnvBacked int
+	Locked    []string
+	Err       error
+}
+
 // MaintenanceTickMsg re-evaluates auto-maintenance hourly so long-running
 // instances sweep worktrees/sessions that cross their age threshold after
 // launch (the startup run only covers launch time).

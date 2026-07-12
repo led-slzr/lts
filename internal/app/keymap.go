@@ -17,6 +17,16 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleOpenPromptKey(m, msg)
 	}
 
+	// If the hibernate dialog is active
+	if m.hibernateActive {
+		return handleHibernateKey(m, msg)
+	}
+
+	// If the post-clone env restore prompt is active
+	if m.envRestoreActive {
+		return handleEnvRestoreKey(m, msg)
+	}
+
 	// If context menu is active
 	if m.contextMenu.Active {
 		return handleContextMenuKey(m, msg)
@@ -233,6 +243,11 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			lock := lockSet(repo)
 			logFn, startCmd := m.beginOp("Cleaning modules in "+wt.Branch+"...", lock...)
 			return m, tea.Batch(startCmd, cleanModulesCmd(logFn, wt.Path, wt.Branch, lock))
+		}
+
+	case ui.BtnHibernate:
+		if !hasWT && m.canHibernate(repo) && !m.repoBusy(repo) {
+			return startHibernate(m, repo)
 		}
 
 	case ui.BtnDelete:

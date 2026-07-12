@@ -130,6 +130,22 @@ type Model struct {
 	// Repo name → origin is a GitHub remote (drives PR surfaces)
 	githubRemotes map[string]bool
 
+	// Hibernate — repo snapshotted at open; the repo stays locked from
+	// audit start until the dialog closes so nothing mutates it while the
+	// user reads the checklist
+	hibernateActive       bool
+	hibernateRepo         git.Repo
+	hibernateAudit        *git.HibernateAudit // nil while the audit runs
+	hibernateAuditPending bool                // an audit goroutine is in flight
+	hibernateInput        textinput.Model
+
+	// Post-clone .env restore prompt (offered when a hibernate backup exists)
+	envRestoreActive bool
+	envRestoreRepo   string // repo dir name
+	envRestoreDir    string // backup dir holding the files
+	envRestoreMain   int    // restorable main-repo files
+	envRestoreWT     int    // worktree files (stay in the backup)
+
 	// Disk gauge + background worktree size scanning
 	diskUsed, diskTotal uint64
 	sizeCache           map[string]sizeEntry
@@ -155,6 +171,11 @@ func NewModel(cfg config.Config) Model {
 	di.CharLimit = 6
 	di.Width = 10
 
+	hi := textinput.New()
+	hi.Placeholder = "DELETE"
+	hi.CharLimit = 6
+	hi.Width = 10
+
 	ui.CurrentWorkDir = cfg.WorkDir
 
 	return Model{
@@ -169,6 +190,7 @@ func NewModel(cfg config.Config) Model {
 		openPromptHovered: -1,
 		renameInput:       ti,
 		deleteTypedInput:  di,
+		hibernateInput:    hi,
 		initialLoad:       true,
 		loaderTicking:     true, // Init issues the first tick
 		greeting:          pickGreeting(),
@@ -1338,6 +1360,49 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Clone error: " + msg.Err.Error()
 		} else {
 			m.statusMsg = "Cloned " + msg.RepoName
+			// A hibernate env backup for this repo? Offer it back.
+			if dir, mainN, wtN, ok := git.LatestEnvBackup(envBackupRoot(), msg.RepoName); ok {
+				if mainN > 0 {
+					m.envRestoreActive = true
+					m.envRestoreRepo = msg.RepoName
+					m.envRestoreDir = dir
+					m.envRestoreMain = mainN
+					m.envRestoreWT = wtN
+				} else if wtN > 0 {
+					m.statusMsg += " · worktree .env backup at " + dir
+				}
+			}
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+
+	case HibernateAuditMsg:
+		if !m.hibernateActive || m.hibernateRepo.Name != msg.RepoName {
+			// Dialog closed while the audit ran — release the locks it held
+			m.hibernateAuditPending = false
+			m.clearBusy(msg.Locked...)
+			return m, nil
+		}
+		m.hibernateAuditPending = false
+		audit := msg.Audit
+		m.hibernateAudit = &audit
+		if audit.Blockers() == 0 {
+			m.hibernateInput.SetValue("")
+			m.hibernateInput.Focus()
+			return m, textinput.Blink
+		}
+		return m, nil
+
+	case HibernateDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Hibernate failed: " + msg.Err.Error()
+		} else {
+			m.statusMsg = "Hibernated " + msg.RepoName + " — freed " + git.HumanBytes(msg.Freed)
+			if msg.EnvBacked > 0 {
+				m.statusMsg += fmt.Sprintf(" · %d .env backed up", msg.EnvBacked)
+			}
+			m.statusMsg += " · re-clone with (c)"
 		}
 		m.recomputeLayout()
 		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
@@ -1534,6 +1599,27 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 						return handleDeleteConfirmKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
 					}
 				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.hibernateActive {
+		return m, nil
+	}
+
+	if m.envRestoreActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderEnvRestoreDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				}
+				return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 			}
 		}
 		return m, nil
@@ -2130,7 +2216,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Repo header context menu
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.RepoContextItems(repo.IsMonorepo),
+					Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo)),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo
@@ -2306,6 +2392,16 @@ func (m Model) View() string {
 	// Delete confirmation
 	if m.deleteConfirmActive {
 		return paintBlack(placeDialog(m.renderDeleteConfirmDialog()), m.width, m.height)
+	}
+
+	// Hibernate audit/confirm
+	if m.hibernateActive {
+		return paintBlack(placeDialog(m.renderHibernateDialog()), m.width, m.height)
+	}
+
+	// Post-clone env restore prompt
+	if m.envRestoreActive {
+		return paintBlack(placeDialog(m.renderEnvRestoreDialog()), m.width, m.height)
 	}
 
 	// Settings
