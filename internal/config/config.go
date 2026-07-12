@@ -32,6 +32,7 @@ type GlobalConfig struct {
 	InstallOnCreate  bool   // default for the package-install toggle when creating worktrees
 	CopyEnvFiles     bool   // copy .env* files into new worktrees
 	CopyMCPJson      bool   // copy .mcp.json files into new worktrees
+	EnableHibernate  bool   // show the destructive Hibernate Repo action (opt-in)
 	LastUpdateCheck  int64  // unix timestamp of last update check
 }
 
@@ -70,6 +71,7 @@ func DefaultGlobal() GlobalConfig {
 		InstallOnCreate:  true,
 		CopyEnvFiles:     true,
 		CopyMCPJson:      false,
+		EnableHibernate:  false,
 		LastUpdateCheck:  0,
 	}
 }
@@ -282,6 +284,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("NEW_WT_PACKAGE_INSTALL=\"%t\"", c.Global.InstallOnCreate),
 		fmt.Sprintf("COPY_ENV_FILES=\"%t\"", c.Global.CopyEnvFiles),
 		fmt.Sprintf("COPY_MCP_JSON=\"%t\"", c.Global.CopyMCPJson),
+		fmt.Sprintf("ENABLE_HIBERNATE=\"%t\"", c.Global.EnableHibernate),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -386,6 +389,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["COPY_MCP_JSON"]; ok {
 		g.CopyMCPJson = v == "true"
+	}
+	if v, ok := kv["ENABLE_HIBERNATE"]; ok {
+		g.EnableHibernate = v == "true"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

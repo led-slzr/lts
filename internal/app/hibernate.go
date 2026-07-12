@@ -20,10 +20,12 @@ import (
 // offered back on re-clone. The repo stays locked from audit start until
 // the dialog closes so nothing mutates it under the checklist.
 
-// canHibernate gates the context-menu entry: single GitHub-remote repos
-// with gh authenticated (the whole premise is "GitHub has it").
+// canHibernate gates the context-menu entry: the feature must be enabled
+// in Settings (destructive — off by default), on a single GitHub-remote
+// repo with gh authenticated (the whole premise is "GitHub has it").
 func (m *Model) canHibernate(repo git.Repo) bool {
-	return m.ghState == ui.CloneReady && !repo.IsMonorepo && repo.Path != "" && m.githubRemotes[repo.Name]
+	return m.config.Global.EnableHibernate &&
+		m.ghState == ui.CloneReady && !repo.IsMonorepo && repo.Path != "" && m.githubRemotes[repo.Name]
 }
 
 // envBackupRoot is where hibernate parks untracked env files, one

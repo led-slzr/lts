@@ -14,6 +14,7 @@ import (
 
 func hibernateTestModel() Model {
 	m := testModel()
+	m.config.Global.EnableHibernate = true
 	m.ghState = ui.CloneReady
 	m.githubRemotes = map[string]bool{"core": true, "goforms": true}
 	return m
@@ -34,6 +35,11 @@ func TestCanHibernateGates(t *testing.T) {
 	if !m.canHibernate(m.repos[0]) {
 		t.Error("github-remote repo with gh ready must be hibernatable")
 	}
+	m.config.Global.EnableHibernate = false
+	if m.canHibernate(m.repos[0]) {
+		t.Error("hibernate is opt-in — the default-off setting must gate it")
+	}
+	m.config.Global.EnableHibernate = true
 	if m.canHibernate(m.repos[2]) {
 		t.Error("monorepo cards must never be hibernatable")
 	}

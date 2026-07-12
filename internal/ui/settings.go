@@ -169,6 +169,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
+				Value: boolToStr(s.Config.Global.EnableHibernate), Kind: SettingBool},
 		)
 	case TabWorkspace:
 		// What goes into generated worktrees and workspace files
@@ -575,6 +577,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.CopyEnvFiles = item.Value == "true"
 		case "COPY_MCP_JSON":
 			s.Config.Global.CopyMCPJson = item.Value == "true"
+		case "ENABLE_HIBERNATE":
+			s.Config.Global.EnableHibernate = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {
