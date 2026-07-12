@@ -1653,6 +1653,26 @@ func CleanModules(wtPath string, logFn ...LogFunc) (int, int64, error) {
 	return removed, freed, nil
 }
 
+// WorktreeSize walks a worktree once, returning its total size and the
+// share held by node_modules directories (identified by path prefix — Walk
+// has no directory exit hook). Expensive I/O — call from a background
+// goroutine and cache.
+func WorktreeSize(path string) (total, modules int64) {
+	marker := string(filepath.Separator) + "node_modules" + string(filepath.Separator)
+	filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		size := info.Size()
+		total += size
+		if strings.Contains(p, marker) {
+			modules += size
+		}
+		return nil
+	})
+	return total, modules
+}
+
 // dirSize sums the file sizes under a directory.
 func dirSize(root string) int64 {
 	var total int64

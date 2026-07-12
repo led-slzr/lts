@@ -27,7 +27,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 0, SelectedWT: 1, FocusSheet: true}
 	yOffset := 8
-	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil, CloneReady)
+	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil, CloneReady, nil)
 
 	lines := strings.Split(res.View, "\n")
 	rowText := func(y int) string {
@@ -105,7 +105,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 func TestExplorerMonorepoActions(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 2, SelectedWT: 0, FocusSheet: true}
-	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil, CloneReady)
+	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil, CloneReady, nil)
 	actions := 0
 	for _, z := range res.HitZones {
 		if z.Type == ZoneExplorerAction {
@@ -174,6 +174,24 @@ func TestFormatAge(t *testing.T) {
 	for ts, want := range cases {
 		if got := formatAge(ts); got != want {
 			t.Errorf("formatAge(%d) = %q, want %q", ts, got, want)
+		}
+	}
+}
+
+func TestFormatWTSize(t *testing.T) {
+	cases := []struct {
+		sz   WTSize
+		want string
+	}{
+		{WTSize{}, "…"}, // unscanned
+		{WTSize{Total: 500, Known: true}, "500B"},
+		{WTSize{Total: 300 << 20, Known: true}, "300M"},
+		{WTSize{Total: 1400 << 20, Modules: 1100 << 20, Known: true}, "300M+1.1G"},
+		{WTSize{Total: 5 << 30, Modules: 4 << 30, Known: true}, "1.0G+4.0G"},
+	}
+	for _, tc := range cases {
+		if got := formatWTSize(tc.sz); got != tc.want {
+			t.Errorf("formatWTSize(%+v) = %q, want %q", tc.sz, got, tc.want)
 		}
 	}
 }

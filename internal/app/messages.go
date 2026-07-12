@@ -9,10 +9,17 @@ import (
 
 // ReposLoadedMsg is sent when repo discovery completes.
 type ReposLoadedMsg struct {
-	Repos    []git.Repo
-	TmuxLive map[string]bool // live LTS tmux sessions (piggybacked on discovery)
-	GhState  ui.CloneAvail   // gh install/auth state (piggybacked on discovery)
-	Err      error
+	Repos     []git.Repo
+	TmuxLive  map[string]bool // live LTS tmux sessions (piggybacked on discovery)
+	GhState   ui.CloneAvail   // gh install/auth state (piggybacked on discovery)
+	DiskUsed  uint64          // workdir volume usage (piggybacked on discovery)
+	DiskTotal uint64
+	Err       error
+}
+
+// SizesScannedMsg carries freshly scanned worktree sizes (background walker).
+type SizesScannedMsg struct {
+	Sizes map[string]ui.WTSize
 }
 
 // RefreshDoneMsg is sent when refresh completes.
@@ -65,6 +72,7 @@ type CleanupMergedDoneMsg struct {
 // CleanModulesDoneMsg is sent when a node_modules cleanup completes.
 type CleanModulesDoneMsg struct {
 	Branch  string
+	WtPath  string // for size-cache invalidation
 	Removed int
 	Freed   int64
 	Locked  []string // repo locks to release

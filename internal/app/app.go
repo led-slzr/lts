@@ -16,6 +16,7 @@ import (
 	"lts-revamp/internal/version"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -126,6 +127,11 @@ type Model struct {
 	ghUser      string        // authenticated GitHub login (fetched once)
 	ghUserHover bool
 
+	// Disk gauge + background worktree size scanning
+	diskUsed, diskTotal uint64
+	sizeCache           map[string]sizeEntry
+	sizeScanning        bool
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -165,6 +171,7 @@ func NewModel(cfg config.Config) Model {
 		greeting:          pickGreeting(),
 		ghState:           ghAvailability(),
 		busy:              make(map[string]string),
+		sizeCache:         make(map[string]sizeEntry),
 		logPanel:          ui.NewLogPanel(),
 		logChan:           make(chan LogEntryMsg, 64),
 	}
@@ -508,6 +515,65 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 	return tea.Batch(startCmd, maintenanceCmd(logFn, paths, tmuxAge, locks))
 }
 
+// sizeEntry caches one worktree's scanned size, keyed to the activity that
+// was current when scanned (activity change → rescan) with a time cap.
+type sizeEntry struct {
+	size      ui.WTSize
+	activity  int64
+	scannedAt time.Time
+}
+
+// diskUsage returns used and total bytes of the volume containing path.
+func diskUsage(path string) (used, total uint64) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return 0, 0
+	}
+	bsize := uint64(st.Bsize)
+	total = st.Blocks * bsize
+	return total - st.Bavail*bsize, total
+}
+
+// wtSizes projects the cache into the Explorer's SIZE column input.
+func (m *Model) wtSizes() map[string]ui.WTSize {
+	if len(m.sizeCache) == 0 {
+		return nil
+	}
+	out := make(map[string]ui.WTSize, len(m.sizeCache))
+	for p, e := range m.sizeCache {
+		out[p] = e.size
+	}
+	return out
+}
+
+// staleSizePaths returns worktrees needing a (re)scan: unscanned, activity
+// changed since the last scan, or cache older than 10 minutes.
+func (m *Model) staleSizePaths() []string {
+	var paths []string
+	for _, r := range m.repos {
+		for _, wt := range r.Worktrees {
+			e, ok := m.sizeCache[wt.Path]
+			if !ok || e.activity != wt.LastActivity || time.Since(e.scannedAt) > 10*time.Minute {
+				paths = append(paths, wt.Path)
+			}
+		}
+	}
+	return paths
+}
+
+// scanSizesCmd walks the given worktrees sequentially in one goroutine —
+// size scanning is heavy I/O and must never block the UI.
+func scanSizesCmd(paths []string) tea.Cmd {
+	return func() tea.Msg {
+		sizes := make(map[string]ui.WTSize, len(paths))
+		for _, p := range paths {
+			total, modules := git.WorktreeSize(p)
+			sizes[p] = ui.WTSize{Total: total, Modules: modules, Known: true}
+		}
+		return SizesScannedMsg{Sizes: sizes}
+	}
+}
+
 // ghUserCmd fetches the authenticated GitHub login (network — async).
 func ghUserCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -687,6 +753,8 @@ func (m *Model) recomputeLayout() {
 		Greeting:           m.greeting,
 		GhUser:             m.ghUser,
 		GhUserHovered:      m.ghUserHover,
+		DiskUsed:           m.diskUsed,
+		DiskTotal:          m.diskTotal,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
@@ -699,7 +767,7 @@ func (m *Model) recomputeLayout() {
 		}
 		exH := m.height - m.headerH - 2 - logReserve
 		m.clampExplorer()
-		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive, m.ghState)
+		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive, m.ghState, m.wtSizes())
 		m.createBtnY = 0
 		m.contentHeight = lipgloss.Height(m.gridResult.View)
 		m.footerY = m.headerH + m.contentHeight
@@ -883,6 +951,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortRepos(msg.Repos, m.config.Global.SortOrder)
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
+		m.diskUsed, m.diskTotal = msg.DiskUsed, msg.DiskTotal
 		wasGhReady := m.ghState == ui.CloneReady
 		m.ghState = msg.GhState
 		m.initialLoad = false
@@ -902,18 +971,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.SaveHistory(m.config.WorkDir, len(m.repos))
 		}
 		m.recomputeLayout()
+		// Background worktree size scan for anything stale (one walker)
+		var followUps []tea.Cmd
+		if !m.sizeScanning {
+			if stale := m.staleSizePaths(); len(stale) > 0 {
+				m.sizeScanning = true
+				followUps = append(followUps, scanSizesCmd(stale))
+			}
+		}
 		// gh authenticated mid-session (or just now): fetch the login for
 		// the header line, which Init only fetches when gh existed then
 		if m.ghState == ui.CloneReady && !wasGhReady && m.ghUser == "" {
-			return m, ghUserCmd()
+			followUps = append(followUps, ghUserCmd())
+		}
+		if len(followUps) > 0 && !wasInitialLoad {
+			return m, tea.Batch(followUps...)
 		}
 		// Startup auto-maintenance runs after the first discovery; the
 		// hourly MaintenanceTickMsg covers long-running instances
 		if wasInitialLoad {
 			m.lastMaintenance = time.Now()
 			if cmd := m.startAutoMaintenance(); cmd != nil {
-				return m, cmd
+				followUps = append(followUps, cmd)
 			}
+		}
+		if len(followUps) > 0 {
+			return m, tea.Batch(followUps...)
 		}
 		return m, nil
 
@@ -1041,8 +1124,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		return m, clearStatusCmd()
 
+	case SizesScannedMsg:
+		m.sizeScanning = false
+		now := time.Now()
+		activityByPath := make(map[string]int64)
+		for _, r := range m.repos {
+			for _, wt := range r.Worktrees {
+				activityByPath[wt.Path] = wt.LastActivity
+			}
+		}
+		for p, sz := range msg.Sizes {
+			m.sizeCache[p] = sizeEntry{size: sz, activity: activityByPath[p], scannedAt: now}
+		}
+		m.recomputeLayout()
+		return m, nil
+
 	case CleanModulesDoneMsg:
 		m.clearBusy(msg.Locked...)
+		delete(m.sizeCache, msg.WtPath) // force a fresh size next scan
 		if msg.Err != nil {
 			m.statusMsg = "Clean modules error: " + msg.Err.Error()
 		} else if msg.Removed == 0 {
@@ -2522,7 +2621,8 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
 		repos := git.DiscoverRepos(workDir, resolve)
-		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: ghAvailability()}
+		used, total := diskUsage(workDir)
+		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: ghAvailability(), DiskUsed: used, DiskTotal: total}
 	}
 }
 
@@ -2735,7 +2835,7 @@ func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []s
 func cleanModulesCmd(logFn git.LogFunc, wtPath, branch string, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		removed, freed, err := git.CleanModules(wtPath, logFn)
-		return CleanModulesDoneMsg{Branch: branch, Removed: removed, Freed: freed, Locked: locked, Err: err}
+		return CleanModulesDoneMsg{Branch: branch, WtPath: wtPath, Removed: removed, Freed: freed, Locked: locked, Err: err}
 	}
 }
 

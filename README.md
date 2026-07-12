@@ -40,6 +40,7 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 - **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with full status text, age, and tmux columns); switch with `shift+tab`
 - **Per-repo concurrency** — Operations lock only the repos they touch; rebase one repo while another creates, with live logs for everything
 - **Auto-maintenance** — Optionally clean `node_modules` and kill idle tmux sessions by age, on startup and hourly
+- **Storage awareness** — A disk gauge in the header (green/yellow/red by fullness) and an Explorer SIZE column showing each worktree as `code+node_modules` (e.g. `300M+1.1G`), scanned in the background
 - **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings (Preferences / Workspace / Worktrees / Diagnostics)
 
 ## Platform Support

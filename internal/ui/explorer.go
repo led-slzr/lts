@@ -27,6 +27,43 @@ const (
 	explorerMaxSidebar = 30
 )
 
+// WTSize is a worktree's scanned disk footprint for the SIZE column.
+type WTSize struct {
+	Total   int64
+	Modules int64 // node_modules share of Total
+	Known   bool
+}
+
+// formatSize renders bytes compactly: "312M", "1.2G", "45K".
+func formatSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	v := float64(n) / float64(div)
+	if v >= 10 {
+		return fmt.Sprintf("%.0f%c", v, "KMGT"[exp])
+	}
+	return fmt.Sprintf("%.1f%c", v, "KMGT"[exp])
+}
+
+// formatWTSize renders the SIZE cell: "code+modules" when node_modules
+// exist (the without/with answer at a glance), the total otherwise.
+func formatWTSize(sz WTSize) string {
+	if !sz.Known {
+		return "…"
+	}
+	if sz.Modules > 0 {
+		return formatSize(sz.Total-sz.Modules) + "+" + formatSize(sz.Modules)
+	}
+	return formatSize(sz.Total)
+}
+
 // formatAge renders a compact relative age: "now", "31m", "4h", "2d", "—".
 func formatAge(ts int64) string {
 	if ts <= 0 {
@@ -85,7 +122,7 @@ func explorerActions(repo git.Repo, hasSession bool) []stripAction {
 // a worktree sheet (right) with status, age, and tmux columns. The block is
 // exactly `height` lines tall; panes scroll internally. Hit zones are in
 // absolute screen coordinates (yOffset = first content line).
-func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail) GridResult {
+func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail, sizes map[string]WTSize) GridResult {
 	if height < 6 {
 		height = 6
 	}
@@ -175,6 +212,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 
 	// ---- Sheet ----
 	shInner := sheetW - 4
+	showSize := shInner >= 66 // widest column drops first
 	showAge := shInner >= 52
 	showTmux := shInner >= 44
 
@@ -204,12 +242,15 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	}
 
 	// Column layout
-	ageW, tmuxW := 0, 0
+	ageW, tmuxW, sizeW := 0, 0, 0
 	if showAge {
 		ageW = 6
 	}
 	if showTmux {
 		tmuxW = 5
+	}
+	if showSize {
+		sizeW = 13
 	}
 	// Status texts run up to ~21 cols ("3 changed | 2 to push") — give the
 	// column full width when there's room, compact otherwise
@@ -217,12 +258,15 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	if shInner >= 60 {
 		statusW = 22
 	}
-	branchW := shInner - statusW - ageW - tmuxW - 2
+	branchW := shInner - statusW - sizeW - ageW - tmuxW - 2
 	if branchW < 12 {
 		branchW = 12
 	}
 
 	header := dimStyle.Render(fmt.Sprintf("  %-*s%-*s", branchW, "BRANCH", statusW, "STATUS"))
+	if showSize {
+		header += dimStyle.Render(fmt.Sprintf("%-*s", sizeW, "SIZE"))
+	}
 	if showAge {
 		header += dimStyle.Render(fmt.Sprintf("%-*s", ageW, "AGE"))
 	}
@@ -278,6 +322,9 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 			line = selStyle.Render("▸ "+branchCell) + statusStyle(wt.Status).Render(statusCell)
 		} else {
 			line = "  " + statusStyle(wt.Status).Render(branchCell) + statusStyle(wt.Status).Render(statusCell)
+		}
+		if showSize {
+			line += dimStyle.Render(padCell(formatWTSize(sizes[wt.Path]), sizeW))
 		}
 		if showAge {
 			line += dimStyle.Render(padCell(formatAge(wt.LastActivity), ageW))

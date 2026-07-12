@@ -208,6 +208,8 @@ type HeaderOpts struct {
 	Greeting           string // shown centered between the banner and the right block
 	GhUser             string // authenticated GitHub login ("" hides the line)
 	GhUserHovered      bool
+	DiskUsed           uint64 // bytes used on the workdir's volume (0 hides the gauge)
+	DiskTotal          uint64
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, opts ...HeaderOpts) string {
@@ -269,6 +271,9 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 	rightBlock := usageStr + "\n" + viewStr + "\n" + statusLine
 	if o.GhUser != "" {
 		rightBlock += "\n" + renderGhUserLine(o.GhUser, o.GhUserHovered)
+	}
+	if o.DiskTotal > 0 {
+		rightBlock += "\n" + renderDiskGauge(o.DiskUsed, o.DiskTotal)
 	}
 
 	// Position: banner center-left, usage+status top-right
@@ -455,4 +460,29 @@ func GhUserHitZone(termWidth int, labels UsageLabels, login string, updateAvaila
 	x = layout.RightBlockX + lipgloss.Width(ghUserLabel)
 	w = lipgloss.Width(truncatePlain(login, 24))
 	return x, y, w
+}
+
+
+// renderDiskGauge draws the volume capacity bar: green under 70%, yellow
+// under 90%, red beyond — worktrees eat disks, this keeps it visible.
+func renderDiskGauge(used, total uint64) string {
+	const width = 14
+	pct := float64(used) / float64(total)
+	filled := int(pct*float64(width) + 0.5)
+	if filled > width {
+		filled = width
+	}
+	color := ColorGreen
+	switch {
+	case pct >= 0.9:
+		color = ColorRed
+	case pct >= 0.7:
+		color = ColorYellow
+	}
+	label := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("Disk:   ")
+	bar := lipgloss.NewStyle().Foreground(color).Background(ColorBlack).Render(strings.Repeat("█", filled)) +
+		lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render(strings.Repeat("░", width-filled))
+	text := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render(
+		" " + formatSize(int64(used)) + "/" + formatSize(int64(total)))
+	return label + bar + text
 }

@@ -271,3 +271,27 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestWorktreeSize(t *testing.T) {
+	wt := t.TempDir()
+	write := func(rel string, n int) {
+		p := filepath.Join(wt, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, make([]byte, n), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("src/main.ts", 100)
+	write("node_modules/pkg/big.js", 1000)
+	write("apps/web/node_modules/dep/x.js", 500)
+
+	total, modules := WorktreeSize(wt)
+	if total != 1600 {
+		t.Errorf("total = %d, want 1600", total)
+	}
+	if modules != 1500 {
+		t.Errorf("modules = %d, want 1500", modules)
+	}
+}
