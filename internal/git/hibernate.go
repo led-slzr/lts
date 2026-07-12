@@ -120,9 +120,13 @@ func AuditHibernate(scriptDir string, repo Repo, basisBranch string, logFn ...Lo
 		add(HibernateCheck{Label: "main checkout clean", State: CheckOK})
 	}
 
-	// 6. Every worktree clean. Branch sync is already covered by the branch
-	// loop (refs/heads spans all checkouts) — this catches uncommitted work.
-	total, violations = auditWorktrees(repo.Worktrees)
+	// 6. Every worktree clean — enumerated from git itself, never the UI
+	// snapshot (a checkout created outside LTS, or one a reload raced past,
+	// still strands its work when the main .git is deleted). Branch sync is
+	// already covered by the branch loop; this catches uncommitted work,
+	// detached commits, and checkouts living outside the working dir.
+	wts := gitWorktrees(repo.Path)
+	total, violations = auditWorktrees(scriptDir, wts, remoteBase)
 	if len(violations) > 0 {
 		add(HibernateCheck{Label: fmt.Sprintf("%d/%d worktrees clean", total-len(violations), total),
 			State: CheckFail, Details: violations})
@@ -133,7 +137,7 @@ func AuditHibernate(scriptDir string, repo Repo, basisBranch string, logFn ...Lo
 	// 7. Untracked env files: not blockers (they get backed up), but the
 	// user must see them — they are the one thing GitHub doesn't have.
 	log(ctx, "Scanning for .env files...", false)
-	audit.EnvFiles = scanHibernateEnvs(repo)
+	audit.EnvFiles = scanHibernateEnvs(repo.Path, wts)
 
 	// Freed estimate: repo dir + the whole LTS dir (worktrees, modules, meta).
 	audit.FreedBytes = dirSize(repo.Path)
@@ -225,21 +229,78 @@ func detachedHeadRisk(repoPath, remoteBase string) string {
 	return ""
 }
 
-// auditWorktrees checks each worktree checkout for uncommitted changes.
-func auditWorktrees(wts []Worktree) (total int, violations []string) {
+// canonPath resolves symlinks so paths compare reliably (git reports
+// realpaths — /private/var vs /var on macOS).
+func canonPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// gitWorktrees enumerates every linked worktree from git's own records
+// (git worktree list --porcelain), skipping the main checkout.
+func gitWorktrees(repoPath string) []Worktree {
+	out, err := RunGit(repoPath, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	main := canonPath(repoPath)
+	var wts []Worktree
+	var path, branch string
+	flush := func() {
+		if path != "" {
+			path = canonPath(path)
+		}
+		if path != "" && path != main {
+			name := branch
+			if name == "" {
+				name = filepath.Base(path) + " (detached)"
+			}
+			wts = append(wts, Worktree{Name: name, Branch: name, Path: path})
+		}
+		path, branch = "", ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			flush()
+			path = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "branch "):
+			branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		}
+	}
+	flush()
+	return wts
+}
+
+// auditWorktrees checks each worktree checkout for uncommitted changes and
+// stranded detached commits. Checkouts outside the working dir are hard
+// blockers: hibernate wouldn't delete them, but deleting the main .git
+// orphans them.
+func auditWorktrees(scriptDir string, wts []Worktree, remoteBase string) (total int, violations []string) {
 	for _, wt := range wts {
 		if _, err := os.Stat(wt.Path); err != nil {
 			continue // directory already gone — nothing to lose
 		}
 		total++
+		if rel, err := filepath.Rel(canonPath(scriptDir), wt.Path); err != nil || strings.HasPrefix(rel, "..") {
+			violations = append(violations, wt.Name+" — checkout outside "+scriptDir+" (git worktree remove it first)")
+			continue
+		}
 		out, err := RunGit(wt.Path, "status", "--porcelain")
 		if err != nil {
-			violations = append(violations, wt.Branch+" — status check failed")
+			violations = append(violations, wt.Name+" — status check failed")
 			continue
 		}
 		if s := strings.TrimSpace(out); s != "" {
 			n := len(strings.Split(s, "\n"))
-			violations = append(violations, fmt.Sprintf("%s — %d uncommitted change(s)", wt.Branch, n))
+			violations = append(violations, fmt.Sprintf("%s — %d uncommitted change(s)", wt.Name, n))
+			continue
+		}
+		if det := detachedHeadRisk(wt.Path, remoteBase); det != "" {
+			violations = append(violations, wt.Name+" — "+det)
 		}
 	}
 	return total, violations
@@ -267,13 +328,13 @@ func monoEntanglements(scriptDir, repoName string) []string {
 }
 
 // scanHibernateEnvs finds every untracked .env* file in the main repo dir
-// and each worktree. Tracked files (e.g. a committed .env.example) are on
-// GitHub already and skipped. Relative paths are preserved so a monorepo's
-// apps/web/.env restores exactly where it lived.
-func scanHibernateEnvs(repo Repo) []EnvFile {
+// and each git-enumerated worktree. Tracked files (e.g. a committed
+// .env.example) are on GitHub already and skipped. Relative paths are
+// preserved so a monorepo's apps/web/.env restores exactly where it lived.
+func scanHibernateEnvs(repoPath string, wts []Worktree) []EnvFile {
 	var out []EnvFile
-	out = append(out, untrackedEnvsUnder(repo.Path, "")...)
-	for _, wt := range repo.Worktrees {
+	out = append(out, untrackedEnvsUnder(repoPath, "")...)
+	for _, wt := range wts {
 		if _, err := os.Stat(wt.Path); err != nil {
 			continue
 		}

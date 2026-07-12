@@ -171,9 +171,7 @@ func TestScanHibernateEnvsFindsNestedUntrackedSkipsTracked(t *testing.T) {
 	gitRun(t, wtPath, "push", "-u", "origin", "feat/z")
 	writeFileT(t, filepath.Join(wtPath, "apps", "api", ".env"), "API=1\n")
 
-	repo := Repo{Name: "core", Path: repoPath, LTSDir: "core-lts",
-		Worktrees: []Worktree{{Name: "feat/z", Branch: "feat/z", Path: wtPath}}}
-	files := scanHibernateEnvs(repo)
+	files := scanHibernateEnvs(repoPath, gitWorktrees(repoPath))
 
 	rels := make(map[string]bool)
 	for _, f := range files {
@@ -201,11 +199,9 @@ func TestBackupAndRestoreEnvsRoundTrip(t *testing.T) {
 	gitRun(t, repoPath, "worktree", "add", "-b", "feat/w", wtPath)
 	writeFileT(t, filepath.Join(wtPath, ".env"), "WT=1\n")
 
-	repo := Repo{Name: "core", Path: repoPath, LTSDir: "core-lts",
-		Worktrees: []Worktree{{Name: "feat/w", Branch: "feat/w", Path: wtPath}}}
 	backupRoot := filepath.Join(t.TempDir(), "env-backup")
 
-	dest, n, err := BackupEnvs(scanHibernateEnvs(repo), backupRoot, "core")
+	dest, n, err := BackupEnvs(scanHibernateEnvs(repoPath, gitWorktrees(repoPath)), backupRoot, "core")
 	if err != nil || n != 3 {
 		t.Fatalf("backup: n=%d err=%v", n, err)
 	}
