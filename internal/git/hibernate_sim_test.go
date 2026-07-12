@@ -194,6 +194,38 @@ func TestAuditExternalWorktreeBlocks(t *testing.T) {
 	}
 }
 
+// Hibernating a mono-group member must not leave ghost metadata: discovery
+// builds mono cards purely from .lts-repos, so a stale entry resurrects a
+// card whose create-worktree would fail against the missing repo dir.
+func TestHibernateCleansMonoMetadata(t *testing.T) {
+	scriptDir, repoPath := hibernateFixture(t, "core")
+	// Two-repo group with no live worktrees: dies with the repo.
+	pairLts := filepath.Join(scriptDir, "core-erp-ui-lts")
+	writeFileT(t, filepath.Join(pairLts, ".lts-repos"), "core\nerp-ui\n")
+	// Three-repo group: survives, minus core.
+	trioLts := filepath.Join(scriptDir, "core-erp-ui-goforms-lts")
+	writeFileT(t, filepath.Join(trioLts, ".lts-repos"), "core\nerp-ui\ngoforms\n")
+
+	if err := HibernateRepo(scriptDir, Repo{Name: "core", Path: repoPath}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pairLts); !os.IsNotExist(err) {
+		t.Fatal("two-repo group dir should be removed with its last-but-one member")
+	}
+	data, err := os.ReadFile(filepath.Join(trioLts, ".lts-repos"))
+	if err != nil || string(data) != "erp-ui\ngoforms\n" {
+		t.Fatalf("three-repo group should keep the others, got %q err=%v", data, err)
+	}
+	// Ghost-card proof: discovery must not resurrect a core group.
+	for _, r := range DiscoverRepos(scriptDir, func(string) string { return "main" }) {
+		for _, n := range r.RepoNames {
+			if n == "core" {
+				t.Fatalf("discovery still lists core in group %q", r.Name)
+			}
+		}
+	}
+}
+
 func TestScanEnvsSkipsNodeModules(t *testing.T) {
 	scriptDir, repoPath := hibernateFixture(t, "core")
 	_ = scriptDir

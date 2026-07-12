@@ -517,5 +517,38 @@ func HibernateRepo(scriptDir string, repo Repo, logFn ...LogFunc) error {
 	if err := os.RemoveAll(repo.Path); err != nil {
 		return fmt.Errorf("remove repo dir: %w", err)
 	}
+	cleanMonoMetadata(scriptDir, repo.Name, log)
 	return nil
+}
+
+// cleanMonoMetadata removes the hibernated repo from every multi-repo
+// .lts-repos file. Without this, discovery keeps building a ghost monorepo
+// card whose create-worktree would fail against the missing repo dir. A
+// group left with fewer than two repos is meaningless — its dir is removed
+// when nothing but metadata remains (the audit already blocked live
+// worktrees, but a public API caller gets the safety check anyway).
+func cleanMonoMetadata(scriptDir, repoName string, log LogFunc) {
+	for _, ltsDir := range getMultiRepoLTSDirs(scriptDir, repoName) {
+		ltsPath := filepath.Join(scriptDir, ltsDir)
+		var kept []string
+		for _, r := range getLTSRepos(scriptDir, ltsDir) {
+			if r != repoName {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) >= 2 {
+			os.WriteFile(filepath.Join(ltsPath, ".lts-repos"), []byte(strings.Join(kept, "\n")+"\n"), 0644)
+			log("hibernate:"+repoName, "Removed "+repoName+" from "+ltsDir+" group", false)
+			continue
+		}
+		if entries, err := os.ReadDir(ltsPath); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+					return // live worktree subdir — leave the group alone
+				}
+			}
+		}
+		log("hibernate:"+repoName, "Removing empty group dir "+ltsDir, false)
+		os.RemoveAll(ltsPath)
+	}
 }
