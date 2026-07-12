@@ -33,7 +33,8 @@ type CloneSelectedMsg struct {
 // CloneCancelMsg closes the browser.
 type CloneCancelMsg struct{}
 
-const cloneListMaxVisible = 12
+// CloneListMaxVisible is the repo-list window size (shared with mouse hit-testing).
+const CloneListMaxVisible = 12
 
 func NewCloneModal(cached []gh.Repo) CloneModel {
 	ti := textinput.New()
@@ -127,8 +128,8 @@ func (m *CloneModel) ensureVisible() {
 	if m.Cursor < m.Scroll {
 		m.Scroll = m.Cursor
 	}
-	if m.Cursor >= m.Scroll+cloneListMaxVisible {
-		m.Scroll = m.Cursor - cloneListMaxVisible + 1
+	if m.Cursor >= m.Scroll+CloneListMaxVisible {
+		m.Scroll = m.Cursor - CloneListMaxVisible + 1
 	}
 }
 
@@ -172,7 +173,7 @@ func (m CloneModel) View() string {
 		if m.Scroll > 0 {
 			content += dimStyle.Render(fmt.Sprintf("  ↑ %d more", m.Scroll)) + "\n"
 		}
-		end := m.Scroll + cloneListMaxVisible
+		end := m.Scroll + CloneListMaxVisible
 		if end > len(m.Filtered) {
 			end = len(m.Filtered)
 		}

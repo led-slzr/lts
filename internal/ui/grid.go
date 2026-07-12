@@ -62,7 +62,7 @@ var CurrentWorkDir string // set by the app to filter history suggestions
 
 func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard int, focusedWT int, hoveredBtn HoverButton, hoveredHistory int, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail) GridResult {
 	if len(repos) == 0 {
-		return renderEmptyState(termWidth, gridYOffset, hoveredHistory)
+		return renderEmptyState(termWidth, gridYOffset, hoveredHistory, hoveredBtn, ghState)
 	}
 
 	availWidth := termWidth - (MarginH * 2)
@@ -354,7 +354,7 @@ func HistoryHitTest(zones []HitZone, x, y int) int {
 }
 
 // renderEmptyState renders the "no repos" message with history suggestions.
-func renderEmptyState(termWidth, gridYOffset, hoveredHistory int) GridResult {
+func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn HoverButton, ghState CloneAvail) GridResult {
 	suggestions := config.GetHistorySuggestions(CurrentWorkDir)
 
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
@@ -396,6 +396,25 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int) GridResult {
 	} else {
 		lines = append(lines, dimStyle.Render("  No previous locations found."))
 	}
+
+	// Clone entry — the empty state is exactly when cloning matters most
+	lines = append(lines, "")
+	switch ghState {
+	case CloneReady:
+		cloneStyle := greenStyle.Bold(true)
+		if hoveredBtn == BtnClone {
+			cloneStyle = hoverStyle
+		}
+		lines = append(lines, cloneStyle.Render("  (c) Clone a Repo from GitHub"))
+	case CloneNoAuth:
+		lines = append(lines, dimStyle.Render("  (c) Clone a Repo from GitHub — run: gh auth login"))
+	default:
+		lines = append(lines, dimStyle.Render("  (c) Clone a Repo from GitHub — install gh to enable"))
+	}
+	hitZones = append(hitZones, HitZone{
+		X: MarginH, Y: baseY + len(lines) - 1, W: termWidth - MarginH*2, H: 1,
+		Type: ZoneClone, RepoIdx: -1, WTIdx: -1, Button: BtnClone,
+	})
 
 	content := strings.Join(lines, "\n")
 	view := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(content)

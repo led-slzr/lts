@@ -14,7 +14,6 @@ import (
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 	"lts-revamp/internal/version"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -509,6 +508,17 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 	return tea.Batch(startCmd, maintenanceCmd(logFn, paths, tmuxAge, locks))
 }
 
+// ghUserCmd fetches the authenticated GitHub login (network — async).
+func ghUserCmd() tea.Cmd {
+	return func() tea.Msg {
+		login, err := gh.Login()
+		if err != nil {
+			return GhUserMsg{}
+		}
+		return GhUserMsg{Login: login}
+	}
+}
+
 // ghRepoListCmd fetches the cloneable repos (network — goroutine only).
 func ghRepoListCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -764,13 +774,7 @@ func (m Model) Init() tea.Cmd {
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
 	}
 	if gh.Available() {
-		cmds = append(cmds, func() tea.Msg {
-			login, err := gh.Login()
-			if err != nil {
-				return GhUserMsg{}
-			}
-			return GhUserMsg{Login: login}
-		})
+		cmds = append(cmds, ghUserCmd())
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
 		// Dev builds never auto-replace themselves with the official binary —
@@ -879,6 +883,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortRepos(msg.Repos, m.config.Global.SortOrder)
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
+		wasGhReady := m.ghState == ui.CloneReady
 		m.ghState = msg.GhState
 		m.initialLoad = false
 		if msg.Err != nil {
@@ -897,6 +902,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			go config.SaveHistory(m.config.WorkDir, len(m.repos))
 		}
 		m.recomputeLayout()
+		// gh authenticated mid-session (or just now): fetch the login for
+		// the header line, which Init only fetches when gh existed then
+		if m.ghState == ui.CloneReady && !wasGhReady && m.ghUser == "" {
+			return m, ghUserCmd()
+		}
 		// Startup auto-maintenance runs after the first discovery; the
 		// hourly MaintenanceTickMsg covers long-running instances
 		if wasInitialLoad {
@@ -1254,7 +1264,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		listStartY := contentStartY + m.cloneUI.CloneListContentOffset()
 		row := msg.Y - listStartY + m.cloneUI.Scroll
 		inList := msg.Y >= listStartY && row >= 0 && row < len(m.cloneUI.Filtered) &&
-			row < m.cloneUI.Scroll+12 // cloneListMaxVisible
+			row < m.cloneUI.Scroll+ui.CloneListMaxVisible
 
 		switch {
 		case msg.Button == tea.MouseButtonWheelUp:
@@ -1815,9 +1825,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Check version label click (fixed screen position in header)
 		vx, vy, vw := ui.VersionHitZone()
 		if y == vy && x >= vx && x < vx+vw {
-			url := ui.ReleaseURL()
-			cmd := exec.Command("open", url)
-			_ = cmd.Start()
+			_ = opener.OpenURL(ui.ReleaseURL())
 			m.statusMsg = "Opened release page"
 			return m, clearStatusCmd()
 		}
@@ -1851,7 +1859,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if m.ghUser != "" {
 			gx, gy, gw := ui.GhUserHitZone(m.width, m.usageLabels(), m.ghUser, m.updateAvailVersion)
 			if y == gy && x >= gx && x < gx+gw {
-				exec.Command("open", "https://github.com/"+m.ghUser).Start()
+				_ = opener.OpenURL("https://github.com/" + m.ghUser)
 				m.statusMsg = "Opened GitHub profile"
 				return m, clearStatusCmd()
 			}
@@ -1965,9 +1973,12 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Clone tile click (Board)
-		if m.hoveredBtn == ui.BtnClone {
-			return m.openCloneBrowser()
+		// Clone tile / empty-state entry click (Board): scan the zone
+		// directly — don't depend on a preceding motion event
+		for _, z := range m.gridResult.HitZones {
+			if z.Type == ui.ZoneClone && x >= z.X && x < z.X+z.W && virtualY >= z.Y && virtualY < z.Y+z.H {
+				return m.openCloneBrowser()
+			}
 		}
 
 		// Context menu trigger [▸] — open context menu (not for migration cards).

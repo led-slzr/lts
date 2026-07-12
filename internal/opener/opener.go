@@ -145,6 +145,14 @@ func openTerminal(path, terminal string) error {
 	return openTerminalWithCommand(path, terminal, "")
 }
 
+// OpenURL opens a URL in the default browser (macOS open, Linux xdg-open).
+func OpenURL(url string) error {
+	if runtime.GOOS == "darwin" {
+		return exec.Command("open", url).Start()
+	}
+	return exec.Command("xdg-open", url).Start()
+}
+
 // userShell returns the user's login shell for running commands with a full
 // environment (PATH from profile — homebrew tools, etc).
 func userShell() string {
