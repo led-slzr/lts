@@ -13,7 +13,19 @@ import (
 
 func openThemeStudio(m Model) (Model, tea.Cmd) {
 	m.settings.Active = false
-	m.themeStudio = ui.NewThemeStudio(m.config.Global.Theme)
+	st := ui.NewThemeStudio(m.config.Global.Theme)
+	// Capture the live session context so the studio's header is YOUR
+	// header — same labels, click mode, login, disk gauge.
+	st.Labels = m.usageLabels()
+	st.ClickUsage = m.clickUsage
+	st.Greeting = m.greeting
+	if st.Greeting == "" { // greeting disabled — still showcase the slot
+		st.Greeting = "May your merges be clean"
+	}
+	st.GhUser = m.headerGhUser()
+	st.DiskUsed, st.DiskTotal = m.diskUsed, m.diskTotal
+	st.LayoutName = m.config.Global.Layout
+	m.themeStudio = st
 	return m, nil
 }
 
@@ -51,7 +63,7 @@ func handleThemeStudioKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 // handleThemeStudioMouse: hovering a theme row tries it on live, clicking
 // selects it the same way — enter/esc still decide.
 func handleThemeStudioMouse(m Model, msg tea.MouseMsg) (Model, tea.Cmd) {
-	row := msg.Y - ui.StudioListStartY
+	row := msg.Y - m.themeStudio.ListStartY(m.width)
 	inList := msg.X < ui.StudioListWidth && row >= 0 && row < len(ui.Themes)
 
 	m.themeStudio.Hovered = -1

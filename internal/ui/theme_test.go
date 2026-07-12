@@ -99,22 +99,29 @@ func TestStudioRenderGeometry(t *testing.T) {
 	if Themes[st.Cursor].Key != "jela-my-love" {
 		t.Fatal("cursor should open on the current theme")
 	}
-	out := RenderThemeStudio(st, 110, 40)
+	st.Labels = UsageLabels{IDE: "VSCode", AICli: "Claude", Terminal: "Ghostty"}
+	st.Greeting = "May your merges be clean"
+	st.GhUser = "led-slzr"
+	st.DiskUsed, st.DiskTotal = 620, 1000
+	st.LayoutName = "board"
+	out := RenderThemeStudio(st, 110, 50)
 	lines := strings.Split(out, "\n")
 
-	// Theme row i renders at StudioListStartY+i.
+	// Theme row i renders at ListStartY+i (dynamic — below the real header).
+	startY := st.ListStartY(110)
 	for i, th := range Themes {
-		if !strings.Contains(stripANSI(lines[StudioListStartY+i]), th.Name) {
-			t.Errorf("theme %q not on line %d", th.Name, StudioListStartY+i)
+		if !strings.Contains(stripANSI(lines[startY+i]), th.Name) {
+			t.Errorf("theme %q not on line %d", th.Name, startY+i)
 		}
 	}
 	plain := stripANSI(out)
-	for _, want := range []string{"Theme Studio", "sample-repo", "⚠ diverged", "merged, cleanable", "never pushed", "enter apply"} {
+	for _, want := range []string{"Theme Studio", "sample-repo", "⚠ diverged", "merged, cleanable", "never pushed", "enter apply",
+		"VSCode", "led-slzr", "May your merges be clean"} {
 		if !strings.Contains(plain, want) {
 			t.Errorf("studio render missing %q", want)
 		}
 	}
-	// The mini Board card renders at 40 rows (bordered corners present).
+	// The mini Board card renders when tall enough (bordered corners present).
 	if !strings.Contains(plain, "╭") {
 		t.Error("mini board card should render at full height")
 	}

@@ -21,6 +21,16 @@ type StudioModel struct {
 	Cursor   int
 	Hovered  int    // mouse-hovered list row (-1 = none)
 	SavedKey string // theme to restore on esc
+
+	// Live main-screen context, captured at open, so the studio renders
+	// the REAL header (banner, greeting, click usage, Github, disk gauge)
+	// re-skinned per theme — the preview is the complete main screen.
+	Labels              UsageLabels
+	ClickUsage          opener.ClickUsage
+	Greeting            string
+	GhUser              string
+	DiskUsed, DiskTotal uint64
+	LayoutName          string
 }
 
 // NewThemeStudio opens the studio with the cursor on the active theme.
@@ -35,11 +45,31 @@ func NewThemeStudio(currentKey string) StudioModel {
 	return StudioModel{Active: true, Cursor: cursor, Hovered: -1, SavedKey: currentKey}
 }
 
-// Studio geometry — the mouse handler depends on these matching the render.
-const (
-	StudioListStartY = 4  // first theme row (title, blank, pane header above)
-	StudioListWidth  = 26 // left pane incl. separator column
-)
+// StudioListWidth is the left pane width incl. the separator column —
+// the mouse handler depends on it matching the render.
+const StudioListWidth = 26
+
+// ListStartY is the screen row of the first theme entry: the real header
+// block, then the title line, then the pane-header line. Dynamic because
+// the header's height is the header's business.
+func (st StudioModel) ListStartY(width int) int {
+	return lipgloss.Height(st.renderHeader(width)) + 2
+}
+
+// renderHeader draws the genuine main-screen header with the captured
+// session context — through the live theme, like everything else here.
+func (st StudioModel) renderHeader(width int) string {
+	return RenderHeader(width, st.ClickUsage, st.Labels, HeaderOpts{
+		StatusMsg:    "✓ Created feat/preview — deps installed, opened in AI CLI",
+		HoveredUsage: -1,
+		HoveredView:  -1,
+		Layout:       st.LayoutName,
+		Greeting:     st.Greeting,
+		GhUser:       st.GhUser,
+		DiskUsed:     st.DiskUsed,
+		DiskTotal:    st.DiskTotal,
+	})
+}
 
 // sampleWT is one preview row: every WTStatus appears once.
 type sampleWT struct {
@@ -118,28 +148,28 @@ func RenderThemeStudio(st StudioModel, width, height int) string {
 		InlineBtnHoverStyle.Render("[enter open]")+dim.Render(" ")+
 			InlineBtnStyle.Render("[b rebase] [g pr] [m rename] [p modules] [d delete] [x kill tmux]"))
 
+	// --- The real header, worn by the candidate theme ---
+	headerLines := strings.Split(st.renderHeader(width), "\n")
+
 	// --- Mini Board card (the real renderer) when height allows ---
 	card := studioSampleCard(minStudio(rightW, 46))
 	cardLines := strings.Split(card, "\n")
 	strip := []string{
 		"",
-		StatusBarStyle.Render("✓ Created feat/preview — deps installed, opened in AI CLI"),
 		FooterStyle.Render("[r] Refresh   [n] New Worktree   [C] Cleanup   [s] Settings") +
 			"   " + crit.Render("⚠ work will be LOST"),
 	}
-	needed := StudioListStartY + len(right) + 1 + len(cardLines) + len(strip) + 2
+	needed := len(headerLines) + 2 + len(right) + 1 + len(cardLines) + len(strip) + 2
 	if height >= needed {
 		right = append(right, "")
 		right = append(right, cardLines...)
 	}
 	right = append(right, strip...)
 
-	// --- Compose: title, then left │ right, then the hint line ---
-	lines := []string{
-		"",
-		" " + accent.Render("◆ Theme Studio") + dim.Render("  — the preview is live: this whole screen wears the selected theme"),
-		"",
-	}
+	// --- Compose: header, title, then left │ right, then the hint line ---
+	lines := append([]string{}, headerLines...)
+	lines = append(lines,
+		" "+accent.Render("◆ Theme Studio")+dim.Render("  — the preview is live: the whole screen wears the selected theme"))
 	rows := len(right)
 	if len(left) > rows {
 		rows = len(left)
