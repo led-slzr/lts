@@ -77,7 +77,7 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 
 	cursorStyle := lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(ColorDarkGreen).
+		Background(ColorSelBg).
 		Bold(true).
 		Padding(0, 1)
 

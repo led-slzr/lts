@@ -153,7 +153,7 @@ func (m CloneModel) View() string {
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorBlack)
 	errStyle := lipgloss.NewStyle().Foreground(ColorRed).Background(ColorBlack)
-	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 	privStyle := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
 	dateStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Italic(true)
 

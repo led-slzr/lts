@@ -19,6 +19,7 @@ var (
 	ColorBlack      lipgloss.Color
 	ColorBtnBg      lipgloss.Color
 	ColorBtnHoverBg lipgloss.Color
+	ColorSelBg      lipgloss.Color // selection/hover background (Text reads on it)
 	ColorMagenta    lipgloss.Color
 	ColorTeal       lipgloss.Color // tmux session indicators
 
@@ -174,7 +175,7 @@ func rebuildStyles() {
 
 	ClickUsageActiveStyle = lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(ColorDarkGreen).
+		Background(ColorSelBg).
 		Bold(true).
 		Padding(0, 1)
 
@@ -205,7 +206,7 @@ func rebuildStyles() {
 
 	CreateBtnHoverStyle = lipgloss.NewStyle().
 		Foreground(ColorWhite).
-		Background(ColorDarkGreen).
+		Background(ColorSelBg).
 		Bold(true).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorWhite).

@@ -249,7 +249,7 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 		if o.UpdateBadgeHovered {
 			badge = lipgloss.NewStyle().
 				Foreground(ColorWhite).
-				Background(ColorDarkGreen).
+				Background(ColorSelBg).
 				Bold(true).
 				Render(" (Update Available)")
 		} else {

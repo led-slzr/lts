@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestClassicIsTheOriginalPalette(t *testing.T) {
 	want := map[string]string{
 		ClassicLTS.Bg: "#000000", ClassicLTS.Text: "#FFFFFF", ClassicLTS.Dim: "#666666",
 		ClassicLTS.Gray: "#555555", ClassicLTS.BtnBg: "#111111",
-		ClassicLTS.Accent: "#00AA00", ClassicLTS.AccentDark: "#006400",
+		ClassicLTS.Accent: "#00AA00", ClassicLTS.AccentDark: "#006400", ClassicLTS.Sel: "#006400",
 		ClassicLTS.Clean: "#5F875F", ClassicLTS.Danger: "#CC3333", ClassicLTS.Warn: "#CCAA00",
 		ClassicLTS.Info: "#3388FF", ClassicLTS.Changed: "#00CCCC",
 		ClassicLTS.Special: "#CC55CC", ClassicLTS.Session: "#00CCCC",
@@ -37,7 +38,7 @@ func TestThemeRegistryKeysUniqueAndComplete(t *testing.T) {
 		seen[th.Key] = true
 		for slot, v := range map[string]string{
 			"Bg": th.Bg, "Text": th.Text, "Dim": th.Dim, "Gray": th.Gray, "BtnBg": th.BtnBg,
-			"Accent": th.Accent, "AccentDark": th.AccentDark, "Clean": th.Clean,
+			"Accent": th.Accent, "AccentDark": th.AccentDark, "Sel": th.Sel, "Clean": th.Clean,
 			"Danger": th.Danger, "Warn": th.Warn, "Info": th.Info, "Changed": th.Changed,
 			"Special": th.Special, "Session": th.Session,
 		} {
@@ -89,6 +90,44 @@ func TestThemeBgSeq(t *testing.T) {
 	if got := ThemeBgSeq(); got != "\033[48;2;250;248;241m" {
 		t.Errorf("light canvas sequence wrong: %q", got)
 	}
+}
+
+// Every theme must keep text readable — on the canvas and, the bug that
+// motivated this test, on the selection background (light themes once kept
+// a dark selection under near-black text).
+func TestThemeContrastGuarantees(t *testing.T) {
+	for _, th := range Themes {
+		if r := contrastRatio(th.Text, th.Bg); r < 4.5 {
+			t.Errorf("%s: Text on Bg contrast %.1f < 4.5", th.Key, r)
+		}
+		if r := contrastRatio(th.Text, th.Sel); r < 3.0 {
+			t.Errorf("%s: Text on Sel(ection) contrast %.1f < 3.0 — highlighted rows unreadable", th.Key, r)
+		}
+		if r := contrastRatio(th.Dim, th.Bg); r < 2.5 {
+			t.Errorf("%s: Dim on Bg contrast %.1f < 2.5", th.Key, r)
+		}
+	}
+}
+
+// contrastRatio is the WCAG relative-luminance contrast between two hexes.
+func contrastRatio(fg, bg string) float64 {
+	l1, l2 := relLum(fg), relLum(bg)
+	if l1 < l2 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+func relLum(hex string) float64 {
+	r, g, b := hexRGB(hex)
+	lin := func(c int) float64 {
+		v := float64(c) / 255
+		if v <= 0.03928 {
+			return v / 12.92
+		}
+		return math.Pow((v+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b)
 }
 
 // The studio's mouse hit-testing depends on the theme list starting at

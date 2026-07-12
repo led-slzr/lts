@@ -363,7 +363,7 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn Hov
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 	whiteStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorBlack)
 	greenStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
-	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+	hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 
 	var lines []string
 	lines = append(lines, "")
@@ -453,7 +453,7 @@ func renderCloneTile(cardWidth int, hovered bool, state CloneAvail) string {
 	switch state {
 	case CloneReady:
 		if hovered {
-			labelStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+			labelStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 		}
 	case CloneNoAuth:
 		labelStyle, sub = dim, "run: gh auth login"

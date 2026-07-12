@@ -502,7 +502,7 @@ func (m ModalModel) View(width, height int) string {
 			localTag := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
 			remoteTag := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack)
 			dateStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Italic(true)
-			hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+			hoverStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 			normalStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack)
 			normalDimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 
@@ -593,7 +593,7 @@ func (m ModalModel) View(width, height int) string {
 
 				trackChar := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render("│")
 				thumbChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true).Render("┃")
-				thumbHoverChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorDarkGreen).Bold(true).Render("█")
+				thumbHoverChar := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorSelBg).Bold(true).Render("█")
 
 				var scrollLines []string
 				for idx := 0; idx < visible; idx++ {

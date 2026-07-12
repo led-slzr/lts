@@ -147,7 +147,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 
 	titleStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Bold(true)
 	dimStyle := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
-	selStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+	selStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 	nameStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack)
 	monoStyle := lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack)
 	tealStyle := lipgloss.NewStyle().Foreground(ColorTeal).Background(ColorBlack)
@@ -194,7 +194,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 		if ghState == CloneReady {
 			cloneStyle = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
 			if hoveredBtn == BtnClone {
-				cloneStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+				cloneStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true)
 			}
 		}
 		sbLines = append(sbLines, truncate(cloneStyle.Render(" (c) Clone a Repo"), sbInner))
@@ -230,7 +230,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	keyStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
 	newStyled := keyStyle.Render("n") + dimStyle.Render(" New Worktree")
 	if hoveredBtn == BtnCreateWT {
-		newStyled = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true).Render(newBtnText)
+		newStyled = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg).Bold(true).Render(newBtnText)
 	}
 	titleLine := title
 	newW := lipgloss.Width(newBtnText)
@@ -356,7 +356,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 				seg := "[" + a.Label + "]"
 				style := dimStyle
 				if hoveredBtn != BtnNone && hoveredBtn == a.Btn {
-					style = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen)
+					style = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelBg)
 				}
 				strip += style.Render(seg)
 				segW := lipgloss.Width(seg)

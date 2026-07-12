@@ -99,7 +99,7 @@ func RenderThemeStudio(st StudioModel, width, height int) string {
 	accent := lipgloss.NewStyle().Bold(true).Foreground(ColorGreen).Background(ColorBlack)
 	dim := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 	white := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorBlack)
-	sel := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorDarkGreen)
+	sel := lipgloss.NewStyle().Bold(true).Foreground(ColorWhite).Background(ColorSelBg)
 	sep := lipgloss.NewStyle().Foreground(ColorGray).Background(ColorBlack)
 	crit := lipgloss.NewStyle().Bold(true).Foreground(ColorRed).Background(ColorBlack)
 
