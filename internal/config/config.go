@@ -27,7 +27,7 @@ type GlobalConfig struct {
 	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
 	AutoKillTmux      string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
 	CheckForUpdates   bool   // daily check for new releases
-	AutoUpdate        bool   // automatically install new releases in background
+	AutoUpdate        bool   // automatically install new releases in background (opt-in)
 	OpenEnvInIDE      bool   // auto-open .env files when opening workspace
 	InstallOnCreate   bool   // default for the package-install toggle when creating worktrees
 	CopyEnvFiles      bool   // copy .env* files into new worktrees
@@ -69,7 +69,7 @@ func DefaultGlobal() GlobalConfig {
 		AutoCleanModules:  "OFF",
 		AutoKillTmux:      "OFF",
 		CheckForUpdates:   true,
-		AutoUpdate:        true,
+		AutoUpdate:        false,
 		OpenEnvInIDE:      true,
 		InstallOnCreate:   true,
 		CopyEnvFiles:      true,
@@ -385,7 +385,7 @@ func loadGlobal(g *GlobalConfig) {
 		g.CheckForUpdates = v != "false"
 	}
 	if v, ok := kv["AUTO_UPDATE_NEW_RELEASE"]; ok {
-		g.AutoUpdate = v != "false"
+		g.AutoUpdate = v == "true"
 	}
 	if v, ok := kv["OPEN_ENV_IDE"]; ok {
 		g.OpenEnvInIDE = v != "false"
