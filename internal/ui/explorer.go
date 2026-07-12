@@ -157,7 +157,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 				cloneStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
 			}
 		}
-		sbLines = append(sbLines, truncate(cloneStyle.Render(" + Clone a Repo"), sbInner))
+		sbLines = append(sbLines, truncate(cloneStyle.Render(" (c) Clone a Repo"), sbInner))
 		zones = append(zones, HitZone{
 			X: MarginH, Y: sbItemStartY + (len(repos) - sbScroll), W: sidebarW, H: 1,
 			Type: ZoneClone, RepoIdx: -1, WTIdx: -1, Button: BtnClone,

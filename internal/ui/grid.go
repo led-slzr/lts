@@ -420,23 +420,24 @@ func renderCloneTile(cardWidth int, hovered bool, state CloneAvail) string {
 	center := lipgloss.NewStyle().Width(iw).Align(lipgloss.Center).Background(ColorBlack)
 	dim := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack)
 
-	var label, sub string
+	const label = "(c) Clone a Repo"
 	labelStyle := lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack).Bold(true)
+	sub := ""
 	switch state {
 	case CloneReady:
-		label, sub = "+ Clone a Repo", "from GitHub (c)"
 		if hovered {
 			labelStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
 		}
 	case CloneNoAuth:
-		label, sub = "+ Clone a Repo", "run: gh auth login"
-		labelStyle = dim
+		labelStyle, sub = dim, "run: gh auth login"
 	default:
-		label, sub = "+ Clone a Repo", "install gh to enable"
-		labelStyle = dim
+		labelStyle, sub = dim, "install gh to enable"
 	}
 
-	content := center.Render(labelStyle.Render(label)) + "\n" + center.Render(dim.Render(sub))
+	content := center.Render(labelStyle.Render(label))
+	if sub != "" {
+		content += "\n" + center.Render(dim.Render(sub))
+	}
 	border := CardBorderNormal
 	if hovered && state == CloneReady {
 		border = CardBorderFocused
