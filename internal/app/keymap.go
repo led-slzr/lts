@@ -39,6 +39,13 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// If the clone browser is active, delegate to it
+	if m.cloneUI.Active {
+		var cmd tea.Cmd
+		m.cloneUI, cmd = m.cloneUI.Update(msg)
+		return m, cmd
+	}
+
 	// If rename input is active, delegate to rename
 	if m.renameActive {
 		return handleRenameKey(m, msg)
@@ -72,6 +79,9 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 
 	case "c":
+		return m.openCloneBrowser()
+
+	case "C":
 		if !m.anyBusy() && len(m.repos) > 0 {
 			m.cleanupConfirmActive = true
 			m.cleanupRemoteBranch = false

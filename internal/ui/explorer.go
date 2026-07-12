@@ -85,7 +85,7 @@ func explorerActions(repo git.Repo, hasSession bool) []stripAction {
 // a worktree sheet (right) with status, age, and tmux columns. The block is
 // exactly `height` lines tall; panes scroll internally. Hit zones are in
 // absolute screen coordinates (yOffset = first content line).
-func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool) GridResult {
+func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st ExplorerState, hoveredBtn HoverButton, busyCards map[string]bool, tmuxLive map[string]bool, ghState CloneAvail) GridResult {
 	if height < 6 {
 		height = 6
 	}
@@ -146,6 +146,21 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 		zones = append(zones, HitZone{
 			X: MarginH, Y: sbItemStartY + (i - sbScroll), W: sidebarW, H: 1,
 			Type: ZoneExplorerRepo, RepoIdx: i, WTIdx: -1,
+		})
+	}
+	// "+ Clone a Repo" entry at the end of the list (hollow when gh isn't ready)
+	if len(repos)-sbScroll < itemRows {
+		cloneStyle := dimStyle
+		if ghState == CloneReady {
+			cloneStyle = lipgloss.NewStyle().Foreground(ColorGreen).Background(ColorBlack)
+			if hoveredBtn == BtnClone {
+				cloneStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorDarkGreen).Bold(true)
+			}
+		}
+		sbLines = append(sbLines, truncate(cloneStyle.Render(" + Clone a Repo"), sbInner))
+		zones = append(zones, HitZone{
+			X: MarginH, Y: sbItemStartY + (len(repos) - sbScroll), W: sidebarW, H: 1,
+			Type: ZoneClone, RepoIdx: -1, WTIdx: -1, Button: BtnClone,
 		})
 	}
 	for len(sbLines) < innerH {

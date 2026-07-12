@@ -23,7 +23,7 @@ type footerButton struct {
 var (
 	footerLeft = []footerButton{
 		{"r", "Refresh All", BtnRefreshAll},
-		{"c", "Cleanup Merged", BtnCleanupMerged},
+		{"C", "Cleanup Merged", BtnCleanupMerged},
 	}
 	footerRight = []footerButton{
 		{"s", "Settings", BtnSettings},

@@ -1,7 +1,9 @@
 package app
 
 import (
+	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 )
 
@@ -9,6 +11,7 @@ import (
 type ReposLoadedMsg struct {
 	Repos    []git.Repo
 	TmuxLive map[string]bool // live LTS tmux sessions (piggybacked on discovery)
+	GhState  ui.CloneAvail   // gh install/auth state (piggybacked on discovery)
 	Err      error
 }
 
@@ -66,6 +69,19 @@ type CleanModulesDoneMsg struct {
 	Freed   int64
 	Locked  []string // repo locks to release
 	Err     error
+}
+
+// GhRepoListMsg carries the cloneable-repo list fetched from GitHub.
+type GhRepoListMsg struct {
+	Repos []gh.Repo
+	Err   error
+}
+
+// CloneDoneMsg is sent when a gh repo clone completes.
+type CloneDoneMsg struct {
+	RepoName string
+	Locked   []string
+	Err      error
 }
 
 // MaintenanceTickMsg re-evaluates auto-maintenance hourly so long-running

@@ -47,6 +47,8 @@ const (
 	BtnKillSession
 	// Remove node_modules from a worktree
 	BtnCleanModules
+	// Clone-a-repo tile / sidebar entry
+	BtnClone
 )
 
 // innerWidth returns the usable content width inside a card.

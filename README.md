@@ -30,13 +30,17 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 
 ## Features
 
-- **One-click worktree creation** — Stash, pull, branch, copy `.env`, install deps, and generate workspace in one step
-- **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows
+- **One-click worktree creation** — Stash, pull, branch, copy `.env`/`.mcp.json`, install deps, and generate workspace in one step (per-repo install toggles included)
+- **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows, each repo using its own basis branch and package manager
 - **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
-- **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches
-- **Rebase, rename, delete** — Manage worktrees and branches from context menus without leaving the TUI
-- **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with status, age, and tmux session columns); switch with `shift+tab`
-- **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings
+- **Tmux sessions per worktree** — With the tmux multiplexer enabled, AI CLI and Terminal opens share one persistent session per worktree (AI pane + shells, configurable layout); reopening reattaches, so AI conversations survive closing the terminal
+- **Clone from GitHub** — With the [GitHub CLI](https://cli.github.com) installed and authenticated, press `c` (or click the "+ Clone a Repo" tile) to browse and clone any repo you can access, sorted by recency
+- **Branch status at a glance** — Color-coded cards show clean, changed, diverged, merged, and new branches, plus tmux-session and busy indicators
+- **Rebase, rename, delete, clean modules, kill sessions** — Manage worktrees from context menus (Board) or the action strip (Explorer) without leaving the TUI
+- **Two layouts** — Board (repo cards) or Explorer (repo sidebar + worktree table with full status text, age, and tmux columns); switch with `shift+tab`
+- **Per-repo concurrency** — Operations lock only the repos they touch; rebase one repo while another creates, with live logs for everything
+- **Auto-maintenance** — Optionally clean `node_modules` and kill idle tmux sessions by age, on startup and hourly
+- **Setup wizard** — Walks you through configuration on first run; tweak anytime in Settings (Preferences / Workspace / Worktrees / Diagnostics)
 
 ## Platform Support
 
@@ -97,15 +101,16 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 |-----|--------|
 | `Tab` | Cycle click usage: IDE → AI CLI → Terminal |
 | `Shift+Tab` | Switch layout: Board ↔ Explorer |
-| `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet) |
-| `Enter`, `b`, `m`, `d` | Explorer selected row: open, rebase, rename, delete |
-| `n` | Create new worktree |
+| `↑↓←→` / `hjkl` | Navigate (Explorer: sidebar/sheet; Board: scroll) |
+| `Enter`, `b`, `m`, `p`, `d`, `x` | Explorer selected row: open, rebase, rename, purge modules, delete, kill tmux session |
+| `n` | Create new worktree (Explorer: pre-seeded with the selected repo) |
+| `c` | Clone a repo from GitHub (requires `gh`) |
 | `r` | Refresh all repos |
-| `c` | Cleanup merged worktrees |
+| `Shift+C` | Cleanup merged worktrees |
 | `l` | Clear log panel |
 | `s` | Open settings |
 | `q` / `Ctrl+C` | Quit |
-| `Esc` | Close modal / clear selection |
+| `Esc` | Close modal / clear selection / focus Explorer sidebar |
 
 ## Mouse
 
@@ -116,6 +121,8 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 | Click `[▸]` | Context menu (Rebase / Rename / Delete) |
 | Click worktree | Opens in active click usage mode |
 | Click footer buttons | Refresh All, Cleanup Merged, Settings, Exit |
+| Click "+ Clone a Repo" | Opens the GitHub clone browser (Board tile / Explorer sidebar entry) |
+| Explorer: hover row | Selects it and reveals the action strip |
 | Scroll wheel (main area) | Scroll through repo grid |
 | Scroll wheel (log area) | Scroll through log history |
 | Scroll wheel (settings) | Scroll through settings list |
@@ -131,8 +138,19 @@ PACKAGE_MANAGER="pnpm"
 AUTO_REFRESH="24H"
 TERMINAL="terminal"
 TERMINAL_MULTIPLEXER="none"
+TMUX_AI_PANE_WIDTH="50"
+TMUX_RIGHT_PANES="1"
+LAYOUT="board"
+SORT_ORDER="activity"
+DONE_SOUND="off"
+AUTO_CLEAN_MODULES="OFF"
+AUTO_KILL_TMUX="OFF"
 DAILY_CHECK_FOR_UPDATES="true"
 AUTO_UPDATE_NEW_RELEASE="true"
+OPEN_ENV_IDE="true"
+NEW_WT_PACKAGE_INSTALL="true"
+COPY_ENV_FILES="true"
+COPY_MCP_JSON="false"
 ```
 
 Supported values:
@@ -162,6 +180,10 @@ ERP_LAST_REFRESH="1711612800"
 ```
 
 Both configs are editable from the Settings UI inside LTS. Changes save immediately and reflect in the running app.
+
+## GitHub Integration (optional)
+
+LTS integrates with GitHub through the [GitHub CLI](https://cli.github.com) — install `gh` and run `gh auth login`, and the "+ Clone a Repo" tile (Board) / sidebar entry (Explorer) and the `c` key open a browser of every repo you can access, sorted by recent activity and filterable as you type. Without `gh`, the tile shows what's missing and everything else works normally; the Diagnostics tab reports install/auth state. Auth lives entirely in `gh` — LTS never stores credentials.
 
 ## License
 

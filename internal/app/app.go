@@ -3,10 +3,12 @@ package app
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"sort"
 	"strconv"
 
 	"lts-revamp/internal/config"
+	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/ui"
@@ -117,6 +119,12 @@ type Model struct {
 	// Launch greeting shown in the header gap
 	greeting string
 
+	// GitHub clone browser + session cache of cloneable repos
+	cloneUI     ui.CloneModel
+	ghRepos     []gh.Repo
+	ghFetchedAt time.Time
+	ghState     ui.CloneAvail // cached availability (refreshed with discovery)
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -154,6 +162,7 @@ func NewModel(cfg config.Config) Model {
 		initialLoad:       true,
 		loaderTicking:     true, // Init issues the first tick
 		greeting:          pickGreeting(),
+		ghState:           ghAvailability(),
 		busy:              make(map[string]string),
 		logPanel:          ui.NewLogPanel(),
 		logChan:           make(chan LogEntryMsg, 64),
@@ -288,7 +297,7 @@ func explorerZoneAt(zones []ui.HitZone, x, y int) (ui.HitZone, bool) {
 			return 2
 		case ui.ZoneExplorerRow:
 			return 1
-		case ui.ZoneExplorerRepo:
+		case ui.ZoneExplorerRepo, ui.ZoneClone:
 			return 0
 		}
 		return -1
@@ -498,6 +507,59 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 	return tea.Batch(startCmd, maintenanceCmd(logFn, paths, tmuxAge, locks))
 }
 
+// ghRepoListCmd fetches the cloneable repos (network — goroutine only).
+func ghRepoListCmd() tea.Cmd {
+	return func() tea.Msg {
+		repos, err := gh.RepoList()
+		return GhRepoListMsg{Repos: repos, Err: err}
+	}
+}
+
+func cloneRepoCmd(logFn git.LogFunc, nameWithOwner, workDir string, locked []string) tea.Cmd {
+	return func() tea.Msg {
+		logFn("clone", "Cloning "+nameWithOwner+"...", false)
+		repoName, err := gh.Clone(nameWithOwner, workDir)
+		if err != nil {
+			logFn("clone", err.Error(), true)
+		} else {
+			logFn("clone", "Cloned into "+repoName, false)
+		}
+		return CloneDoneMsg{RepoName: repoName, Locked: locked, Err: err}
+	}
+}
+
+// ghAvailability maps gh's install/auth state for the clone surfaces.
+// Spawns subprocesses — call from goroutines or one-shot paths only.
+func ghAvailability() ui.CloneAvail {
+	if !gh.Available() {
+		return ui.CloneMissing
+	}
+	if !gh.Authed() {
+		return ui.CloneNoAuth
+	}
+	return ui.CloneReady
+}
+
+// openCloneBrowser opens the clone modal with the cached list (refreshing
+// in the background when stale) or a fresh fetch.
+func (m Model) openCloneBrowser() (Model, tea.Cmd) {
+	if !gh.Available() {
+		m.statusMsg = "GitHub CLI not found — install gh (brew install gh) and run gh auth login"
+		return m, clearStatusCmd()
+	}
+	if !gh.Authed() {
+		m.statusMsg = "GitHub CLI not authenticated — run gh auth login"
+		return m, clearStatusCmd()
+	}
+	m.cloneUI = ui.NewCloneModal(m.ghRepos)
+	var cmds []tea.Cmd
+	cmds = append(cmds, textinput.Blink)
+	if len(m.ghRepos) == 0 || time.Since(m.ghFetchedAt) > 5*time.Minute {
+		cmds = append(cmds, ghRepoListCmd())
+	}
+	return m, tea.Batch(cmds...)
+}
+
 // maintenanceTickCmd schedules the next hourly auto-maintenance check.
 func maintenanceTickCmd() tea.Cmd {
 	return tea.Tick(time.Hour, func(time.Time) tea.Msg { return MaintenanceTickMsg{} })
@@ -623,7 +685,7 @@ func (m *Model) recomputeLayout() {
 		}
 		exH := m.height - m.headerH - 2 - logReserve
 		m.clampExplorer()
-		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive)
+		m.gridResult = ui.LayoutExplorer(m.repos, m.width, yPos, exH, m.explorer, m.hoveredBtn, m.busyCardNames(), m.tmuxLive, m.ghState)
 		m.createBtnY = 0
 		m.contentHeight = lipgloss.Height(m.gridResult.View)
 		m.footerY = m.headerH + m.contentHeight
@@ -633,7 +695,7 @@ func (m *Model) recomputeLayout() {
 
 	// Grid — pass virtual yPos (header + scroll offset applied later)
 	// Hit zones use absolute virtual coordinates; mouse handler adds scrollY
-	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory, m.busyCardNames(), m.tmuxLive)
+	m.gridResult = ui.LayoutGrid(m.repos, m.width, yPos, m.focusedCard, m.focusedWT, m.hoveredBtn, m.hoveredHistory, m.busyCardNames(), m.tmuxLive, m.ghState)
 	gridH := lipgloss.Height(m.gridResult.View)
 	yPos += gridH
 
@@ -804,6 +866,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		sortRepos(msg.Repos, m.config.Global.SortOrder)
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
+		m.ghState = msg.GhState
 		m.initialLoad = false
 		if msg.Err != nil {
 			m.statusMsg = "Error loading repos: " + msg.Err.Error()
@@ -1071,6 +1134,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		return m, clearStatusAfter(m.statusGen, 5*time.Second)
 
+	case GhRepoListMsg:
+		if msg.Err == nil {
+			m.ghRepos = msg.Repos
+			m.ghFetchedAt = time.Now()
+		}
+		if m.cloneUI.Active {
+			m.cloneUI.SetRepos(msg.Repos, msg.Err)
+		}
+		return m, nil
+
+	case ui.CloneSelectedMsg:
+		name := msg.NameWithOwner
+		dirName := name
+		if idx := strings.IndexByte(name, '/'); idx >= 0 {
+			dirName = name[idx+1:]
+		}
+		if _, err := os.Stat(filepath.Join(m.config.WorkDir, dirName)); err == nil {
+			m.statusMsg = dirName + " already exists here"
+			m.recomputeLayout()
+			return m, clearStatusCmd()
+		}
+		if _, busy := m.busy[dirName]; busy {
+			m.statusMsg = dirName + " is busy"
+			return m, clearStatusCmd()
+		}
+		lock := []string{dirName}
+		logFn, startCmd := m.beginOp("Cloning "+name+"...", lock...)
+		return m, tea.Batch(startCmd, cloneRepoCmd(logFn, name, m.config.WorkDir, lock))
+
+	case ui.CloneCancelMsg:
+		return m, nil
+
+	case CloneDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Clone error: " + msg.Err.Error()
+		} else {
+			m.statusMsg = "Cloned " + msg.RepoName
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+
 	case ui.ModalCreateMsg:
 		if len(msg.RepoNames) > 0 {
 			// The modal can be opened while other operations run — reject
@@ -1097,6 +1202,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modal, cmd = m.modal.Update(msg)
 		return m, cmd
 	}
+	if m.cloneUI.Active {
+		var cmd tea.Cmd
+		m.cloneUI, cmd = m.cloneUI.Update(msg)
+		return m, cmd
+	}
 
 	return m, nil
 }
@@ -1117,6 +1227,39 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.settings, cmd = m.settings.Update(msg)
 		m.syncSettingsConfig()
 		return m, cmd
+	}
+
+	// Clone browser: hover/click repo rows, wheel scrolls
+	if m.cloneUI.Active {
+		modal := m.cloneUI.View()
+		contentStartY, _, _ := modalMetrics(modal, m.height)
+		listStartY := contentStartY + m.cloneUI.CloneListContentOffset()
+		row := msg.Y - listStartY + m.cloneUI.Scroll
+		inList := msg.Y >= listStartY && row >= 0 && row < len(m.cloneUI.Filtered) &&
+			row < m.cloneUI.Scroll+12 // cloneListMaxVisible
+
+		switch {
+		case msg.Button == tea.MouseButtonWheelUp:
+			if m.cloneUI.Scroll > 0 {
+				m.cloneUI.Scroll--
+			}
+		case msg.Button == tea.MouseButtonWheelDown:
+			if m.cloneUI.Scroll < len(m.cloneUI.Filtered)-1 {
+				m.cloneUI.Scroll++
+			}
+		case msg.Action == tea.MouseActionMotion:
+			m.cloneUI.Hovered = -1
+			if inList {
+				m.cloneUI.Hovered = row
+				m.cloneUI.Cursor = row
+			}
+		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft && inList:
+			m.cloneUI.Cursor = row
+			var cmd tea.Cmd
+			m.cloneUI, cmd = m.cloneUI.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			return m, cmd
+		}
+		return m, nil
 	}
 
 	// Context menu: hover to highlight, click to execute, click elsewhere to close
@@ -1537,11 +1680,18 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				case ui.ZoneExplorerRow:
 					m.explorer.FocusSheet = true
 					m.explorer.SelectedWT = z.WTIdx
-				case ui.ZoneExplorerAction, ui.ZoneExplorerNew:
+				case ui.ZoneExplorerAction, ui.ZoneExplorerNew, ui.ZoneClone:
 					m.hoveredBtn = z.Button
 				}
 			}
 			return m, nil
+		}
+
+		// Board clone tile hover
+		for _, z := range m.gridResult.HitZones {
+			if z.Type == ui.ZoneClone && x >= z.X && x < z.X+z.W && virtualY >= z.Y && virtualY < z.Y+z.H {
+				m.hoveredBtn = ui.BtnClone
+			}
 		}
 
 		// Hit test grid (using virtual Y)
@@ -1750,6 +1900,8 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return explorerAction(m, z.Button)
 				case ui.ZoneExplorerNew:
 					return m.openCreateModalFor(z.RepoIdx)
+				case ui.ZoneClone:
+					return m.openCloneBrowser()
 				}
 			}
 			return m, nil
@@ -1770,6 +1922,11 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				logFn, startCmd := m.beginOp("Migrating "+repo.Name+"...", lock...)
 				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config, lock))
 			}
+		}
+
+		// Clone tile click (Board)
+		if m.hoveredBtn == ui.BtnClone {
+			return m.openCloneBrowser()
 		}
 
 		// Context menu trigger [▸] — open context menu (not for migration cards).
@@ -1965,6 +2122,11 @@ func (m Model) View() string {
 	if m.settings.Active {
 		dialog := m.settings.View(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Clone browser
+	if m.cloneUI.Active {
+		return paintBlack(placeDialog(m.cloneUI.View()), m.width, m.height)
 	}
 
 	// Create worktree modal
@@ -2308,7 +2470,7 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 	resolve := basisResolver(cfg)
 	return func() tea.Msg {
 		repos := git.DiscoverRepos(workDir, resolve)
-		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions()}
+		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: ghAvailability()}
 	}
 }
 

@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"lts-revamp/internal/config"
+	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
 	"lts-revamp/internal/version"
@@ -249,12 +250,22 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 		tmuxStatus = "not found ✗ — install tmux or set Multiplexer to none"
 	}
 
+	ghStatus := "not installed (optional — enables clone browser)"
+	if v, ok := gh.Version(); ok {
+		if gh.Authed() {
+			ghStatus = v + " ✓ authenticated"
+		} else {
+			ghStatus = v + " — not authenticated, run gh auth login"
+		}
+	}
+
 	return []SettingsItem{
 		{Label: "Git", Key: "DIAG_GIT", Value: gitStatus, Kind: SettingDisplay},
 		{Label: "Working Directory", Key: "DIAG_WORKDIR", Value: shortenHome(s.Config.WorkDir), Kind: SettingDisplay},
 		{Label: "Repositories", Key: "DIAG_REPOS", Value: repoStatus, Kind: SettingDisplay},
 		{Label: "Config File", Key: "DIAG_CONFIG", Value: configStatus, Kind: SettingDisplay},
 		{Label: "Tmux", Key: "DIAG_TMUX", Value: tmuxStatus, Kind: SettingDisplay},
+		{Label: "GitHub CLI", Key: "DIAG_GH", Value: ghStatus, Kind: SettingDisplay},
 		{Label: "Build", Key: "DIAG_BUILD", Value: build, Kind: SettingDisplay},
 		{Label: "Binary", Key: "DIAG_BINARY", Value: binPath, Kind: SettingDisplay},
 		{Label: "Last Update Check", Key: "DIAG_UPDATE", Value: formatLastRefresh(s.Config.Global.LastUpdateCheck), Kind: SettingDisplay},

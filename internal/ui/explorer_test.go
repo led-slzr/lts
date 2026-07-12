@@ -27,7 +27,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 0, SelectedWT: 1, FocusSheet: true}
 	yOffset := 8
-	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil)
+	res := LayoutExplorer(repos, 100, yOffset, 20, st, BtnNone, nil, nil, CloneReady)
 
 	lines := strings.Split(res.View, "\n")
 	rowText := func(y int) string {
@@ -105,7 +105,7 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 func TestExplorerMonorepoActions(t *testing.T) {
 	repos := explorerTestRepos()
 	st := ExplorerState{SelectedRepo: 2, SelectedWT: 0, FocusSheet: true}
-	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil)
+	res := LayoutExplorer(repos, 100, 8, 20, st, BtnNone, nil, nil, CloneReady)
 	actions := 0
 	for _, z := range res.HitZones {
 		if z.Type == ZoneExplorerAction {
