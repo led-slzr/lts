@@ -1360,9 +1360,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Clone error: " + msg.Err.Error()
 		} else {
 			m.statusMsg = "Cloned " + msg.RepoName
-			// A hibernate env backup for this repo? Offer it back.
+			// A hibernate env backup for this repo? Offer it back. Never
+			// clobber a prompt another clone already raised — point at the
+			// backup instead so the offer isn't silently lost.
 			if dir, mainN, wtN, ok := git.LatestEnvBackup(envBackupRoot(), msg.RepoName); ok {
-				if mainN > 0 {
+				if mainN > 0 && m.envRestoreActive {
+					m.statusMsg += " · .env backup available at " + dir
+				} else if mainN > 0 {
 					m.envRestoreActive = true
 					m.envRestoreRepo = msg.RepoName
 					m.envRestoreDir = dir
@@ -1458,6 +1462,25 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.settings, cmd = m.settings.Update(msg)
 		m.syncSettingsConfig()
 		return m, cmd
+	}
+
+	// Post-clone env restore prompt: Y/N click (matches key priority —
+	// after settings, before every other surface)
+	if m.envRestoreActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderEnvRestoreDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				}
+				return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+			}
+		}
+		return m, nil
 	}
 
 	// Clone browser: hover/click repo rows, wheel scrolls
@@ -1605,23 +1628,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.hibernateActive {
-		return m, nil
-	}
-
-	if m.envRestoreActive {
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			modal := m.renderEnvRestoreDialog()
-			_, modalTop, modalH := modalMetrics(modal, m.height)
-			ynY := modalTop + modalH - 3
-			if msg.Y == ynY {
-				modalLeft := (m.width - lipgloss.Width(modal)) / 2
-				relX := msg.X - modalLeft
-				if relX >= 0 && relX < 20 {
-					return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-				}
-				return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-			}
-		}
 		return m, nil
 	}
 
@@ -2399,15 +2405,17 @@ func (m Model) View() string {
 		return paintBlack(placeDialog(m.renderHibernateDialog()), m.width, m.height)
 	}
 
-	// Post-clone env restore prompt
-	if m.envRestoreActive {
-		return paintBlack(placeDialog(m.renderEnvRestoreDialog()), m.width, m.height)
-	}
-
 	// Settings
 	if m.settings.Active {
 		dialog := m.settings.View(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Post-clone env restore prompt. Deliberately below settings: a clone
+	// finishing in the background can raise this while settings is open,
+	// and settings owns the keys — the prompt waits its turn.
+	if m.envRestoreActive {
+		return paintBlack(placeDialog(m.renderEnvRestoreDialog()), m.width, m.height)
 	}
 
 	// Clone browser
