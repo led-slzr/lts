@@ -17,19 +17,9 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleThemeStudioKey(m, msg)
 	}
 
-	// If open prompt is active
-	if m.openPromptActive {
-		return handleOpenPromptKey(m, msg)
-	}
-
 	// If the hibernate dialog is active
 	if m.hibernateActive {
 		return handleHibernateKey(m, msg)
-	}
-
-	// If the post-clone env restore prompt is active
-	if m.envRestoreActive {
-		return handleEnvRestoreKey(m, msg)
 	}
 
 	// If context menu is active
@@ -64,6 +54,17 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	// If rename input is active, delegate to rename
 	if m.renameActive {
 		return handleRenameKey(m, msg)
+	}
+
+	// Background-raised prompts rank BELOW every user-opened dialog in all
+	// three routing layers (keys, mouse, render): a create or clone can
+	// finish while any dialog is open, and the prompt must wait its turn
+	// rather than steal input from (or hide behind) what the user sees.
+	if m.openPromptActive {
+		return handleOpenPromptKey(m, msg)
+	}
+	if m.envRestoreActive {
+		return handleEnvRestoreKey(m, msg)
 	}
 
 	// Explorer navigation intercepts movement keys; everything else falls

@@ -371,3 +371,63 @@ func TestOpenPromptDefersToSettings(t *testing.T) {
 		t.Fatal("prompt should render once settings closes")
 	}
 }
+
+// Background prompts rank below EVERY user-opened dialog, not just
+// settings: a create finishing while a delete confirmation is open must
+// leave the delete dialog in charge of keys and the screen.
+func TestOpenPromptDefersToDeleteDialog(t *testing.T) {
+	m := hibernateTestModel()
+	m.deleteConfirmActive = true
+	m.deleteRepo = m.repos[0]
+	m.deleteWT = git.Worktree{Name: "feat/x", Branch: "feat/x", Path: "/x/core-lts/core-feat-x"}
+
+	updated, _ := m.Update(CreateDoneMsg{
+		Results: []*git.CreateResult{{RepoName: "goforms", Branch: "feat/y", WorktreePath: "/x/goforms-lts/goforms-feat-y"}},
+		Branch:  "feat/y", Locked: []string{"goforms"},
+	})
+	m2 := updated.(Model)
+	m2.recomputeLayout()
+	view := stripStudioANSI(m2.View())
+	if !strings.Contains(view, "Delete Worktree") || strings.Contains(view, "Worktree Created") {
+		t.Fatal("delete dialog must stay on top of the background prompt")
+	}
+	// 'n' goes to the delete dialog (cancel), not the prompt.
+	updated, _ = m2.Update(key("n"))
+	m3 := updated.(Model)
+	if m3.deleteConfirmActive {
+		t.Fatal("n should cancel the delete dialog")
+	}
+	if !m3.openPromptActive || !strings.Contains(stripStudioANSI(m3.View()), "Worktree Created") {
+		t.Fatal("the prompt should take the screen once the delete dialog closes")
+	}
+}
+
+// Same rule for the env restore prompt vs the context menu.
+func TestEnvRestoreDefersToContextMenu(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p := filepath.Join(home, ".config", "lts", "env-backup", "core", "20260701-120000", ".env")
+	os.MkdirAll(filepath.Dir(p), 0755)
+	os.WriteFile(p, []byte("X=1\n"), 0600)
+
+	m := hibernateTestModel()
+	m.contextMenu = ui.ContextMenuModel{Active: true, Items: ui.RepoContextItems(false, false)}
+	m.menuRepo = m.repos[1]
+
+	updated, _ := m.Update(CloneDoneMsg{RepoName: "core", Locked: []string{"core"}})
+	m2 := updated.(Model)
+	m2.recomputeLayout()
+	view := stripStudioANSI(m2.View())
+	if !strings.Contains(view, "Actions") || strings.Contains(view, "Restore .env backup?") {
+		t.Fatal("context menu must stay on top of the background prompt")
+	}
+	// esc goes to the menu, then the prompt appears.
+	updated, _ = m2.Update(key("esc"))
+	m3 := updated.(Model)
+	if m3.contextMenu.Active {
+		t.Fatal("esc should close the context menu")
+	}
+	if !m3.envRestoreActive || !strings.Contains(stripStudioANSI(m3.View()), "Restore .env backup?") {
+		t.Fatal("the prompt should take the screen once the menu closes")
+	}
+}

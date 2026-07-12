@@ -1529,49 +1529,6 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Open prompt: hover/click the IDE │ AI CLI │ Terminal options
-	// (after settings/studio, matching key and render priority)
-	if m.openPromptActive {
-		modal := m.renderOpenPromptDialog()
-		_, modalTop, modalH := modalMetrics(modal, m.height)
-		modalLeft := (m.width - lipgloss.Width(modal)) / 2
-		optionsY := modalTop + modalH - 5 // options line: above blank + hint line
-		m.openPromptHovered = -1
-		if msg.Y == optionsY {
-			relX := msg.X - modalLeft
-			for _, opt := range m.openPromptOptions() {
-				if relX >= opt.x && relX < opt.x+opt.w {
-					m.openPromptHovered = opt.usage
-					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-						m.openPromptSelection = opt.usage
-						return openCreatedWorkspaces(m, opt.usage)
-					}
-					break
-				}
-			}
-		}
-		return m, nil
-	}
-
-	// Post-clone env restore prompt: Y/N click (matches key priority —
-	// after settings, before every other surface)
-	if m.envRestoreActive {
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			modal := m.renderEnvRestoreDialog()
-			_, modalTop, modalH := modalMetrics(modal, m.height)
-			ynY := modalTop + modalH - 3
-			if msg.Y == ynY {
-				modalLeft := (m.width - lipgloss.Width(modal)) / 2
-				relX := msg.X - modalLeft
-				if relX >= 0 && relX < 20 {
-					return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-				}
-				return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-			}
-		}
-		return m, nil
-	}
-
 	// Clone browser: hover/click repo rows, wheel scrolls
 	if m.cloneUI.Active {
 		modal := m.cloneUI.View()
@@ -1846,6 +1803,47 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.renameRemoteBranch = !m.renameRemoteBranch
 					return m, nil
 				}
+			}
+		}
+		return m, nil
+	}
+
+	// Background-raised prompts: below every user-opened dialog in all
+	// three routing layers — they take the screen only once it's free.
+	if m.openPromptActive {
+		modal := m.renderOpenPromptDialog()
+		_, modalTop, modalH := modalMetrics(modal, m.height)
+		modalLeft := (m.width - lipgloss.Width(modal)) / 2
+		optionsY := modalTop + modalH - 5 // options line: above blank + hint line
+		m.openPromptHovered = -1
+		if msg.Y == optionsY {
+			relX := msg.X - modalLeft
+			for _, opt := range m.openPromptOptions() {
+				if relX >= opt.x && relX < opt.x+opt.w {
+					m.openPromptHovered = opt.usage
+					if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+						m.openPromptSelection = opt.usage
+						return openCreatedWorkspaces(m, opt.usage)
+					}
+					break
+				}
+			}
+		}
+		return m, nil
+	}
+
+	if m.envRestoreActive {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			modal := m.renderEnvRestoreDialog()
+			_, modalTop, modalH := modalMetrics(modal, m.height)
+			ynY := modalTop + modalH - 3
+			if msg.Y == ynY {
+				modalLeft := (m.width - lipgloss.Width(modal)) / 2
+				relX := msg.X - modalLeft
+				if relX >= 0 && relX < 20 {
+					return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+				}
+				return handleEnvRestoreKey(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
 			}
 		}
 		return m, nil
@@ -2478,20 +2476,6 @@ func (m Model) View() string {
 		return paintBlack(dialog, m.width, m.height)
 	}
 
-	// Open-workspace prompt. Below settings/studio for the same reason as
-	// the env restore prompt: a create finishing in the background can
-	// raise it while they're open — it waits its turn.
-	if m.openPromptActive {
-		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
-	}
-
-	// Post-clone env restore prompt. Deliberately below settings: a clone
-	// finishing in the background can raise this while settings is open,
-	// and settings owns the keys — the prompt waits its turn.
-	if m.envRestoreActive {
-		return paintBlack(placeDialog(m.renderEnvRestoreDialog()), m.width, m.height)
-	}
-
 	// Clone browser
 	if m.cloneUI.Active {
 		return paintBlack(placeDialog(m.cloneUI.View()), m.width, m.height)
@@ -2501,6 +2485,15 @@ func (m Model) View() string {
 	if m.modal.Active {
 		dialog := m.modal.ViewPlaced(m.width, m.height)
 		return paintBlack(dialog, m.width, m.height)
+	}
+
+	// Background-raised prompts render below every user-opened dialog —
+	// same rank they hold in the key and mouse layers.
+	if m.openPromptActive {
+		return paintBlack(placeDialog(m.renderOpenPromptDialog()), m.width, m.height)
+	}
+	if m.envRestoreActive {
+		return paintBlack(placeDialog(m.renderEnvRestoreDialog()), m.width, m.height)
 	}
 
 	return paintBlack(content, m.width, m.height)
