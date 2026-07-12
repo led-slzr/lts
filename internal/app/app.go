@@ -194,7 +194,7 @@ func NewModel(cfg config.Config) Model {
 		initialLoad:       true,
 		loaderTicking:     true, // Init issues the first tick
 		greeting:          pickGreeting(),
-		ghState:           ghAvailability(),
+		ghState:           ghAvailability(cfg.Global.GithubIntegration),
 		busy:              make(map[string]string),
 		sizeCache:         make(map[string]sizeEntry),
 		logPanel:          ui.NewLogPanel(),
@@ -652,7 +652,12 @@ func cloneRepoCmd(logFn git.LogFunc, nameWithOwner, workDir string, locked []str
 
 // ghAvailability maps gh's install/auth state for the clone surfaces.
 // Spawns subprocesses — call from goroutines or one-shot paths only.
-func ghAvailability() ui.CloneAvail {
+// enabled=false (the Settings master switch) hides every GitHub surface
+// and skips the subprocess probes entirely.
+func ghAvailability(enabled bool) ui.CloneAvail {
+	if !enabled {
+		return ui.CloneDisabled
+	}
 	if !gh.Available() {
 		return ui.CloneMissing
 	}
@@ -665,6 +670,10 @@ func ghAvailability() ui.CloneAvail {
 // openCloneBrowser opens the clone modal with the cached list (refreshing
 // in the background when stale) or a fresh fetch.
 func (m Model) openCloneBrowser() (Model, tea.Cmd) {
+	if !m.config.Global.GithubIntegration {
+		m.statusMsg = "GitHub integration is disabled in Settings"
+		return m, clearStatusCmd()
+	}
 	if !gh.Available() {
 		m.statusMsg = "GitHub CLI not found — install gh (brew install gh) and run gh auth login"
 		return m, clearStatusCmd()
@@ -795,7 +804,7 @@ func (m *Model) recomputeLayout() {
 		Layout:             m.config.Global.Layout,
 		HoveredView:        m.hoveredView,
 		Greeting:           m.greeting,
-		GhUser:             m.ghUser,
+		GhUser:             m.headerGhUser(),
 		GhUserHovered:      m.ghUserHover,
 		DiskUsed:           m.diskUsed,
 		DiskTotal:          m.diskTotal,
@@ -892,7 +901,7 @@ func (m Model) Init() tea.Cmd {
 		listenForLogs(m.logChan), // persistent listener for all operations
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
 	}
-	if gh.Available() {
+	if m.config.Global.GithubIntegration && gh.Available() {
 		cmds = append(cmds, ghUserCmd())
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
@@ -2762,10 +2771,11 @@ func doMigrationCmd(cfg *config.Config) tea.Cmd {
 func loadReposCmd(cfg *config.Config) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
+	ghEnabled := cfg.Global.GithubIntegration
 	return func() tea.Msg {
 		repos := git.DiscoverRepos(workDir, resolve)
 		used, total := diskUsage(workDir)
-		state := ghAvailability()
+		state := ghAvailability(ghEnabled)
 		var remotes map[string]bool
 		if state == ui.CloneReady {
 			remotes = make(map[string]bool)
@@ -2777,6 +2787,15 @@ func loadReposCmd(cfg *config.Config) tea.Cmd {
 		}
 		return ReposLoadedMsg{Repos: repos, TmuxLive: opener.LiveSessions(), GhState: state, DiskUsed: used, DiskTotal: total, GithubRemotes: remotes}
 	}
+}
+
+// headerGhUser is the login shown in the header — hidden whenever the
+// GitHub integration isn't live (disabled in Settings, or gh gone).
+func (m *Model) headerGhUser() string {
+	if m.ghState != ui.CloneReady {
+		return ""
+	}
+	return m.ghUser
 }
 
 // anyBusy reports whether any operation is running.

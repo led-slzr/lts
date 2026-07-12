@@ -70,6 +70,9 @@ func LayoutGrid(repos []git.Repo, termWidth int, gridYOffset int, focusedCard in
 	// The clone tile renders as one extra grid cell after the repos —
 	// hollowed out (with the reason) when gh isn't ready
 	totalCells := len(repos) + 1
+	if ghState == CloneDisabled {
+		totalCells = len(repos)
+	}
 
 	// Calculate columns
 	cols := availWidth / (MinCardWidth + CardGap)
@@ -398,6 +401,11 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn Hov
 	}
 
 	// Clone entry — the empty state is exactly when cloning matters most
+	if ghState == CloneDisabled {
+		content := strings.Join(lines, "\n")
+		view := lipgloss.NewStyle().Margin(GridMarginY, MarginH).Render(content)
+		return GridResult{View: view, HitZones: hitZones}
+	}
 	lines = append(lines, "")
 	switch ghState {
 	case CloneReady:
@@ -426,9 +434,10 @@ func renderEmptyState(termWidth, gridYOffset, hoveredHistory int, hoveredBtn Hov
 type CloneAvail int
 
 const (
-	CloneReady   CloneAvail = iota
-	CloneNoAuth             // gh installed but not authenticated
-	CloneMissing            // gh not installed
+	CloneReady    CloneAvail = iota
+	CloneNoAuth              // gh installed but not authenticated
+	CloneMissing             // gh not installed
+	CloneDisabled            // GitHub integration turned off in Settings — no surfaces at all
 )
 
 // renderCloneTile draws the "+ Clone a Repo" grid cell. When gh isn't

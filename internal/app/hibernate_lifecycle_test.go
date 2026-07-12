@@ -40,6 +40,11 @@ func TestCanHibernateGates(t *testing.T) {
 		t.Error("hibernate is opt-in — the default-off setting must gate it")
 	}
 	m.config.Global.EnableHibernate = true
+	m.ghState = ui.CloneDisabled
+	if m.canHibernate(m.repos[0]) {
+		t.Error("the GitHub Integration master toggle must gate hibernate too")
+	}
+	m.ghState = ui.CloneReady
 	if m.canHibernate(m.repos[2]) {
 		t.Error("monorepo cards must never be hibernatable")
 	}

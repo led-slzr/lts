@@ -13,27 +13,28 @@ import (
 // GlobalConfig holds settings that apply regardless of working directory.
 // Stored at ~/.config/lts/config
 type GlobalConfig struct {
-	IDECommand       string // windsurf, code, cursor, zed
-	AICliCommand     string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager   string // pnpm, npm, yarn, bun
-	AutoRefresh      string // 30M, 1H, 24H, etc.
-	Terminal         string // ghostty, iterm, terminal, wezterm, alacritty
-	Multiplexer      string // none, tmux — session layer inside the terminal
-	TmuxAIPaneWidth  int    // AI pane width as % of the window (tmux sessions)
-	TmuxRightPanes   int    // stacked panes in the right column (tmux sessions)
-	Layout           string // main view layout: board, explorer
-	SortOrder        string // repo/worktree ordering: activity, created, name
-	DoneSound        string // completion sound: off, glass, submarine, ping, pop, hero, bell
-	AutoCleanModules string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
-	AutoKillTmux     string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
-	CheckForUpdates  bool   // daily check for new releases
-	AutoUpdate       bool   // automatically install new releases in background
-	OpenEnvInIDE     bool   // auto-open .env files when opening workspace
-	InstallOnCreate  bool   // default for the package-install toggle when creating worktrees
-	CopyEnvFiles     bool   // copy .env* files into new worktrees
-	CopyMCPJson      bool   // copy .mcp.json files into new worktrees
-	EnableHibernate  bool   // show the destructive Hibernate Repo action (opt-in)
-	LastUpdateCheck  int64  // unix timestamp of last update check
+	IDECommand        string // windsurf, code, cursor, zed
+	AICliCommand      string // claude, opencode, "claude --dangerously-skip-permissions"
+	PackageManager    string // pnpm, npm, yarn, bun
+	AutoRefresh       string // 30M, 1H, 24H, etc.
+	Terminal          string // ghostty, iterm, terminal, wezterm, alacritty
+	Multiplexer       string // none, tmux — session layer inside the terminal
+	TmuxAIPaneWidth   int    // AI pane width as % of the window (tmux sessions)
+	TmuxRightPanes    int    // stacked panes in the right column (tmux sessions)
+	Layout            string // main view layout: board, explorer
+	SortOrder         string // repo/worktree ordering: activity, created, name
+	DoneSound         string // completion sound: off, glass, submarine, ping, pop, hero, bell
+	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
+	AutoKillTmux      string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
+	CheckForUpdates   bool   // daily check for new releases
+	AutoUpdate        bool   // automatically install new releases in background
+	OpenEnvInIDE      bool   // auto-open .env files when opening workspace
+	InstallOnCreate   bool   // default for the package-install toggle when creating worktrees
+	CopyEnvFiles      bool   // copy .env* files into new worktrees
+	CopyMCPJson       bool   // copy .mcp.json files into new worktrees
+	EnableHibernate   bool   // show the destructive Hibernate Repo action (opt-in)
+	GithubIntegration bool   // gh-powered surfaces: clone browser, PRs, header login, hibernate
+	LastUpdateCheck   int64  // unix timestamp of last update check
 }
 
 // RepoLocalConfig holds per-repo settings.
@@ -52,27 +53,28 @@ type Config struct {
 
 func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
-		IDECommand:       "windsurf",
-		AICliCommand:     "claude",
-		PackageManager:   "pnpm",
-		AutoRefresh:      "OFF",
-		Terminal:         "terminal",
-		Multiplexer:      "none",
-		TmuxAIPaneWidth:  50,
-		TmuxRightPanes:   1,
-		Layout:           "board",
-		SortOrder:        "activity",
-		DoneSound:        "off",
-		AutoCleanModules: "OFF",
-		AutoKillTmux:     "OFF",
-		CheckForUpdates:  true,
-		AutoUpdate:       true,
-		OpenEnvInIDE:     true,
-		InstallOnCreate:  true,
-		CopyEnvFiles:     true,
-		CopyMCPJson:      false,
-		EnableHibernate:  false,
-		LastUpdateCheck:  0,
+		IDECommand:        "windsurf",
+		AICliCommand:      "claude",
+		PackageManager:    "pnpm",
+		AutoRefresh:       "OFF",
+		Terminal:          "terminal",
+		Multiplexer:       "none",
+		TmuxAIPaneWidth:   50,
+		TmuxRightPanes:    1,
+		Layout:            "board",
+		SortOrder:         "activity",
+		DoneSound:         "off",
+		AutoCleanModules:  "OFF",
+		AutoKillTmux:      "OFF",
+		CheckForUpdates:   true,
+		AutoUpdate:        true,
+		OpenEnvInIDE:      true,
+		InstallOnCreate:   true,
+		CopyEnvFiles:      true,
+		CopyMCPJson:       false,
+		EnableHibernate:   false,
+		GithubIntegration: true,
+		LastUpdateCheck:   0,
 	}
 }
 
@@ -285,6 +287,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("COPY_ENV_FILES=\"%t\"", c.Global.CopyEnvFiles),
 		fmt.Sprintf("COPY_MCP_JSON=\"%t\"", c.Global.CopyMCPJson),
 		fmt.Sprintf("ENABLE_HIBERNATE=\"%t\"", c.Global.EnableHibernate),
+		fmt.Sprintf("GITHUB_INTEGRATION=\"%t\"", c.Global.GithubIntegration),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -392,6 +395,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["ENABLE_HIBERNATE"]; ok {
 		g.EnableHibernate = v == "true"
+	}
+	if v, ok := kv["GITHUB_INTEGRATION"]; ok {
+		g.GithubIntegration = v != "false"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

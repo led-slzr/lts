@@ -169,6 +169,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
+				Value: boolToStr(s.Config.Global.GithubIntegration), Kind: SettingBool},
 			SettingsItem{Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
 				Value: boolToStr(s.Config.Global.EnableHibernate), Kind: SettingBool},
 		)
@@ -253,7 +255,9 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 	}
 
 	ghStatus := "not installed (optional — enables clone browser)"
-	if v, ok := gh.Version(); ok {
+	if !s.Config.Global.GithubIntegration {
+		ghStatus = "disabled in Settings → Preferences"
+	} else if v, ok := gh.Version(); ok {
 		if gh.Authed() {
 			ghStatus = v + " ✓ authenticated"
 		} else {
@@ -579,6 +583,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.CopyMCPJson = item.Value == "true"
 		case "ENABLE_HIBERNATE":
 			s.Config.Global.EnableHibernate = item.Value == "true"
+		case "GITHUB_INTEGRATION":
+			s.Config.Global.GithubIntegration = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {
