@@ -206,6 +206,8 @@ type HeaderOpts struct {
 	Layout             string // "board" or "explorer"
 	HoveredView        int    // -1 = none, 0 = Board, 1 = Explorer
 	Greeting           string // shown centered between the banner and the right block
+	GhUser             string // authenticated GitHub login ("" hides the line)
+	GhUserHovered      bool
 }
 
 func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, opts ...HeaderOpts) string {
@@ -260,11 +262,14 @@ func RenderHeader(width int, activeUsage opener.ClickUsage, labels UsageLabels, 
 	bannerLines = append(bannerLines, versionRendered)
 	banner := strings.Join(bannerLines, "\n")
 
-	// Render click usage toggle, view toggle, and status line
+	// Render click usage toggle, view toggle, status, and GitHub line
 	usageStr := renderClickUsage(activeUsage, labels, o.HoveredUsage)
 	viewStr := renderViewToggle(o.Layout, o.HoveredView)
 	statusLine := renderStatusLine(o.StatusMsg, o.Loading, o.Frame)
 	rightBlock := usageStr + "\n" + viewStr + "\n" + statusLine
+	if o.GhUser != "" {
+		rightBlock += "\n" + renderGhUserLine(o.GhUser, o.GhUserHovered)
+	}
 
 	// Position: banner center-left, usage+status top-right
 	layout := computeHeaderLayout(width, labels, o.UpdateAvailable)
@@ -421,4 +426,33 @@ func ViewToggleHitZones(termWidth int, labels UsageLabels, updateAvailable ...st
 		}
 	}
 	return y, zones
+}
+
+
+// ghUserLabel prefixes the GitHub line; shared with the hit zone below.
+const ghUserLabel = "Github: "
+
+// renderGhUserLine shows the authenticated GitHub login; the name is
+// clickable (opens the profile) and underlines on hover.
+func renderGhUserLine(login string, hovered bool) string {
+	label := lipgloss.NewStyle().Foreground(ColorDim).Background(ColorBlack).Render(ghUserLabel)
+	nameStyle := lipgloss.NewStyle().Foreground(ColorClean).Background(ColorBlack)
+	if hovered {
+		nameStyle = lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorBlack).Bold(true).Underline(true)
+	}
+	return label + nameStyle.Render(truncatePlain(login, 24))
+}
+
+// GhUserHitZone returns the clickable region of the GitHub login in the
+// header (one row below Status).
+func GhUserHitZone(termWidth int, labels UsageLabels, login string, updateAvailable ...string) (x, y, w int) {
+	ua := ""
+	if len(updateAvailable) > 0 {
+		ua = updateAvailable[0]
+	}
+	layout := computeHeaderLayout(termWidth, labels, ua)
+	y = 5 // usage=2, layout=3, status=4
+	x = layout.RightBlockX + lipgloss.Width(ghUserLabel)
+	w = lipgloss.Width(truncatePlain(login, 24))
+	return x, y, w
 }

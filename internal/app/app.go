@@ -124,6 +124,8 @@ type Model struct {
 	ghRepos     []gh.Repo
 	ghFetchedAt time.Time
 	ghState     ui.CloneAvail // cached availability (refreshed with discovery)
+	ghUser      string        // authenticated GitHub login (fetched once)
+	ghUserHover bool
 
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
@@ -673,6 +675,8 @@ func (m *Model) recomputeLayout() {
 		Layout:             m.config.Global.Layout,
 		HoveredView:        m.hoveredView,
 		Greeting:           m.greeting,
+		GhUser:             m.ghUser,
+		GhUserHovered:      m.ghUserHover,
 	})
 	m.headerH = lipgloss.Height(m.headerView)
 	yPos += m.headerH
@@ -758,6 +762,15 @@ func (m Model) Init() tea.Cmd {
 		loaderTickCmd(),
 		listenForLogs(m.logChan), // persistent listener for all operations
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
+	}
+	if gh.Available() {
+		cmds = append(cmds, func() tea.Msg {
+			login, err := gh.Login()
+			if err != nil {
+				return GhUserMsg{}
+			}
+			return GhUserMsg{Login: login}
+		})
 	}
 	if m.config.Global.CheckForUpdates && update.ShouldCheck(m.config.Global.LastUpdateCheck) {
 		// Dev builds never auto-replace themselves with the official binary —
@@ -1133,6 +1146,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusGen++
 		m.recomputeLayout()
 		return m, clearStatusAfter(m.statusGen, 5*time.Second)
+
+	case GhUserMsg:
+		m.ghUser = msg.Login
+		m.recomputeLayout()
+		return m, nil
 
 	case GhRepoListMsg:
 		if msg.Err == nil {
@@ -1628,6 +1646,19 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// GitHub login hover (line below Status)
+		prevGhHover := m.ghUserHover
+		m.ghUserHover = false
+		if m.ghUser != "" {
+			gx, gy, gw := ui.GhUserHitZone(m.width, m.usageLabels(), m.ghUser, m.updateAvailVersion)
+			if y == gy && x >= gx && x < gx+gw {
+				m.ghUserHover = true
+			}
+		}
+		if prevGhHover != m.ghUserHover {
+			m.recomputeLayout()
+		}
+
 		// Check view toggle hover (line below click usage)
 		prevHoveredView := m.hoveredView
 		m.hoveredView = -1
@@ -1813,6 +1844,16 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					m.recomputeLayout()
 					return m, clearStatusCmd()
 				}
+			}
+		}
+
+		// GitHub login click → open the profile
+		if m.ghUser != "" {
+			gx, gy, gw := ui.GhUserHitZone(m.width, m.usageLabels(), m.ghUser, m.updateAvailVersion)
+			if y == gy && x >= gx && x < gx+gw {
+				exec.Command("open", "https://github.com/"+m.ghUser).Start()
+				m.statusMsg = "Opened GitHub profile"
+				return m, clearStatusCmd()
 			}
 		}
 

@@ -124,7 +124,7 @@ func TestExplorerMonorepoActions(t *testing.T) {
 func TestViewToggleHitZonesMatchRender(t *testing.T) {
 	labels := UsageLabels{IDE: "Windsurf", AICli: "Claude", Terminal: "Ghostty"}
 	// Greeting fills the banner gap — it must never shift the right block
-	header := RenderHeader(120, 0, labels, HeaderOpts{Layout: "board", HoveredView: -1, Greeting: "Heyya Mark! Let's get worktree-ing"})
+	header := RenderHeader(120, 0, labels, HeaderOpts{Layout: "board", HoveredView: -1, Greeting: "Heyya Mark! Let's get worktree-ing", GhUser: "led-slzr"})
 	lines := strings.Split(header, "\n")
 
 	y, zones := ViewToggleHitZones(120, labels)
@@ -141,6 +141,24 @@ func TestViewToggleHitZonesMatchRender(t *testing.T) {
 		if seg != names[i] {
 			t.Errorf("view zone %d = %q, want %q (row %q)", i, seg, names[i], string(row))
 		}
+	}
+}
+
+// The GitHub login zone must land where the name renders.
+func TestGhUserHitZoneMatchesRender(t *testing.T) {
+	labels := UsageLabels{IDE: "Windsurf", AICli: "Claude", Terminal: "Ghostty"}
+	header := RenderHeader(120, 0, labels, HeaderOpts{Layout: "board", HoveredView: -1, GhUser: "led-slzr"})
+	lines := strings.Split(header, "\n")
+	x, y, w := GhUserHitZone(120, labels, "led-slzr")
+	if y >= len(lines) {
+		t.Fatalf("zone y=%d beyond header %d", y, len(lines))
+	}
+	row := []rune(stripANSITest(lines[y]))
+	if x+w > len(row) {
+		t.Fatalf("zone beyond row")
+	}
+	if got := string(row[x : x+w]); got != "led-slzr" {
+		t.Errorf("zone at x=%d got %q (row %q)", x, got, string(row))
 	}
 }
 

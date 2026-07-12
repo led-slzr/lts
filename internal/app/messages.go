@@ -71,6 +71,11 @@ type CleanModulesDoneMsg struct {
 	Err     error
 }
 
+// GhUserMsg carries the authenticated GitHub login (fetched once at startup).
+type GhUserMsg struct {
+	Login string
+}
+
 // GhRepoListMsg carries the cloneable-repo list fetched from GitHub.
 type GhRepoListMsg struct {
 	Repos []gh.Repo

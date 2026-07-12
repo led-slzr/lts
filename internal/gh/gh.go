@@ -39,6 +39,16 @@ func Version() (string, bool) {
 	return "", false
 }
 
+// Login returns the authenticated user's GitHub login. Network-bound —
+// call once from a command goroutine and cache.
+func Login() (string, error) {
+	out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output()
+	if err != nil {
+		return "", fmt.Errorf("gh api user failed")
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Repo is a cloneable repository visible to the authenticated user.
 type Repo struct {
 	NameWithOwner string    `json:"nameWithOwner"`
