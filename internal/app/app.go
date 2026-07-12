@@ -151,6 +151,9 @@ type Model struct {
 	sizeCache           map[string]sizeEntry
 	sizeScanning        bool
 
+	// Theme Studio (full-screen theme browser with live preview)
+	themeStudio ui.StudioModel
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -1004,6 +1007,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ui.SettingsActionMsg:
 		switch msg.Action {
+		case "THEME_STUDIO_ACTION":
+			return openThemeStudio(m)
 		case "CHECK_FOR_UPDATE_ACTION":
 			m.statusMsg = "Checking for updates..."
 			m.statusGen++
@@ -1513,6 +1518,10 @@ func modalMetrics(modalRendered string, screenH int) (contentStartY, modalTop, m
 }
 
 func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.themeStudio.Active {
+		return handleThemeStudioMouse(m, msg)
+	}
+
 	if m.settings.Active {
 		var cmd tea.Cmd
 		m.settings, cmd = m.settings.Update(msg)
@@ -2459,6 +2468,12 @@ func (m Model) View() string {
 	// Hibernate audit/confirm
 	if m.hibernateActive {
 		return paintBlack(placeDialog(m.renderHibernateDialog()), m.width, m.height)
+	}
+
+	// Theme Studio — full screen, renders in whichever theme the cursor
+	// is trying on (the screen is its own preview)
+	if m.themeStudio.Active {
+		return paintBlack(ui.RenderThemeStudio(m.themeStudio, m.width, m.height), m.width, m.height)
 	}
 
 	// Settings

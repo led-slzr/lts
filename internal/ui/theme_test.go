@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -88,4 +89,59 @@ func TestThemeBgSeq(t *testing.T) {
 	if got := ThemeBgSeq(); got != "\033[48;2;250;248;241m" {
 		t.Errorf("light canvas sequence wrong: %q", got)
 	}
+}
+
+// The studio's mouse hit-testing depends on the theme list starting at
+// StudioListStartY — pin the render geometry.
+func TestStudioRenderGeometry(t *testing.T) {
+	defer ApplyTheme(ClassicLTS)
+	st := NewThemeStudio("jela-my-love")
+	if Themes[st.Cursor].Key != "jela-my-love" {
+		t.Fatal("cursor should open on the current theme")
+	}
+	out := RenderThemeStudio(st, 110, 40)
+	lines := strings.Split(out, "\n")
+
+	// Theme row i renders at StudioListStartY+i.
+	for i, th := range Themes {
+		if !strings.Contains(stripANSI(lines[StudioListStartY+i]), th.Name) {
+			t.Errorf("theme %q not on line %d", th.Name, StudioListStartY+i)
+		}
+	}
+	plain := stripANSI(out)
+	for _, want := range []string{"Theme Studio", "sample-repo", "⚠ diverged", "merged, cleanable", "never pushed", "enter apply"} {
+		if !strings.Contains(plain, want) {
+			t.Errorf("studio render missing %q", want)
+		}
+	}
+	// The mini Board card renders at 40 rows (bordered corners present).
+	if !strings.Contains(plain, "╭") {
+		t.Error("mini board card should render at full height")
+	}
+	// At a short height the card drops but the strip stays.
+	short := stripANSI(RenderThemeStudio(st, 110, 24))
+	if strings.Contains(short, "╭") {
+		t.Error("mini card should drop on short terminals")
+	}
+	if !strings.Contains(short, "[r] Refresh") {
+		t.Error("footer strip must survive short terminals")
+	}
+}
+
+func stripANSI(s string) string {
+	var b strings.Builder
+	inEsc := false
+	for _, r := range s {
+		switch {
+		case inEsc:
+			if r == 'm' {
+				inEsc = false
+			}
+		case r == '\033':
+			inEsc = true
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }

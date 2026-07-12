@@ -165,6 +165,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Layout", Key: "LAYOUT",
 				Value: s.Config.Global.Layout, Kind: SettingEnum,
 				Options: []string{"board", "explorer"}},
+			SettingsItem{Label: "Theme", Key: "THEME_STUDIO_ACTION",
+				Value: ThemeByKey(s.Config.Global.Theme).Name + " — press enter to browse", Kind: SettingAction},
 			SettingsItem{Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
 				Value: s.Config.Global.AutoCleanModules, Kind: SettingEnum,
 				Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}},

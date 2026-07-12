@@ -12,6 +12,11 @@ import (
 )
 
 func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
+	// If the Theme Studio is active
+	if m.themeStudio.Active {
+		return handleThemeStudioKey(m, msg)
+	}
+
 	// If open prompt is active
 	if m.openPromptActive {
 		return handleOpenPromptKey(m, msg)
