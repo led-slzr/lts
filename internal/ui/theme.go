@@ -41,8 +41,108 @@ var ClassicLTS = Theme{
 	Changed: "#00CCCC", Special: "#CC55CC", Session: "#00CCCC",
 }
 
-// Themes is the registry, in studio display order.
-var Themes = []Theme{ClassicLTS}
+// LedThereBeLight is the light theme: warm paper, not clinical white —
+// every foreground deepened to hold contrast on a bright canvas.
+var LedThereBeLight = Theme{
+	Key: "led-there-be-light", Name: "Led There Be Light",
+	Bg: "#FBF8F1", Text: "#21201C", Dim: "#8C8577", Gray: "#C8C0AE", BtnBg: "#F0EBDE",
+	Accent: "#128A2E", AccentDark: "#1F6B33",
+	Clean: "#4E7A50", Danger: "#C4322C", Warn: "#A96A00", Info: "#1763C4",
+	Changed: "#0F7E8A", Special: "#A03296", Session: "#0C8577",
+}
+
+// JelaMyLove is the purple one — a love letter in twilight violet. Deep
+// plum canvas (warmer than black), moonlit lavender text, amethyst
+// accents, branches in soft orchid, danger in raspberry rose, and a
+// single spark of mint for the tmux dots. Gentle saturation throughout —
+// made to be looked at for hours.
+var JelaMyLove = Theme{
+	Key: "jela-my-love", Name: "Jela My Love",
+	Bg: "#191126", Text: "#F1E8FE", Dim: "#8578A6", Gray: "#453960", BtnBg: "#241A38",
+	Accent: "#C89BFA", AccentDark: "#5D3E8E",
+	Clean: "#A5B4FC", Danger: "#F97393", Warn: "#E7B96B", Info: "#86A8F8",
+	Changed: "#D3B3F5", Special: "#F49AD2", Session: "#86E8D0",
+}
+
+// Photosynthesis: deep forest — moss canvas, leaf accent, pollen warns,
+// sky-through-canopy info, wildflower special.
+var Photosynthesis = Theme{
+	Key: "photosynthesis", Name: "Photosynthesis",
+	Bg: "#0F1710", Text: "#E4EED8", Dim: "#71836B", Gray: "#35452F", BtnBg: "#16211A",
+	Accent: "#8FBF4D", AccentDark: "#3E6322",
+	Clean: "#6E9E58", Danger: "#E06C4B", Warn: "#D9A93F", Info: "#5FA8C9",
+	Changed: "#B4C95E", Special: "#C98BC9", Session: "#55BFA0",
+}
+
+// LightsOut: retro amber CRT — a phosphor ramp on true black, danger in
+// red-orange because even a Model 33 had an alarm light.
+var LightsOut = Theme{
+	Key: "lights-out", Name: "Lights Out",
+	Bg: "#000000", Text: "#FFB000", Dim: "#8A5E00", Gray: "#4A3300", BtnBg: "#120C00",
+	Accent: "#FFB000", AccentDark: "#5C4200",
+	Clean: "#D08E00", Danger: "#FF3D1F", Warn: "#FFD34D", Info: "#E0940A",
+	Changed: "#FFCB6B", Special: "#FF7A1A", Session: "#FFE39B",
+}
+
+// Dracula (draculatheme.com), mapped onto the LTS slots.
+var Dracula = Theme{
+	Key: "dracula", Name: "Dracula",
+	Bg: "#282A36", Text: "#F8F8F2", Dim: "#6272A4", Gray: "#44475A", BtnBg: "#21222C",
+	Accent: "#50FA7B", AccentDark: "#44475A",
+	Clean: "#69B076", Danger: "#FF5555", Warn: "#F1FA8C", Info: "#BD93F9",
+	Changed: "#8BE9FD", Special: "#FF79C6", Session: "#FFB86C",
+}
+
+// Nord (nordtheme.com) — polar night canvas, frost and aurora accents.
+var Nord = Theme{
+	Key: "nord", Name: "Nord",
+	Bg: "#2E3440", Text: "#ECEFF4", Dim: "#7B88A1", Gray: "#434C5E", BtnBg: "#3B4252",
+	Accent: "#A3BE8C", AccentDark: "#5E81AC",
+	Clean: "#8FA876", Danger: "#BF616A", Warn: "#EBCB8B", Info: "#81A1C1",
+	Changed: "#88C0D0", Special: "#B48EAD", Session: "#8FBCBB",
+}
+
+// GruvboxDark (github.com/morhetz/gruvbox) — retro warmth.
+var GruvboxDark = Theme{
+	Key: "gruvbox-dark", Name: "Gruvbox Dark",
+	Bg: "#282828", Text: "#EBDBB2", Dim: "#928374", Gray: "#504945", BtnBg: "#32302F",
+	Accent: "#B8BB26", AccentDark: "#665C54",
+	Clean: "#98971A", Danger: "#FB4934", Warn: "#FABD2F", Info: "#83A598",
+	Changed: "#8EC07C", Special: "#D3869B", Session: "#689D6A",
+}
+
+// CatppuccinMocha (catppuccin.com) — soothing pastels on mocha.
+var CatppuccinMocha = Theme{
+	Key: "catppuccin-mocha", Name: "Catppuccin Mocha",
+	Bg: "#1E1E2E", Text: "#CDD6F4", Dim: "#7F849C", Gray: "#45475A", BtnBg: "#181825",
+	Accent: "#A6E3A1", AccentDark: "#585B70",
+	Clean: "#8FCE9B", Danger: "#F38BA8", Warn: "#F9E2AF", Info: "#89B4FA",
+	Changed: "#94E2D5", Special: "#F5C2E7", Session: "#74C7EC",
+}
+
+// SolarizedLight (ethanschoonover.com/solarized) — the second light option.
+var SolarizedLight = Theme{
+	Key: "solarized-light", Name: "Solarized Light",
+	Bg: "#FDF6E3", Text: "#073642", Dim: "#93A1A1", Gray: "#CCC4B0", BtnBg: "#EEE8D5",
+	Accent: "#859900", AccentDark: "#586E75",
+	Clean: "#6E8000", Danger: "#DC322F", Warn: "#B58900", Info: "#268BD2",
+	Changed: "#2AA198", Special: "#D33682", Session: "#6C71C4",
+}
+
+// Themes is the registry, in studio display order: LTS originals first,
+// then the familiar palettes.
+var Themes = []Theme{
+	ClassicLTS,
+	LedThereBeLight,
+	JelaMyLove,
+	Photosynthesis,
+	LightsOut,
+	Dracula,
+	Nord,
+	GruvboxDark,
+	CatppuccinMocha,
+	SolarizedLight,
+}
 
 // CurrentTheme is the theme the UI is rendering with right now.
 var CurrentTheme = ClassicLTS
