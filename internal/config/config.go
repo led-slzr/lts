@@ -34,6 +34,8 @@ type GlobalConfig struct {
 	CopyMCPJson       bool   // copy .mcp.json files into new worktrees
 	EnableHibernate   bool   // show the destructive Hibernate Repo action (opt-in)
 	GithubIntegration bool   // gh-powered surfaces: clone browser, PRs, header login, hibernate
+	LaunchGreeting    bool   // greeting line in the header banner
+	SizeScanning      bool   // background worktree size scan (SIZE column, disk detail)
 	LastUpdateCheck   int64  // unix timestamp of last update check
 }
 
@@ -74,6 +76,8 @@ func DefaultGlobal() GlobalConfig {
 		CopyMCPJson:       false,
 		EnableHibernate:   false,
 		GithubIntegration: true,
+		LaunchGreeting:    true,
+		SizeScanning:      true,
 		LastUpdateCheck:   0,
 	}
 }
@@ -288,6 +292,8 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("COPY_MCP_JSON=\"%t\"", c.Global.CopyMCPJson),
 		fmt.Sprintf("ENABLE_HIBERNATE=\"%t\"", c.Global.EnableHibernate),
 		fmt.Sprintf("GITHUB_INTEGRATION=\"%t\"", c.Global.GithubIntegration),
+		fmt.Sprintf("LAUNCH_GREETING=\"%t\"", c.Global.LaunchGreeting),
+		fmt.Sprintf("SIZE_SCANNING=\"%t\"", c.Global.SizeScanning),
 		fmt.Sprintf("LAST_UPDATE_CHECK=\"%d\"", c.Global.LastUpdateCheck),
 	}
 	return os.WriteFile(GlobalConfigPath(), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -398,6 +404,12 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["GITHUB_INTEGRATION"]; ok {
 		g.GithubIntegration = v != "false"
+	}
+	if v, ok := kv["LAUNCH_GREETING"]; ok {
+		g.LaunchGreeting = v != "false"
+	}
+	if v, ok := kv["SIZE_SCANNING"]; ok {
+		g.SizeScanning = v != "false"
 	}
 	if v, ok := kv["LAST_UPDATE_CHECK"]; ok {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

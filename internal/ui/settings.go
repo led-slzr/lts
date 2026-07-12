@@ -162,6 +162,9 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
 				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
 				Options: []string{"activity", "created", "name"}},
+			SettingsItem{Label: "Layout", Key: "LAYOUT",
+				Value: s.Config.Global.Layout, Kind: SettingEnum,
+				Options: []string{"board", "explorer"}},
 			SettingsItem{Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
 				Value: s.Config.Global.AutoCleanModules, Kind: SettingEnum,
 				Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}},
@@ -169,6 +172,10 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
 			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
 				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Label: "Launch Greeting", Key: "LAUNCH_GREETING",
+				Value: boolToStr(s.Config.Global.LaunchGreeting), Kind: SettingBool},
+			SettingsItem{Label: "Worktree Size Scanning", Key: "SIZE_SCANNING",
+				Value: boolToStr(s.Config.Global.SizeScanning), Kind: SettingBool},
 			SettingsItem{Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
 				Value: boolToStr(s.Config.Global.GithubIntegration), Kind: SettingBool},
 			SettingsItem{Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
@@ -585,6 +592,12 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.EnableHibernate = item.Value == "true"
 		case "GITHUB_INTEGRATION":
 			s.Config.Global.GithubIntegration = item.Value == "true"
+		case "LAYOUT":
+			s.Config.Global.Layout = item.Value
+		case "LAUNCH_GREETING":
+			s.Config.Global.LaunchGreeting = item.Value == "true"
+		case "SIZE_SCANNING":
+			s.Config.Global.SizeScanning = item.Value == "true"
 		}
 		saveErr = s.Config.SaveGlobal()
 	} else {

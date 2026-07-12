@@ -215,7 +215,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 
 	// ---- Sheet ----
 	shInner := sheetW - 4
-	showSize := shInner >= 66 // widest column drops first
+	showSize := shInner >= 66 && sizes != nil // widest column drops first; nil = scanning off or no data yet
 	showAge := shInner >= 52
 	showTmux := shInner >= 44
 

@@ -193,7 +193,7 @@ func NewModel(cfg config.Config) Model {
 		hibernateInput:    hi,
 		initialLoad:       true,
 		loaderTicking:     true, // Init issues the first tick
-		greeting:          pickGreeting(),
+		greeting:          launchGreeting(cfg),
 		ghState:           ghAvailability(cfg.Global.GithubIntegration),
 		busy:              make(map[string]string),
 		sizeCache:         make(map[string]sizeEntry),
@@ -272,6 +272,15 @@ func weekendGreeting(name string) string {
 		}
 		return fmt.Sprintf("%d %s left till the weekend, %s, you got this", days, unit, name)
 	}
+}
+
+// launchGreeting honors the Launch Greeting setting (some want the jokes,
+// some want a quiet tool).
+func launchGreeting(cfg config.Config) string {
+	if !cfg.Global.LaunchGreeting {
+		return ""
+	}
+	return pickGreeting()
 }
 
 // pickGreeting composes a random launch greeting from the git user name.
@@ -560,8 +569,9 @@ func diskUsage(path string) (used, total uint64) {
 }
 
 // wtSizes projects the cache into the Explorer's SIZE column input.
+// nil (scanning disabled, or nothing scanned yet) hides the column.
 func (m *Model) wtSizes() map[string]ui.WTSize {
-	if len(m.sizeCache) == 0 {
+	if !m.config.Global.SizeScanning || len(m.sizeCache) == 0 {
 		return nil
 	}
 	out := make(map[string]ui.WTSize, len(m.sizeCache))
@@ -891,6 +901,12 @@ func (m *Model) syncSettingsConfig() {
 		m.config.Global = m.settings.Config.Global
 		m.config.Local = m.settings.Config.Local
 	}
+	// Toggling the greeting takes effect immediately, not next launch
+	if !m.config.Global.LaunchGreeting {
+		m.greeting = ""
+	} else if m.greeting == "" {
+		m.greeting = pickGreeting()
+	}
 }
 
 func (m Model) Init() tea.Cmd {
@@ -1034,7 +1050,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		// Background worktree size scan for anything stale (one walker)
 		var followUps []tea.Cmd
-		if !m.sizeScanning {
+		if m.config.Global.SizeScanning && !m.sizeScanning {
 			if stale := m.staleSizePaths(); len(stale) > 0 {
 				m.sizeScanning = true
 				followUps = append(followUps, scanSizesCmd(stale))
