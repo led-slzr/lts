@@ -13,26 +13,26 @@ import (
 // GlobalConfig holds settings that apply regardless of working directory.
 // Stored at ~/.config/lts/config
 type GlobalConfig struct {
-	IDECommand      string // windsurf, code, cursor, zed
-	AICliCommand    string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager  string // pnpm, npm, yarn, bun
-	AutoRefresh     string // 30M, 1H, 24H, etc.
-	Terminal        string // ghostty, iterm, terminal, wezterm, alacritty
-	Multiplexer     string // none, tmux — session layer inside the terminal
-	TmuxAIPaneWidth int    // AI pane width as % of the window (tmux sessions)
-	TmuxRightPanes  int    // stacked panes in the right column (tmux sessions)
-	Layout          string // main view layout: board, explorer
-	SortOrder       string // repo/worktree ordering: activity, created, name
-	DoneSound       string // completion sound: off, glass, submarine, ping, pop, hero, bell
+	IDECommand       string // windsurf, code, cursor, zed
+	AICliCommand     string // claude, opencode, "claude --dangerously-skip-permissions"
+	PackageManager   string // pnpm, npm, yarn, bun
+	AutoRefresh      string // 30M, 1H, 24H, etc.
+	Terminal         string // ghostty, iterm, terminal, wezterm, alacritty
+	Multiplexer      string // none, tmux — session layer inside the terminal
+	TmuxAIPaneWidth  int    // AI pane width as % of the window (tmux sessions)
+	TmuxRightPanes   int    // stacked panes in the right column (tmux sessions)
+	Layout           string // main view layout: board, explorer
+	SortOrder        string // repo/worktree ordering: activity, created, name
+	DoneSound        string // completion sound: off, glass, submarine, ping, pop, hero, bell
 	AutoCleanModules string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
 	AutoKillTmux     string // kill unattached idle tmux sessions: OFF, 8H, 1D, 3D, 7D
-	CheckForUpdates bool   // daily check for new releases
-	AutoUpdate      bool   // automatically install new releases in background
-	OpenEnvInIDE    bool   // auto-open .env files when opening workspace
-	InstallOnCreate bool   // default for the package-install toggle when creating worktrees
-	CopyEnvFiles    bool   // copy .env* files into new worktrees
-	CopyMCPJson     bool   // copy .mcp.json files into new worktrees
-	LastUpdateCheck int64  // unix timestamp of last update check
+	CheckForUpdates  bool   // daily check for new releases
+	AutoUpdate       bool   // automatically install new releases in background
+	OpenEnvInIDE     bool   // auto-open .env files when opening workspace
+	InstallOnCreate  bool   // default for the package-install toggle when creating worktrees
+	CopyEnvFiles     bool   // copy .env* files into new worktrees
+	CopyMCPJson      bool   // copy .mcp.json files into new worktrees
+	LastUpdateCheck  int64  // unix timestamp of last update check
 }
 
 // RepoLocalConfig holds per-repo settings.
@@ -51,26 +51,26 @@ type Config struct {
 
 func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
-		IDECommand:      "windsurf",
-		AICliCommand:    "claude",
-		PackageManager:  "pnpm",
-		AutoRefresh:     "OFF",
-		Terminal:        "terminal",
-		Multiplexer:     "none",
-		TmuxAIPaneWidth: 50,
-		TmuxRightPanes:  1,
-		Layout:          "board",
-		SortOrder:       "activity",
-		DoneSound:       "off",
+		IDECommand:       "windsurf",
+		AICliCommand:     "claude",
+		PackageManager:   "pnpm",
+		AutoRefresh:      "OFF",
+		Terminal:         "terminal",
+		Multiplexer:      "none",
+		TmuxAIPaneWidth:  50,
+		TmuxRightPanes:   1,
+		Layout:           "board",
+		SortOrder:        "activity",
+		DoneSound:        "off",
 		AutoCleanModules: "OFF",
 		AutoKillTmux:     "OFF",
-		CheckForUpdates: true,
-		AutoUpdate:      true,
-		OpenEnvInIDE:    true,
-		InstallOnCreate: true,
-		CopyEnvFiles:    true,
-		CopyMCPJson:     false,
-		LastUpdateCheck: 0,
+		CheckForUpdates:  true,
+		AutoUpdate:       true,
+		OpenEnvInIDE:     true,
+		InstallOnCreate:  true,
+		CopyEnvFiles:     true,
+		CopyMCPJson:      false,
+		LastUpdateCheck:  0,
 	}
 }
 
@@ -450,7 +450,7 @@ func HistoryPath() string {
 
 // HistoryEntry represents a previously-used LTS directory.
 type HistoryEntry struct {
-	Path     string
+	Path      string
 	RepoCount int
 }
 

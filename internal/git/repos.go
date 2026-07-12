@@ -40,9 +40,9 @@ type Repo struct {
 	Name       string
 	Path       string // empty for monorepo cards
 	MainBranch string
-	LTSDir     string // e.g. "repo-lts" or "core-erp-ui-lts"
-	LTSType    string // "single", "erp", "monorepo"
-	IsMonorepo bool   // true for multi-repo LTS cards
+	LTSDir     string   // e.g. "repo-lts" or "core-erp-ui-lts"
+	LTSType    string   // "single", "erp", "monorepo"
+	IsMonorepo bool     // true for multi-repo LTS cards
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
 

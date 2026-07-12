@@ -136,7 +136,7 @@ func generateUniqueName(baseName, parentDir string) string {
 // BranchInfo holds a branch name with its source and last commit date.
 type BranchInfo struct {
 	Name     string
-	IsLocal  bool // true = local, false = remote-only
+	IsLocal  bool   // true = local, false = remote-only
 	Date     string // formatted date string (e.g. "2025-03-28")
 	UnixTime int64  // for sorting by recency
 }
@@ -318,9 +318,9 @@ func CheckOngoingOperations(repoPath string) error {
 	}
 
 	checks := map[string]string{
-		"rebase-merge":  "rebase",
-		"rebase-apply":  "rebase",
-		"MERGE_HEAD":    "merge",
+		"rebase-merge":     "rebase",
+		"rebase-apply":     "rebase",
+		"MERGE_HEAD":       "merge",
 		"CHERRY_PICK_HEAD": "cherry-pick",
 	}
 	for file, op := range checks {
