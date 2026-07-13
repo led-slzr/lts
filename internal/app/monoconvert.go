@@ -267,6 +267,15 @@ func reduceCmd(logFn git.LogFunc, cfg *config.Config, subdirPath, branch string,
 
 // --- Rendering ---
 
+// clipLine keeps a dialog row on one line — ModalStyle wraps overflow,
+// which breaks the box border.
+func clipLine(s string, w int) string {
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	return lipgloss.NewStyle().MaxWidth(w).Render(s)
+}
+
 func (m Model) renderConvertDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorGreen).Background(ui.ColorBlack)
 	dimStyle := lipgloss.NewStyle().Foreground(ui.ColorDim).Background(ui.ColorBlack)
@@ -287,11 +296,13 @@ func (m Model) renderConvertDialog() string {
 		if c.AdoptPath != "" {
 			note = "adopts its existing " + m.convertWT.Branch
 		}
+		var line string
 		if i == m.convertCursor {
-			content += selStyle.Render("  ▸ "+box+" "+c.Name) + " " + dimStyle.Render("— "+note) + "\n"
+			line = selStyle.Render("  ▸ "+box+" "+c.Name) + " " + dimStyle.Render("— "+note)
 		} else {
-			content += "    " + whiteStyle.Render(box+" "+c.Name) + " " + dimStyle.Render("— "+note) + "\n"
+			line = "    " + whiteStyle.Render(box+" "+c.Name) + " " + dimStyle.Render("— "+note)
 		}
+		content += clipLine(line, 56) + "\n"
 	}
 	content += "\n" + dimStyle.Render("space toggle • enter convert • esc cancel")
 	return ui.ModalStyle.Width(60).Render(content)
@@ -320,11 +331,13 @@ func (m Model) renderReduceDialog() string {
 			fate = whiteStyle.Render("[keep]") + dimStyle.Render(" as single worktree · "+r.StatusText)
 		}
 		name := fmt.Sprintf("%-16s", r.Name)
+		var line string
 		if i == m.reduceCursor {
-			content += selStyle.Render("  ▸ "+name) + " " + fate + "\n"
+			line = selStyle.Render("  ▸ "+name) + " " + fate
 		} else {
-			content += "    " + whiteStyle.Render(name) + " " + fate + "\n"
+			line = "    " + whiteStyle.Render(name) + " " + fate
 		}
+		content += clipLine(line, 60) + "\n"
 	}
 	content += "\n" + dimStyle.Render("space keep/delete • enter split • esc cancel")
 	return ui.ModalStyle.Width(64).Render(content)

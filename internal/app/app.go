@@ -3199,7 +3199,9 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 
 func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
-	pm, aiCli, ide, openEnv := cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
+	// Resolve "auto" against the first constituent — a literal "auto" must
+	// never reach regenerated workspace files
+	pm, aiCli, ide, openEnv := resolvePMWith(cfg, repoNames[0]), cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
 		res, err := git.RenameMonorepoWorktrees(workDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
 			pm, aiCli, ide, openEnv, logFn)
