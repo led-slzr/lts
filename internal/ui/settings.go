@@ -156,65 +156,74 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 
 	switch s.ActiveTab {
 	case TabPreferences:
-		// Tool preferences — which commands LTS drives
+		// Grouped into titled sections — same mechanism the Worktrees tab
+		// uses, so scrolling and hit-testing stay lockstep-consistent.
+		const (
+			secTools      = "Tools"
+			secWorkflow   = "Workflow"
+			secAppearance = "Appearance"
+			secFeatures   = "Updates & Features"
+		)
 		s.Items = append(s.Items,
-			SettingsItem{Label: "IDE Command", Key: "IDE_COMMAND",
+			SettingsItem{Section: secTools, Label: "IDE Command", Key: "IDE_COMMAND",
 				Value: s.Config.Global.IDECommand, Kind: SettingEnum,
 				Options: []string{"windsurf", "code", "cursor", "zed"}},
-			SettingsItem{Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
+			SettingsItem{Section: secTools, Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
 				Value: s.Config.Global.AICliCommand, Kind: SettingText},
-			SettingsItem{Label: "Terminal", Key: "TERMINAL",
+			SettingsItem{Section: secTools, Label: "Terminal", Key: "TERMINAL",
 				Value: s.Config.Global.Terminal, Kind: SettingEnum,
 				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
-			SettingsItem{Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
+			SettingsItem{Section: secTools, Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
 				Value: s.Config.Global.Multiplexer, Kind: SettingEnum,
 				Options: []string{"none", "tmux"}},
 		)
 		if s.Config.Global.Multiplexer == "tmux" {
 			// Layout of newly created sessions (existing ones keep theirs)
 			s.Items = append(s.Items,
-				SettingsItem{Label: "Tmux AI Pane Width %", Key: "TMUX_AI_PANE_WIDTH",
+				SettingsItem{Section: secTools, Label: "Tmux AI Pane Width %", Key: "TMUX_AI_PANE_WIDTH",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxAIPaneWidth), Kind: SettingText},
-				SettingsItem{Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
+				SettingsItem{Section: secTools, Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxRightPanes), Kind: SettingEnum,
 					Options: []string{"1", "2", "3"}},
-				SettingsItem{Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
+				SettingsItem{Section: secTools, Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
 					Value: s.Config.Global.AutoKillTmux, Kind: SettingEnum,
 					Options: []string{"OFF", "8H", "1D", "3D", "7D"}},
 			)
 		}
 		s.Items = append(s.Items,
-			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
+			SettingsItem{Section: secWorkflow, Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
 				Options: []string{"auto", "pnpm", "npm", "yarn", "bun"}},
-			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
+			SettingsItem{Section: secWorkflow, Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
-			SettingsItem{Label: "Completion Sound", Key: "DONE_SOUND",
-				Value: s.Config.Global.DoneSound, Kind: SettingEnum,
-				Options: []string{"off", "glass", "submarine", "ping", "pop", "hero", "bell"}},
-			SettingsItem{Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
-				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
-				Options: []string{"activity", "created", "name"}},
-			SettingsItem{Label: "Layout", Key: "LAYOUT",
-				Value: s.Config.Global.Layout, Kind: SettingEnum,
-				Options: []string{"board", "explorer"}},
-			SettingsItem{Label: "Theme", Key: "THEME_STUDIO_ACTION",
-				Value: ThemeByKey(s.Config.Global.Theme).Name + " — press enter to browse", Kind: SettingAction},
-			SettingsItem{Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
+			SettingsItem{Section: secWorkflow, Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
 				Value: s.Config.Global.AutoCleanModules, Kind: SettingEnum,
 				Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}},
-			SettingsItem{Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
-				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
-			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
-				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
-			SettingsItem{Label: "Launch Greeting", Key: "LAUNCH_GREETING",
+			SettingsItem{Section: secWorkflow, Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
+				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
+				Options: []string{"activity", "created", "name"}},
+
+			SettingsItem{Section: secAppearance, Label: "Layout", Key: "LAYOUT",
+				Value: s.Config.Global.Layout, Kind: SettingEnum,
+				Options: []string{"board", "explorer"}},
+			SettingsItem{Section: secAppearance, Label: "Theme", Key: "THEME_STUDIO_ACTION",
+				Value: ThemeByKey(s.Config.Global.Theme).Name + " — press enter to browse", Kind: SettingAction},
+			SettingsItem{Section: secAppearance, Label: "Launch Greeting", Key: "LAUNCH_GREETING",
 				Value: boolToStr(s.Config.Global.LaunchGreeting), Kind: SettingBool},
-			SettingsItem{Label: "Worktree Size Scanning", Key: "SIZE_SCANNING",
+			SettingsItem{Section: secAppearance, Label: "Completion Sound", Key: "DONE_SOUND",
+				Value: s.Config.Global.DoneSound, Kind: SettingEnum,
+				Options: []string{"off", "glass", "submarine", "ping", "pop", "hero", "bell"}},
+			SettingsItem{Section: secAppearance, Label: "Worktree Size Scanning", Key: "SIZE_SCANNING",
 				Value: boolToStr(s.Config.Global.SizeScanning), Kind: SettingBool},
-			SettingsItem{Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
+
+			SettingsItem{Section: secFeatures, Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
+				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
+			SettingsItem{Section: secFeatures, Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
+				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Section: secFeatures, Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
 				Value: boolToStr(s.Config.Global.GithubIntegration), Kind: SettingBool},
-			SettingsItem{Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
+			SettingsItem{Section: secFeatures, Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
 				Value: boolToStr(s.Config.Global.EnableHibernate), Kind: SettingBool},
 		)
 	case TabWorkspace:
