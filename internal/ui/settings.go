@@ -6,6 +6,7 @@ import (
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
+	"lts-revamp/internal/tools"
 	"lts-revamp/internal/version"
 	"os"
 	"strconv"
@@ -35,6 +36,7 @@ type SettingsItem struct {
 	Kind     SettingKind
 	Options  []string // for Enum kind
 	RepoName string   // empty for global, repo name for local
+	Warn     string   // inline ⚠ note (e.g. "bun not found") — set by toolWarning
 }
 
 type SettingsModel struct {
@@ -115,6 +117,38 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	s.buildItems(repoNames)
 	return s
 }
+
+// toolWarning reports why a setting's current value won't work: the chosen
+// program isn't installed (or isn't on PATH where LTS can see it). Shown
+// inline in yellow so misconfigurations surface before anything is tried.
+func toolWarning(key, value string) string {
+	switch key {
+	case "IDE_COMMAND", "AI_CLI_COMMAND":
+		if value != "" && !tools.CommandPresent(value) {
+			return tools.FirstWord(value) + " not found"
+		}
+	case "TERMINAL":
+		if value != "" && !tools.TerminalPresent(value) {
+			return value + " not found"
+		}
+	case "TERMINAL_MULTIPLEXER":
+		if value == "tmux" && !TmuxAvailableFn() {
+			return "tmux not found"
+		}
+	case "PACKAGE_MANAGER":
+		if value != "auto" && value != "" && !tools.Has(value) {
+			return value + " not found"
+		}
+	case "REPO_PACKAGE_MANAGER":
+		if value != "default" && value != "" && !tools.Has(value) {
+			return value + " not found"
+		}
+	}
+	return ""
+}
+
+// TmuxAvailableFn is swappable for tests.
+var TmuxAvailableFn = opener.TmuxAvailable
 
 func (s *SettingsModel) buildItems(repoNames []string) {
 	s.Items = nil
@@ -221,6 +255,30 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 	case TabDiagnostics:
 		s.Items = append(s.Items, s.diagnosticItems()...)
 	}
+	for i := range s.Items {
+		s.Items[i].Warn = toolWarning(s.Items[i].Key, s.Items[i].Value)
+	}
+}
+
+// pmInventory summarizes every package manager LTS can drive: found ones
+// with versions, missing ones named — "this is what auto-detect can use".
+func pmInventory() string {
+	var have, missing []string
+	for _, info := range tools.PMVersions() {
+		if info.Version != "" {
+			have = append(have, info.Name+" "+info.Version)
+		} else {
+			missing = append(missing, info.Name)
+		}
+	}
+	switch {
+	case len(have) == 0:
+		return "none found ✗ — install one of pnpm/npm/yarn/bun"
+	case len(missing) == 0:
+		return strings.Join(have, " · ")
+	default:
+		return strings.Join(have, " · ") + "  (" + strings.Join(missing, ", ") + " not found)"
+	}
 }
 
 // diagnosticItems computes the health checks shown on the Diagnostics tab.
@@ -276,6 +334,7 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 
 	return []SettingsItem{
 		{Label: "Git", Key: "DIAG_GIT", Value: gitStatus, Kind: SettingDisplay},
+		{Label: "Package Managers", Key: "DIAG_PM", Value: pmInventory(), Kind: SettingDisplay},
 		{Label: "Working Directory", Key: "DIAG_WORKDIR", Value: shortenHome(s.Config.WorkDir), Kind: SettingDisplay},
 		{Label: "Repositories", Key: "DIAG_REPOS", Value: repoStatus, Kind: SettingDisplay},
 		{Label: "Config File", Key: "DIAG_CONFIG", Value: configStatus, Kind: SettingDisplay},
@@ -621,6 +680,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	if item.Key == "TERMINAL_MULTIPLEXER" {
 		// Reveal/hide the tmux layout settings
 		s.buildItems(s.RepoNames)
+	} else if s.CursorIdx < len(s.Items) {
+		s.Items[s.CursorIdx].Warn = toolWarning(item.Key, item.Value)
 	}
 	s.SaveStatus = "Saved!"
 	s.saveGen++
@@ -848,6 +909,12 @@ func (s SettingsModel) View(width, height int) string {
 		var valueFmt string
 		switch item.Kind {
 		case SettingEnum:
+			if item.Warn != "" {
+				// A warned row shows only its selected value — the option
+				// list would push the ⚠ past the modal's width
+				valueFmt = cyanStyle.Render("[" + item.Value + "]")
+				break
+			}
 			var opts []string
 			found := false
 			for _, opt := range item.Options {
@@ -880,10 +947,16 @@ func (s SettingsModel) View(width, height int) string {
 			valueFmt = dimStyle.Render(item.Value)
 		}
 
+		warnFmt := ""
+		if item.Warn != "" {
+			warnStyle := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack).Bold(true)
+			warnFmt = warnStyle.Render("  ⚠ " + item.Warn)
+		}
+
 		cursor := "  "
 		if isCursor {
 			cursor = "▸ "
-			line := activeStyle.Render(cursor+label+": ") + valueFmt
+			line := activeStyle.Render(cursor+label+": ") + valueFmt + warnFmt
 			if item.Kind == SettingEnum && !s.Editing {
 				line += editStyle.Render("  ⏎ cycle")
 			} else if item.Kind == SettingText && !s.Editing {
@@ -895,7 +968,7 @@ func (s SettingsModel) View(width, height int) string {
 			}
 			lines = append(lines, line)
 		} else {
-			line := dimStyle.Render(cursor) + whiteStyle.Render(label+": ") + valueFmt
+			line := dimStyle.Render(cursor) + whiteStyle.Render(label+": ") + valueFmt + warnFmt
 			lines = append(lines, line)
 		}
 	}
