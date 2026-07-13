@@ -31,6 +31,23 @@ func CommandPresent(cmdline string) bool {
 	return Has(fields[0])
 }
 
+// shellBuiltins are words valid in `sh -lc` scripts without being on PATH.
+var shellBuiltins = map[string]bool{
+	"cd": true, "export": true, "source": true, ".": true, "set": true,
+	"eval": true, "exec": true, "if": true, "for": true, "while": true,
+	"true": true, ":": true, "echo": true, "test": true, "[": true,
+}
+
+// ScriptRunnable reports whether a shell script's first word will resolve
+// when run via the user's shell — builtins count, PATH lookups count.
+func ScriptRunnable(cmdline string) bool {
+	first := FirstWord(cmdline)
+	if first == "" {
+		return false
+	}
+	return shellBuiltins[first] || Has(first)
+}
+
 // FirstWord returns the executable a command line starts with ("" if empty).
 func FirstWord(cmdline string) string {
 	fields := strings.Fields(cmdline)

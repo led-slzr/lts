@@ -282,3 +282,21 @@ func TestHibernateRepoWithoutLTSDir(t *testing.T) {
 		t.Fatal("repo dir should be removed")
 	}
 }
+
+// All-repo operations must leave hidden repos untouched — network included.
+func TestRefreshAllSkipsHiddenRepos(t *testing.T) {
+	scriptDir, repoPath := hibernateFixture(t, "core")
+	// Break core's remote: a refresh attempt would FAIL loudly.
+	gitRun(t, repoPath, "remote", "set-url", "origin", filepath.Join(scriptDir, "gone.git"))
+
+	skip := func(name string) bool { return name == "core" }
+	count, failed, err := RefreshAllRepos(scriptDir, func(string) string { return "main" }, skip)
+	if err != nil || len(failed) != 0 {
+		t.Fatalf("hidden repo must not be refreshed: count=%d failed=%v err=%v", count, failed, err)
+	}
+	// Without the skip it does fail — proving the skip is what protects it.
+	_, failed, _ = RefreshAllRepos(scriptDir, func(string) string { return "main" }, nil)
+	if len(failed) != 1 {
+		t.Fatalf("sanity: unskipped broken repo should fail, got %v", failed)
+	}
+}

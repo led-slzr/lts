@@ -527,7 +527,13 @@ func parseKeyValue(f *os.File) map[string]string {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		val := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		// Strip exactly the one wrapping quote pair SaveGlobal/SaveLocal
+		// write — never more, or values ending in a quote (setup scripts
+		// like `echo "done"`) get silently mangled on reload.
+		val := strings.TrimSpace(parts[1])
+		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = val[1 : len(val)-1]
+		}
 		kv[key] = val
 	}
 	return kv

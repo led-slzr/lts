@@ -144,7 +144,7 @@ func toolWarning(key, value string) string {
 			return value + " not found"
 		}
 	case "REPO_SETUP_SCRIPT":
-		if value != "" && !tools.CommandPresent(value) {
+		if value != "" && !tools.ScriptRunnable(value) {
 			return tools.FirstWord(value) + " not found"
 		}
 	}

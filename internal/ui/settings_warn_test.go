@@ -16,7 +16,9 @@ func TestToolWarningFlagsMissingPrograms(t *testing.T) {
 		{"REPO_PACKAGE_MANAGER", "default", ""}, // routed to global
 		{"REPO_PACKAGE_MANAGER", "missing-pm-xyz", "missing-pm-xyz not found"},
 		{"AI_CLI_COMMAND", "no-such-cli --flag", "no-such-cli not found"},
-		{"AI_CLI_COMMAND", "", ""},     // unset stays quiet
+		{"AI_CLI_COMMAND", "", ""},                             // unset stays quiet
+		{"REPO_SETUP_SCRIPT", "cd packages/api && pnpm i", ""}, // shell builtins are runnable
+		{"REPO_SETUP_SCRIPT", "no-such-tool-xyz build", "no-such-tool-xyz not found"},
 		{"IDE_COMMAND", "git", ""},     // present binary: no warn
 		{"SORT_ORDER", "activity", ""}, // non-tool keys never warn
 	}

@@ -1005,10 +1005,17 @@ func noopLog(_, _ string, _ bool) {}
 
 // RefreshAllRepos refreshes all repos in the script directory.
 // Returns (refreshed count, failed repo names, error).
-func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn ...LogFunc) (int, []string, error) {
+// SkipResolver reports repos an all-repo operation must leave alone
+// (hidden repos — the user marked them "don't touch"). nil = skip none.
+type SkipResolver func(repoName string) bool
+
+func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, skip SkipResolver, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
+	}
+	if skip == nil {
+		skip = func(string) bool { return false }
 	}
 
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
@@ -1017,14 +1024,14 @@ func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn
 	var lastErr error
 	total := 0
 	for _, r := range repos {
-		if !r.IsMonorepo {
+		if !r.IsMonorepo && !skip(r.Name) {
 			total++
 		}
 	}
 
 	idx := 0
 	for _, r := range repos {
-		if r.IsMonorepo {
+		if r.IsMonorepo || skip(r.Name) {
 			continue
 		}
 		idx++
@@ -1587,14 +1594,23 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 // Also cleans up workspace files and empty directories. Returns the count and
 // the paths of the deleted worktrees (so callers can release attached
 // resources like tmux sessions).
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, []string, error) {
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, skip SkipResolver, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
 	}
+	if skip == nil {
+		skip = func(string) bool { return false }
+	}
 
 	log("cleanup", "Discovering repos and scanning worktree statuses...", false)
-	repos := DiscoverRepos(scriptDir, getBasisBranch)
+	all := DiscoverRepos(scriptDir, getBasisBranch)
+	repos := all[:0]
+	for _, r := range all {
+		if r.IsMonorepo || !skip(r.Name) {
+			repos = append(repos, r)
+		}
+	}
 	cleaned := 0
 	var deletedPaths []string
 

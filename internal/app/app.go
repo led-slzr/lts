@@ -2847,6 +2847,18 @@ func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 	}
 }
 
+// hiddenResolver snapshots which repos are hidden (see basisResolver) —
+// all-repo operations must leave hidden repos untouched, network included.
+func hiddenResolver(cfg *config.Config) git.SkipResolver {
+	snap := make(map[string]bool, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.Hidden
+	}
+	return func(repoName string) bool {
+		return snap[strings.ToUpper(repoName)]
+	}
+}
+
 // pkgResolver snapshots the per-repo package-manager config (see
 // basisResolver). "auto" resolves per repo via lockfile/corepack detection
 // — inside the returned closure, so goroutines detect against the repo's
@@ -3088,8 +3100,9 @@ func (m *Model) beginOp(statusMsg string, lock ...string) (git.LogFunc, tea.Cmd)
 func refreshAllCmd(logFn git.LogFunc, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
+	skip := hiddenResolver(cfg)
 	return func() tea.Msg {
-		count, failed, err := git.RefreshAllRepos(workDir, resolve, logFn)
+		count, failed, err := git.RefreshAllRepos(workDir, resolve, skip, logFn)
 		return RefreshDoneMsg{Count: count, Failed: failed, Locked: locked, Err: err}
 	}
 }
@@ -3172,8 +3185,9 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, ins
 func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
+	skip := hiddenResolver(cfg)
 	return func() tea.Msg {
-		cleaned, deletedPaths, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
+		cleaned, deletedPaths, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, skip, logFn)
 		// Cleaned worktrees are gone — their tmux sessions must not linger
 		for _, p := range deletedPaths {
 			opener.KillSession(p)
