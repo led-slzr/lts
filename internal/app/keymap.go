@@ -296,7 +296,12 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 
 	case ui.BtnHibernate:
 		if !hasWT && m.canHibernate(repo) && !m.repoBusy(repo) {
-			return startHibernate(m, repo)
+			return startHibernate(m, repo, false)
+		}
+
+	case ui.BtnManualHibernate:
+		if !hasWT && m.canManualHibernate(repo) && !m.repoBusy(repo) {
+			return startHibernate(m, repo, true)
 		}
 
 	case ui.BtnConvertMono:

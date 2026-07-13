@@ -411,7 +411,7 @@ func TestEnvRestoreDefersToContextMenu(t *testing.T) {
 	os.WriteFile(p, []byte("X=1\n"), 0600)
 
 	m := hibernateTestModel()
-	m.contextMenu = ui.ContextMenuModel{Active: true, Items: ui.RepoContextItems(false, false, false, false)}
+	m.contextMenu = ui.ContextMenuModel{Active: true, Items: ui.RepoContextItems(false, false, false, false, false)}
 	m.menuRepo = m.repos[1]
 
 	updated, _ := m.Update(CloneDoneMsg{RepoName: "core", Locked: []string{"core"}})
@@ -429,5 +429,61 @@ func TestEnvRestoreDefersToContextMenu(t *testing.T) {
 	}
 	if !m3.envRestoreActive || !strings.Contains(stripStudioANSI(m3.View()), "Restore .env backup?") {
 		t.Fatal("the prompt should take the screen once the menu closes")
+	}
+}
+
+// Manual hibernate: offered exactly when the strict gate can't cover the
+// repo, checks are advisory, and confirmation is the repo's own name.
+func TestManualHibernateGatingAndConfirm(t *testing.T) {
+	m := hibernateTestModel()
+	// core is github+gh-ready → strict applies, manual doesn't.
+	if m.canManualHibernate(m.repos[0]) {
+		t.Error("strict-eligible repo must not offer manual")
+	}
+	// A non-GitHub repo gets manual (hibernate enabled).
+	m.githubRemotes["goforms"] = false
+	if !m.canManualHibernate(m.repos[1]) {
+		t.Error("non-GitHub repo should offer manual hibernate")
+	}
+	m.config.Global.EnableHibernate = false
+	if m.canManualHibernate(m.repos[1]) {
+		t.Error("manual is still behind the Enable Hibernate setting")
+	}
+	m.config.Global.EnableHibernate = true
+
+	// Open manual: blockers do NOT prevent confirmation, but the typed
+	// name must match.
+	m2, _ := startHibernate(m, m.repos[1], true)
+	blocked := git.HibernateAudit{RepoName: "goforms",
+		Checks: []git.HibernateCheck{{Label: "fetch failed", State: git.CheckFail}}}
+	updated, _ := m2.Update(HibernateAuditMsg{RepoName: "goforms", Audit: blocked, Locked: []string{"goforms"}})
+	m3 := updated.(Model)
+
+	m3.hibernateInput.SetValue("DELETE") // strict muscle-memory must not work
+	m4, cmd := handleHibernateKey(m3, key("enter"))
+	if !m4.hibernateActive || cmd != nil {
+		t.Fatal("manual confirm requires the repo name, not DELETE")
+	}
+	m4.hibernateInput.SetValue("GoForms") // case-insensitive name match
+	m5, cmd := handleHibernateKey(m4, key("enter"))
+	if m5.hibernateActive || cmd == nil {
+		t.Fatal("typed repo name must confirm despite advisory blockers")
+	}
+	if op := m5.busy["goforms"]; !strings.Contains(op, "Hibernating") {
+		t.Fatalf("lock label: %q", op)
+	}
+}
+
+// The strict dialog is unchanged: blockers still hard-block.
+func TestStrictHibernateStillBlocksWithManualCodePresent(t *testing.T) {
+	m := hibernateTestModel()
+	m2, _ := startHibernate(m, m.repos[0], false)
+	blocked := git.HibernateAudit{RepoName: "core",
+		Checks: []git.HibernateCheck{{Label: "x", State: git.CheckFail}}}
+	updated, _ := m2.Update(HibernateAuditMsg{RepoName: "core", Audit: blocked, Locked: []string{"core"}})
+	m3 := updated.(Model)
+	m3.hibernateInput.SetValue("core")
+	if m4, cmd := handleHibernateKey(m3, key("enter")); !m4.hibernateActive || cmd != nil {
+		t.Fatal("strict mode must ignore a repo-name confirmation")
 	}
 }

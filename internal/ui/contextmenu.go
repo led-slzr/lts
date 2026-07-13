@@ -39,7 +39,10 @@ func (menu ContextMenuModel) ItemsStartOffset() int {
 // the premise is that GitHub holds everything the local copy does).
 // canHide offers hiding (worktree-less repos only); a hidden repo is
 // display-only — its single action is coming back.
-func RepoContextItems(isMonorepo, canHibernate, canHide, hidden bool) []ContextMenuItem {
+// canManualHibernate offers the no-safety-net variant for repos the strict
+// gate can't cover (no gh, non-GitHub remote, no remote at all): same env
+// backup, advisory checks, repo-name typed confirmation.
+func RepoContextItems(isMonorepo, canHibernate, canManualHibernate, canHide, hidden bool) []ContextMenuItem {
 	if hidden {
 		return []ContextMenuItem{
 			{Label: "Unhide Repo", Action: BtnUnhideRepo},
@@ -56,6 +59,8 @@ func RepoContextItems(isMonorepo, canHibernate, canHide, hidden bool) []ContextM
 	}
 	if canHibernate {
 		items = append(items, ContextMenuItem{Label: "Hibernate Repo", Action: BtnHibernate})
+	} else if canManualHibernate {
+		items = append(items, ContextMenuItem{Label: "Hibernate Repo (manual)", Action: BtnManualHibernate})
 	}
 	if canHide {
 		items = append(items, ContextMenuItem{Label: "Hide Repo", Action: BtnHideRepo})
@@ -141,7 +146,7 @@ func RenderContextMenu(menu ContextMenuModel, screenWidth, screenHeight int) str
 	for i, item := range menu.Items {
 		if i == menu.CursorIdx {
 			lines = append(lines, cursorStyle.Render("▸ "+item.Label))
-		} else if item.Action == BtnDelete || item.Action == BtnHibernate {
+		} else if item.Action == BtnDelete || item.Action == BtnHibernate || item.Action == BtnManualHibernate {
 			lines = append(lines, deleteStyle.Render("  "+item.Label))
 		} else {
 			lines = append(lines, itemStyle.Render("  "+item.Label))

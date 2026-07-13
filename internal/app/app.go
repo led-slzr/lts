@@ -135,6 +135,7 @@ type Model struct {
 	// audit start until the dialog closes so nothing mutates it while the
 	// user reads the checklist
 	hibernateActive       bool
+	hibernateManual       bool // advisory checks, repo-name confirmation
 	hibernateRepo         git.Repo
 	hibernateAudit        *git.HibernateAudit // nil while the audit runs
 	hibernateAuditPending bool                // an audit goroutine is in flight
@@ -1469,7 +1470,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hibernateAuditPending = false
 		audit := msg.Audit
 		m.hibernateAudit = &audit
-		if audit.Blockers() == 0 {
+		if m.hibernateManual || audit.Blockers() == 0 {
 			m.hibernateInput.SetValue("")
 			m.hibernateInput.Focus()
 			return m, textinput.Blink
@@ -2965,7 +2966,7 @@ func (m *Model) creatableRepos() []git.Repo {
 func (m Model) openRepoMenu(repo git.Repo) Model {
 	m.contextMenu = ui.ContextMenuModel{
 		Active: true,
-		Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canHideRepo(repo), repo.Hidden),
+		Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canManualHibernate(repo), m.canHideRepo(repo), repo.Hidden),
 		Info:   ui.RepoMenuInfo(repo, m.config.GetRepoBasisBranch(repo.Name)),
 	}
 	m.menuRepo = repo

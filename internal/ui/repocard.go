@@ -59,6 +59,8 @@ const (
 
 	BtnConvertMono
 	BtnReduceMono
+
+	BtnManualHibernate
 )
 
 // innerWidth returns the usable content width inside a card.
