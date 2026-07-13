@@ -15,7 +15,7 @@ import (
 type GlobalConfig struct {
 	IDECommand        string // windsurf, code, cursor, zed
 	AICliCommand      string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager    string // pnpm, npm, yarn, bun
+	PackageManager    string // auto (detect per repo), pnpm, npm, yarn, bun
 	AutoRefresh       string // 30M, 1H, 24H, etc.
 	Terminal          string // ghostty, iterm, terminal, wezterm, alacritty
 	Multiplexer       string // none, tmux — session layer inside the terminal
@@ -59,7 +59,7 @@ func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
 		IDECommand:        "windsurf",
 		AICliCommand:      "claude",
-		PackageManager:    "pnpm",
+		PackageManager:    "auto",
 		AutoRefresh:       "OFF",
 		Terminal:          "terminal",
 		Multiplexer:       "none",

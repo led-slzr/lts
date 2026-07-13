@@ -31,8 +31,8 @@ func TestRepoPackageManagerOverride(t *testing.T) {
 	dir := t.TempDir()
 	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
 
-	if got := c.GetRepoPackageManager("core"); got != "pnpm" {
-		t.Errorf("expected global default pnpm, got %q", got)
+	if got := c.GetRepoPackageManager("core"); got != "auto" {
+		t.Errorf("expected global default auto, got %q", got)
 	}
 	if err := c.SetRepoPackageManager("core", "bun"); err != nil {
 		t.Fatal(err)
@@ -52,8 +52,8 @@ func TestRepoPackageManagerOverride(t *testing.T) {
 	if err := c.SetRepoPackageManager("core", ""); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.GetRepoPackageManager("core"); got != "pnpm" {
-		t.Errorf("expected fallback to pnpm after reset, got %q", got)
+	if got := c.GetRepoPackageManager("core"); got != "auto" {
+		t.Errorf("expected fallback to auto after reset, got %q", got)
 	}
 	reloaded = map[string]RepoLocalConfig{}
 	loadLocal(dir, reloaded)

@@ -152,7 +152,7 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 		s.Items = append(s.Items,
 			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
-				Options: []string{"pnpm", "npm", "yarn", "bun"}},
+				Options: []string{"auto", "pnpm", "npm", "yarn", "bun"}},
 			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},

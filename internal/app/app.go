@@ -11,6 +11,7 @@ import (
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
+	"lts-revamp/internal/tools"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 	"lts-revamp/internal/version"
@@ -745,7 +746,7 @@ func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
 		return m, nil
 	}
 	target := m.repos[repoIdx]
-	m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+	m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 	// Monorepo cards pre-select their constituent repos
 	want := map[string]bool{target.Name: true}
 	if target.IsMonorepo {
@@ -2253,7 +2254,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Create button (only when repos exist) — the modal opens anytime;
 		// busy conflicts are checked when creation is confirmed
 		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -2797,19 +2798,41 @@ func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 	}
 }
 
-// pkgResolver snapshots the per-repo package-manager config (see basisResolver).
+// pkgResolver snapshots the per-repo package-manager config (see
+// basisResolver). "auto" resolves per repo via lockfile/corepack detection
+// — inside the returned closure, so goroutines detect against the repo's
+// files without touching live config.
 func pkgResolver(cfg *config.Config) func(string) string {
 	def := cfg.Global.PackageManager
+	workDir := cfg.WorkDir
 	snap := make(map[string]string, len(cfg.Local))
 	for key, rc := range cfg.Local {
 		snap[key] = rc.PackageManager
 	}
 	return func(repoName string) string {
-		if pm, ok := snap[strings.ToUpper(repoName)]; ok && pm != "" {
-			return pm
+		pm, ok := snap[strings.ToUpper(repoName)]
+		if !ok || pm == "" {
+			pm = def
 		}
-		return def
+		if pm == "auto" {
+			return tools.DetectPM(filepath.Join(workDir, repoName))
+		}
+		return pm
 	}
+}
+
+// resolvePM resolves a repo's package manager to a concrete tool on the
+// Update thread (rebase, rename, modal display) — never returns "auto".
+func resolvePMWith(cfg *config.Config, repoName string) string {
+	pm := cfg.GetRepoPackageManager(repoName)
+	if pm == "auto" {
+		return tools.DetectPM(filepath.Join(cfg.WorkDir, repoName))
+	}
+	return pm
+}
+
+func (m *Model) resolvePM(repoName string) string {
+	return resolvePMWith(&m.config, repoName)
 }
 
 func checkMigrationCmd(cfg *config.Config) tea.Cmd {
@@ -3035,7 +3058,7 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked
 }
 
 func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
-	pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
+	pm := resolvePMWith(cfg, filepath.Base(repoPath))
 	aiCli, ide, openEnv := cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
 		res, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
