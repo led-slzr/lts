@@ -445,6 +445,12 @@ func TestManualHibernateGatingAndConfirm(t *testing.T) {
 	if !m.canManualHibernate(m.repos[1]) {
 		t.Error("non-GitHub repo should offer manual hibernate")
 	}
+	// ...but never with live worktrees — advisory checks can't guard them.
+	withWT := m.repos[1]
+	withWT.Worktrees = []git.Worktree{{Name: "feat/x"}}
+	if m.canManualHibernate(withWT) {
+		t.Error("manual hibernate must not be offered for repos with worktrees")
+	}
 	m.config.Global.EnableHibernate = false
 	if m.canManualHibernate(m.repos[1]) {
 		t.Error("manual is still behind the Enable Hibernate setting")

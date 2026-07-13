@@ -30,10 +30,15 @@ func (m *Model) canHibernate(repo git.Repo) bool {
 
 // canManualHibernate: the strict gate can't cover this repo (no gh, no
 // GitHub remote, maybe no remote at all) but the user still wants the env
-// backup + delete. Advisory checks, repo-name confirmation.
+// backup + delete. Advisory checks, repo-name confirmation — and only for
+// repos WITHOUT live worktrees: manual mode's checks don't block, so a
+// dirty worktree could be typed past. A repo with worktrees isn't "old";
+// delete or split them first. (Strict mode allows worktrees — its audit
+// hard-blocks anything unsafe.)
 func (m *Model) canManualHibernate(repo git.Repo) bool {
 	return m.config.Global.EnableHibernate &&
-		!repo.IsMonorepo && repo.Path != "" && !m.canHibernate(repo)
+		!repo.IsMonorepo && repo.Path != "" &&
+		len(repo.Worktrees) == 0 && !m.canHibernate(repo)
 }
 
 // envBackupRoot is where hibernate parks untracked env files, one
