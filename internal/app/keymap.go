@@ -107,7 +107,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "n":
 		if len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -249,6 +249,25 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			lock := lockSet(repo)
 			logFn, startCmd := m.beginOp("Cleaning modules in "+wt.Branch+"...", lock...)
 			return m, tea.Batch(startCmd, cleanModulesCmd(logFn, wt.Path, wt.Branch, lock))
+		}
+
+	case ui.BtnHideRepo, ui.BtnUnhideRepo:
+		if !hasWT && repo.Path != "" && !repo.IsMonorepo {
+			hide := action == ui.BtnHideRepo
+			if hide && len(repo.Worktrees) > 0 {
+				m.statusMsg = "Delete " + repo.Name + "'s worktrees first"
+				return m, clearStatusCmd()
+			}
+			if err := m.config.SetRepoHidden(repo.Name, hide); err != nil {
+				m.statusMsg = "Failed to save: " + err.Error()
+				return m, clearStatusCmd()
+			}
+			if hide {
+				m.statusMsg = "Hid " + repo.Name + " — Settings → Show Hidden Repos brings it back"
+			} else {
+				m.statusMsg = "Unhid " + repo.Name
+			}
+			return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
 		}
 
 	case ui.BtnHibernate:

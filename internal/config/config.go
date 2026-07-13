@@ -24,6 +24,7 @@ type GlobalConfig struct {
 	Layout            string // main view layout: board, explorer
 	ClickUsage        string // header click mode: ide, ai, terminal — restored on launch
 	Theme             string // color theme key (see internal/ui/theme.go registry)
+	ShowHiddenRepos   bool   // show hidden repos grayed out instead of omitting them
 	SortOrder         string // repo/worktree ordering: activity, created, name
 	DoneSound         string // completion sound: off, glass, submarine, ping, pop, hero, bell
 	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
@@ -46,6 +47,7 @@ type RepoLocalConfig struct {
 	BasisBranch    string // main, dev, master, etc.
 	PackageManager string // per-repo override; empty = use global default
 	SetupScript    string // optional post-create command, run in the new worktree ("" = none)
+	Hidden         bool   // hide this repo from the main view (unwanted folders like .nvm)
 	LastRefresh    int64  // unix timestamp
 }
 
@@ -69,6 +71,7 @@ func DefaultGlobal() GlobalConfig {
 		Layout:            "board",
 		ClickUsage:        "ide",
 		Theme:             "classic-lts",
+		ShowHiddenRepos:   false,
 		SortOrder:         "activity",
 		DoneSound:         "off",
 		AutoCleanModules:  "OFF",
@@ -225,6 +228,24 @@ func (c *Config) SetRepoPackageManager(repoName, pm string) error {
 	return c.SaveLocal()
 }
 
+// SetRepoHidden marks a repo hidden from (or restored to) the main view.
+func (c *Config) SetRepoHidden(repoName string, hidden bool) error {
+	key := strings.ToUpper(repoName)
+	rc, ok := c.Local[key]
+	if !ok {
+		rc = DefaultRepoLocal()
+	}
+	rc.Hidden = hidden
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
+// IsRepoHidden reports whether a repo is marked hidden.
+func (c *Config) IsRepoHidden(repoName string) bool {
+	rc, ok := c.Local[strings.ToUpper(repoName)]
+	return ok && rc.Hidden
+}
+
 // SetRepoSetupScript persists a per-repo post-create command ("" clears it).
 func (c *Config) SetRepoSetupScript(repoName, script string) error {
 	key := strings.ToUpper(repoName)
@@ -299,6 +320,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
 		fmt.Sprintf("CLICK_USAGE=\"%s\"", c.Global.ClickUsage),
 		fmt.Sprintf("THEME=\"%s\"", c.Global.Theme),
+		fmt.Sprintf("SHOW_HIDDEN_REPOS=\"%t\"", c.Global.ShowHiddenRepos),
 		fmt.Sprintf("SORT_ORDER=\"%s\"", c.Global.SortOrder),
 		fmt.Sprintf("DONE_SOUND=\"%s\"", c.Global.DoneSound),
 		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
@@ -336,6 +358,9 @@ func (c *Config) SaveLocal() error {
 		}
 		if rc.SetupScript != "" {
 			lines = append(lines, fmt.Sprintf("%s_SETUP_SCRIPT=\"%s\"", key, rc.SetupScript))
+		}
+		if rc.Hidden {
+			lines = append(lines, fmt.Sprintf("%s_HIDDEN=\"true\"", key))
 		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
@@ -393,6 +418,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["THEME"]; ok {
 		g.Theme = v
+	}
+	if v, ok := kv["SHOW_HIDDEN_REPOS"]; ok {
+		g.ShowHiddenRepos = v == "true"
 	}
 	if v, ok := kv["LAYOUT"]; ok {
 		g.Layout = v
@@ -469,6 +497,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			repo := strings.TrimSuffix(k, "_SETUP_SCRIPT")
 			rc := local[repo]
 			rc.SetupScript = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_HIDDEN") {
+			repo := strings.TrimSuffix(k, "_HIDDEN")
+			rc := local[repo]
+			rc.Hidden = v == "true"
 			local[repo] = rc
 		} else if strings.HasSuffix(k, "_LAST_REFRESH") {
 			repo := strings.TrimSuffix(k, "_LAST_REFRESH")

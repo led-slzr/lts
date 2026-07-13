@@ -207,6 +207,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 			SettingsItem{Section: secWorkflow, Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
 				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
 				Options: []string{"activity", "created", "name"}},
+			SettingsItem{Section: secWorkflow, Label: "Show Hidden Repos", Key: "SHOW_HIDDEN_REPOS",
+				Value: boolToStr(s.Config.Global.ShowHiddenRepos), Kind: SettingBool},
 
 			SettingsItem{Section: secAppearance, Label: "Layout", Key: "LAYOUT",
 				Value: s.Config.Global.Layout, Kind: SettingEnum,
@@ -666,6 +668,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.CopyMCPJson = item.Value == "true"
 		case "ENABLE_HIBERNATE":
 			s.Config.Global.EnableHibernate = item.Value == "true"
+		case "SHOW_HIDDEN_REPOS":
+			s.Config.Global.ShowHiddenRepos = item.Value == "true"
 		case "GITHUB_INTEGRATION":
 			s.Config.Global.GithubIntegration = item.Value == "true"
 		case "LAYOUT":

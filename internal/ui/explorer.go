@@ -174,13 +174,20 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 			marker = busyStyle.Render(" ⟳")
 		}
 		count := dimStyle.Render(fmt.Sprintf(" %d", len(r.Worktrees)))
+		label := " " + r.Name
+		if r.Hidden {
+			label += " (hidden)"
+		}
 		var name string
-		if i == sel {
-			name = selStyle.Render(" " + r.Name + " ")
-		} else if r.IsMonorepo {
-			name = monoStyle.Render(" " + r.Name)
-		} else {
-			name = nameStyle.Render(" " + r.Name)
+		switch {
+		case i == sel:
+			name = selStyle.Render(label + " ")
+		case r.Hidden:
+			name = dimStyle.Render(label)
+		case r.IsMonorepo:
+			name = monoStyle.Render(label)
+		default:
+			name = nameStyle.Render(label)
 		}
 		sbLines = append(sbLines, truncate(name+count+marker, sbInner))
 		zones = append(zones, HitZone{

@@ -514,7 +514,7 @@ func (m *Model) maintenanceCandidates(maxAge time.Duration) (paths, locks []stri
 	cutoff := time.Now().Add(-maxAge).Unix()
 	lockSeen := make(map[string]bool)
 	for _, r := range m.repos {
-		if m.repoBusy(r) || r.NeedsMigration {
+		if m.repoBusy(r) || r.NeedsMigration || r.Hidden {
 			continue
 		}
 		for _, wt := range r.Worktrees {
@@ -742,11 +742,15 @@ func maintenanceCmd(logFn git.LogFunc, paths []string, tmuxIdle time.Duration, l
 // openCreateModalFor opens the create modal pre-seeded with a repo's
 // selection and jumps straight to the branch step.
 func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
+	if repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].Hidden {
+		m.statusMsg = m.repos[repoIdx].Name + " is hidden — unhide it first"
+		return m, clearStatusCmd()
+	}
 	if repoIdx < 0 || repoIdx >= len(m.repos) {
 		return m, nil
 	}
 	target := m.repos[repoIdx]
-	m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
+	m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 	// Monorepo cards pre-select their constituent repos
 	want := map[string]bool{target.Name: true}
 	if target.IsMonorepo {
@@ -1061,6 +1065,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReposLoadedMsg:
 		wasInitialLoad := m.initialLoad
+		msg.Repos = m.applyHiddenRepos(msg.Repos)
 		sortRepos(msg.Repos, m.config.Global.SortOrder)
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
@@ -2254,7 +2259,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Create button (only when repos exist) — the modal opens anytime;
 		// busy conflicts are checked when creation is confirmed
 		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -2287,7 +2292,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				// Repo header context menu
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo)),
+					Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canHideRepo(repo), repo.Hidden),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo
@@ -2884,6 +2889,42 @@ func (m *Model) headerGhUser() string {
 // anyBusy reports whether any operation is running.
 func (m *Model) anyBusy() bool {
 	return len(m.busy) > 0
+}
+
+// applyHiddenRepos annotates repos marked hidden in local config, dropping
+// them entirely unless Show Hidden Repos is on. Hiding is what makes the
+// empty-state folder suggestions reachable in directories full of unwanted
+// repo-shaped folders (.nvm, .oh-my-zsh, ...).
+func (m *Model) applyHiddenRepos(repos []git.Repo) []git.Repo {
+	out := repos[:0]
+	for _, r := range repos {
+		if !r.IsMonorepo && m.config.IsRepoHidden(r.Name) {
+			if !m.config.Global.ShowHiddenRepos {
+				continue
+			}
+			r.Hidden = true
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// creatableRepos: hidden repos never appear in the create modal, even when
+// Show Hidden Repos renders them grayed out.
+func (m *Model) creatableRepos() []git.Repo {
+	out := make([]git.Repo, 0, len(m.repos))
+	for _, r := range m.repos {
+		if !r.Hidden {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// canHideRepo: only worktree-less plain repos can hide — a repo with live
+// LTS worktrees is clearly wanted.
+func (m *Model) canHideRepo(repo git.Repo) bool {
+	return !repo.IsMonorepo && repo.Path != "" && len(repo.Worktrees) == 0 && !repo.Hidden
 }
 
 // lockSet returns the repo names an operation on repo must lock —

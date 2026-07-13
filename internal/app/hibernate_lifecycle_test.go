@@ -411,7 +411,7 @@ func TestEnvRestoreDefersToContextMenu(t *testing.T) {
 	os.WriteFile(p, []byte("X=1\n"), 0600)
 
 	m := hibernateTestModel()
-	m.contextMenu = ui.ContextMenuModel{Active: true, Items: ui.RepoContextItems(false, false)}
+	m.contextMenu = ui.ContextMenuModel{Active: true, Items: ui.RepoContextItems(false, false, false, false)}
 	m.menuRepo = m.repos[1]
 
 	updated, _ := m.Update(CloneDoneMsg{RepoName: "core", Locked: []string{"core"}})

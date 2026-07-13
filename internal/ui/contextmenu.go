@@ -24,7 +24,14 @@ type ContextMenuModel struct {
 // RepoContextItems returns context menu items for a repo header.
 // canHibernate adds the hibernate entry (GitHub-remote repo with gh ready —
 // the premise is that GitHub holds everything the local copy does).
-func RepoContextItems(isMonorepo, canHibernate bool) []ContextMenuItem {
+// canHide offers hiding (worktree-less repos only); a hidden repo is
+// display-only — its single action is coming back.
+func RepoContextItems(isMonorepo, canHibernate, canHide, hidden bool) []ContextMenuItem {
+	if hidden {
+		return []ContextMenuItem{
+			{Label: "Unhide Repo", Action: BtnUnhideRepo},
+		}
+	}
 	if isMonorepo {
 		return []ContextMenuItem{
 			{Label: "Refresh", Action: BtnRefresh},
@@ -36,6 +43,9 @@ func RepoContextItems(isMonorepo, canHibernate bool) []ContextMenuItem {
 	}
 	if canHibernate {
 		items = append(items, ContextMenuItem{Label: "Hibernate Repo", Action: BtnHibernate})
+	}
+	if canHide {
+		items = append(items, ContextMenuItem{Label: "Hide Repo", Action: BtnHideRepo})
 	}
 	return items
 }
