@@ -55,7 +55,9 @@ func RepoContextItems(isMonorepo, canHibernate, canHide, hidden bool) []ContextM
 // worktrees, not git worktrees themselves), so Rebase can't run there —
 // per-repo monorepo rebase is a future feature. hasSession adds the tmux
 // session kill entry.
-func WorktreeContextItems(isMonorepo, hasSession, canPR bool) []ContextMenuItem {
+// canConvert offers promoting a single-repo worktree into a mono group
+// (other plain repos must exist); mono worktrees offer the reverse split.
+func WorktreeContextItems(isMonorepo, hasSession, canPR, canConvert bool) []ContextMenuItem {
 	items := []ContextMenuItem{}
 	if !isMonorepo {
 		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
@@ -66,8 +68,14 @@ func WorktreeContextItems(isMonorepo, hasSession, canPR bool) []ContextMenuItem 
 	items = append(items,
 		ContextMenuItem{Label: "Rename Branch", Action: BtnRename},
 		ContextMenuItem{Label: "Clean Modules", Action: BtnCleanModules},
-		ContextMenuItem{Label: "Delete", Action: BtnDelete},
 	)
+	if !isMonorepo && canConvert {
+		items = append(items, ContextMenuItem{Label: "Add to Mono Group", Action: BtnConvertMono})
+	}
+	if isMonorepo {
+		items = append(items, ContextMenuItem{Label: "Split Mono Group", Action: BtnReduceMono})
+	}
+	items = append(items, ContextMenuItem{Label: "Delete", Action: BtnDelete})
 	if hasSession {
 		items = append(items, ContextMenuItem{Label: "Kill Tmux Session", Action: BtnKillSession})
 	}

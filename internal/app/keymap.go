@@ -22,6 +22,14 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleHibernateKey(m, msg)
 	}
 
+	// Mono conversion dialogs
+	if m.convertActive {
+		return handleConvertKey(m, msg)
+	}
+	if m.reduceActive {
+		return handleReduceKey(m, msg)
+	}
+
 	// If context menu is active
 	if m.contextMenu.Active {
 		return handleContextMenuKey(m, msg)
@@ -273,6 +281,16 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 	case ui.BtnHibernate:
 		if !hasWT && m.canHibernate(repo) && !m.repoBusy(repo) {
 			return startHibernate(m, repo)
+		}
+
+	case ui.BtnConvertMono:
+		if hasWT && !repo.IsMonorepo && !m.repoBusy(repo) {
+			return startConvert(m, repo, wt)
+		}
+
+	case ui.BtnReduceMono:
+		if hasWT && repo.IsMonorepo && !m.repoBusy(repo) {
+			return startReduce(m, repo, wt)
 		}
 
 	case ui.BtnDelete:

@@ -155,6 +155,18 @@ type Model struct {
 	// Theme Studio (full-screen theme browser with live preview)
 	themeStudio ui.StudioModel
 
+	// Mono conversion dialogs — targets snapshotted at open
+	convertActive  bool
+	convertRepo    git.Repo
+	convertWT      git.Worktree
+	convertChoices []convertChoice
+	convertCursor  int
+	reduceActive   bool
+	reduceRepo     git.Repo
+	reduceWT       git.Worktree
+	reduceRows     []reduceRow
+	reduceCursor   int
+
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
 	hoveredView int // header View toggle hover: -1 none, 0 Board, 1 Explorer
@@ -1464,6 +1476,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case ConvertDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Convert failed: " + msg.Err.Error()
+		} else {
+			m.statusMsg = "Converted " + msg.Branch + " into " + msg.Group
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+
+	case ReduceDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Split failed: " + msg.Err.Error()
+		} else {
+			m.statusMsg = fmt.Sprintf("Split %s — %d kept as single, %d deleted", msg.Branch, msg.Kept, msg.Deleted)
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+
 	case HibernateDoneMsg:
 		m.clearBusy(msg.Locked...)
 		if msg.Err != nil {
@@ -1657,6 +1689,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.hibernateActive {
+		return m, nil
+	}
+
+	if m.convertActive || m.reduceActive {
 		return m, nil
 	}
 
@@ -2303,7 +2339,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				wt := repo.Worktrees[m.focusedWT]
 				m.contextMenu = ui.ContextMenuModel{
 					Active: true,
-					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)], m.prAble(repo, wt)),
+					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)], m.prAble(repo, wt), m.canConvert(repo)),
 					X:      x, Y: y,
 				}
 				m.menuRepo = repo
@@ -2468,6 +2504,14 @@ func (m Model) View() string {
 	// Hibernate audit/confirm
 	if m.hibernateActive {
 		return paintBlack(placeDialog(m.renderHibernateDialog()), m.width, m.height)
+	}
+
+	// Mono conversion dialogs
+	if m.convertActive {
+		return paintBlack(placeDialog(m.renderConvertDialog()), m.width, m.height)
+	}
+	if m.reduceActive {
+		return paintBlack(placeDialog(m.renderReduceDialog()), m.width, m.height)
 	}
 
 	// Theme Studio — full screen, renders in whichever theme the cursor
@@ -2919,6 +2963,20 @@ func (m *Model) creatableRepos() []git.Repo {
 		}
 	}
 	return out
+}
+
+// canConvert: a plain repo's worktree can join a mono group when at least
+// one other plain repo exists to group with.
+func (m *Model) canConvert(repo git.Repo) bool {
+	if repo.IsMonorepo || repo.Path == "" {
+		return false
+	}
+	for _, r := range m.repos {
+		if !r.IsMonorepo && !r.Hidden && r.Path != "" && r.Name != repo.Name {
+			return true
+		}
+	}
+	return false
 }
 
 // canHideRepo: only worktree-less plain repos can hide — a repo with live

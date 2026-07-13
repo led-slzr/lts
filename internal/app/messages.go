@@ -122,6 +122,23 @@ type HibernateDoneMsg struct {
 	Err       error
 }
 
+// ConvertDoneMsg is sent when a repo→mono-group conversion completes.
+type ConvertDoneMsg struct {
+	Branch string
+	Group  string
+	Locked []string
+	Err    error
+}
+
+// ReduceDoneMsg is sent when a mono-group split completes.
+type ReduceDoneMsg struct {
+	Branch  string
+	Kept    int
+	Deleted int
+	Locked  []string
+	Err     error
+}
+
 // MaintenanceTickMsg re-evaluates auto-maintenance hourly so long-running
 // instances sweep worktrees/sessions that cross their age threshold after
 // launch (the startup run only covers launch time).

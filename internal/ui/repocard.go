@@ -56,6 +56,9 @@ const (
 
 	BtnHideRepo
 	BtnUnhideRepo
+
+	BtnConvertMono
+	BtnReduceMono
 )
 
 // innerWidth returns the usable content width inside a card.
