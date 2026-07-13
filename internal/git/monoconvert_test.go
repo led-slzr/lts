@@ -177,3 +177,87 @@ func TestReduceMonoKeepAndDelete(t *testing.T) {
 		}
 	}
 }
+
+// Every partner failing must roll the initiator back to its original home —
+// never stranded in a half-born group.
+func TestConvertRollsBackWhenAllPartnersFail(t *testing.T) {
+	scriptDir := twoRepoFixture(t)
+	core := filepath.Join(scriptDir, "core")
+	wtPath := filepath.Join(scriptDir, "core-lts", "core-feat-r")
+	gitRun(t, core, "worktree", "add", "-b", "feat/r", wtPath)
+	writeFileT(t, filepath.Join(wtPath, "wip.txt"), "precious\n")
+
+	// erp already has feat/r checked out in a worktree the dialog didn't
+	// know about — git refuses a second checkout, so the create fails.
+	gitRun(t, filepath.Join(scriptDir, "erp"), "worktree", "add",
+		filepath.Join(scriptDir, ".elsewhere-feat-r"), "-b", "feat/r")
+
+	_, err := ConvertToMono(scriptDir, "core", wtPath, "feat/r",
+		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("expected rollback error, got %v", err)
+	}
+	// Initiator is back, work intact, workspace regenerated, group gone.
+	if data, _ := os.ReadFile(filepath.Join(wtPath, "wip.txt")); !strings.Contains(string(data), "precious") {
+		t.Fatal("initiator must be back at its original path with work intact")
+	}
+	if out := gitRun(t, core, "worktree", "list"); !strings.Contains(out, "core-lts") {
+		t.Fatalf("git should track the restored location:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(scriptDir, "core-lts", "core-feat-r.code-workspace")); err != nil {
+		t.Fatal("individual workspace should be regenerated on rollback")
+	}
+	if _, err := os.Stat(filepath.Join(scriptDir, "core-erp-lts")); !os.IsNotExist(err) {
+		t.Fatal("the half-born group dir must dissolve")
+	}
+}
+
+// Converting a branch that already has a group subdir fails before any move.
+func TestConvertRefusesExistingGroupBranch(t *testing.T) {
+	scriptDir := twoRepoFixture(t)
+	core := filepath.Join(scriptDir, "core")
+	wtPath := filepath.Join(scriptDir, "core-lts", "core-feat-dup")
+	gitRun(t, core, "worktree", "add", "-b", "feat/dup", wtPath)
+	if err := os.MkdirAll(filepath.Join(scriptDir, "core-erp-lts", "feat-dup"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ConvertToMono(scriptDir, "core", wtPath, "feat/dup",
+		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false)
+	if err == nil || !strings.Contains(err.Error(), "already has") {
+		t.Fatalf("expected existing-group refusal, got %v", err)
+	}
+	if !isWorktreeDir(wtPath) {
+		t.Fatal("refusal must leave the initiator untouched")
+	}
+}
+
+// All-delete split dissolves the whole group with nothing left behind.
+func TestReduceMonoAllDeleteDissolvesGroup(t *testing.T) {
+	scriptDir := twoRepoFixture(t)
+	core := filepath.Join(scriptDir, "core")
+	coreWT := filepath.Join(scriptDir, "core-lts", "core-feat-gone")
+	gitRun(t, core, "worktree", "add", "-b", "feat/gone", coreWT)
+
+	res, err := ConvertToMono(scriptDir, "core", coreWT, "feat/gone",
+		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group := res.BranchSubdir
+	kept, deleted, err := ReduceMono(scriptDir, group, []ReduceDecision{
+		{Name: "core", WtPath: filepath.Join(group, "core-feat-gone"), Branch: "feat/gone", Delete: true},
+		{Name: "erp", WtPath: filepath.Join(group, "erp-feat-gone"), Branch: "feat/gone", Delete: true},
+	}, WorkspaceOptions{})
+	if err != nil || kept != 0 || deleted != 2 {
+		t.Fatalf("kept=%d deleted=%d err=%v", kept, deleted, err)
+	}
+	if _, err := os.Stat(filepath.Join(scriptDir, "core-erp-lts")); !os.IsNotExist(err) {
+		t.Fatal("group dir must dissolve after all-delete")
+	}
+	for _, r := range DiscoverRepos(scriptDir, mainBasis) {
+		if r.IsMonorepo || len(r.Worktrees) != 0 {
+			t.Fatalf("nothing should remain, got %s with %d wts", r.Name, len(r.Worktrees))
+		}
+	}
+}

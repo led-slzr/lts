@@ -61,6 +61,10 @@ func TestHideMenuGating(t *testing.T) {
 	if m.canHideRepo(git.Repo{Name: "m", IsMonorepo: true}) {
 		t.Error("mono cards are not hideable")
 	}
+	// testModel has a core-goforms mono card — its constituents stay visible.
+	if m.canHideRepo(git.Repo{Name: "core", Path: "/x/core"}) {
+		t.Error("live mono-group constituents must not be hideable")
+	}
 	items := ui.RepoContextItems(false, false, false, true)
 	if len(items) != 1 || items[0].Label != "Unhide Repo" {
 		t.Fatalf("hidden repo menu should be Unhide only, got %+v", items)

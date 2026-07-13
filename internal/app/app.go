@@ -2980,9 +2980,23 @@ func (m *Model) canConvert(repo git.Repo) bool {
 }
 
 // canHideRepo: only worktree-less plain repos can hide — a repo with live
-// LTS worktrees is clearly wanted.
+// LTS worktrees is clearly wanted, and a live mono-group constituent
+// (which shows zero single worktrees) must stay visible with its group.
 func (m *Model) canHideRepo(repo git.Repo) bool {
-	return !repo.IsMonorepo && repo.Path != "" && len(repo.Worktrees) == 0 && !repo.Hidden
+	if repo.IsMonorepo || repo.Path == "" || len(repo.Worktrees) > 0 || repo.Hidden {
+		return false
+	}
+	for _, r := range m.repos {
+		if !r.IsMonorepo {
+			continue
+		}
+		for _, n := range r.RepoNames {
+			if n == repo.Name {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // lockSet returns the repo names an operation on repo must lock —

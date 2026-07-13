@@ -129,3 +129,19 @@ func TestSetupScriptRoundTrip(t *testing.T) {
 		t.Fatal("cleared script should not persist")
 	}
 }
+
+// Setup scripts with embedded quotes and shell operators survive the
+// KEY="value" config format (only leading/trailing quotes are trimmed).
+func TestSetupScriptEmbeddedQuotesSurvive(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+	script := `pnpm build && echo "shared types ready" | tee -a log.txt`
+	if err := c.SetRepoSetupScript("core", script); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != script {
+		t.Fatalf("script drifted through save/load:\n saved  %q\n loaded %q", script, reloaded["CORE"].SetupScript)
+	}
+}

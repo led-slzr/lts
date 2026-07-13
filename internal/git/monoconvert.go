@@ -75,6 +75,8 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	if _, err := os.Stat(branchSubdirPath); err == nil {
 		return nil, fmt.Errorf("%s already has a %s worktree group", groupDir, branchDirName)
 	}
+	_, statErr := os.Stat(ltsPath)
+	groupPreExisted := statErr == nil
 	if err := os.MkdirAll(branchSubdirPath, 0755); err != nil {
 		return nil, err
 	}
@@ -85,12 +87,16 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	createdAt := time.Now().Unix()
 	var pairs []string
 
-	// Move the initiator in.
-	log.Add("Moving " + filepath.Base(wtPath) + " into " + groupDir)
+	// Move the initiator in (its original home is remembered for rollback).
+	oldParent, oldName := filepath.Dir(wtPath), filepath.Base(wtPath)
+	log.Add("Moving " + oldName + " into " + groupDir)
 	movedName, prevCreated, err := moveWorktreeIntoDir(scriptDir, repoName, wtPath, branchSubdirPath, branchDirName)
 	if err != nil {
-		os.RemoveAll(branchSubdirPath)
-		cleanEmptyLTSDirs(ltsPath)
+		if !groupPreExisted {
+			os.RemoveAll(ltsPath)
+		} else {
+			os.RemoveAll(branchSubdirPath)
+		}
 		return nil, err
 	}
 	if prevCreated != 0 {
@@ -138,7 +144,28 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	}
 
 	if len(pairs) < 2 {
-		return res, fmt.Errorf("no partner made it into the group — the moved worktree is at %s", branchSubdirPath)
+		// Total partner failure: put the initiator back where it was and
+		// dissolve whatever the conversion created — the user's worktree
+		// must never be stranded in a half-born group.
+		log.Context = repoName
+		log.AddError("No partner joined the group — rolling back")
+		movedPath := filepath.Join(branchSubdirPath, movedName)
+		os.MkdirAll(oldParent, 0755)
+		if out, mvErr := RunGit(filepath.Join(scriptDir, repoName), "worktree", "move", movedPath, filepath.Join(oldParent, oldName)); mvErr != nil {
+			// Rollback itself failed — leave the group intact (Split Mono
+			// Group can still recover it) and say where everything is.
+			return res, fmt.Errorf("no partner joined and rollback failed (%s) — the worktree is at %s",
+				strings.TrimSpace(out), movedPath)
+		}
+		recordWorktreeCreated(oldParent, oldName, createdAt)
+		generateIndividualWorkspace(oldParent, oldName, opts.pkgFor(repoName),
+			opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
+		if !groupPreExisted {
+			os.RemoveAll(ltsPath)
+		} else {
+			os.RemoveAll(branchSubdirPath)
+		}
+		return nil, fmt.Errorf("no partner could join the group — conversion rolled back")
 	}
 
 	recordWorktreeCreated(ltsPath, branchDirName, createdAt)
