@@ -2,7 +2,7 @@
 
 A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
 
-![LTS v3.0.0](https://img.shields.io/badge/version-3.0.0-green)
+![LTS v3.1.0](https://img.shields.io/badge/version-3.1.0-green)
 
 ```
 ██╗     ████████╗███████╗
