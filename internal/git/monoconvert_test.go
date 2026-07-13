@@ -261,3 +261,31 @@ func TestReduceMonoAllDeleteDissolvesGroup(t *testing.T) {
 		}
 	}
 }
+
+// Hyphenated names make group dir names ambiguous — a dir claimed by a
+// different repo set must refuse the conversion instead of merging.
+func TestConvertRefusesGroupDirOwnedByDifferentRepoSet(t *testing.T) {
+	scriptDir := twoRepoFixture(t)
+	core := filepath.Join(scriptDir, "core")
+	wtPath := filepath.Join(scriptDir, "core-lts", "core-feat-amb")
+	gitRun(t, core, "worktree", "add", "-b", "feat/amb", wtPath)
+
+	// "core-erp-lts" already belongs to a DIFFERENT set (core-e + rp — contrived,
+	// but exactly the ambiguity hyphenated names create).
+	writeFileT(t, filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), "core-e\nrp\n")
+
+	_, err := ConvertToMono(scriptDir, "core", wtPath, "feat/amb",
+		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false)
+	if err == nil || !strings.Contains(err.Error(), "already exists for repos") {
+		t.Fatalf("expected repo-set refusal, got %v", err)
+	}
+	if !isWorktreeDir(wtPath) {
+		t.Fatal("refusal must leave the initiator untouched")
+	}
+	// A pre-existing group with the SAME set converts fine.
+	os.WriteFile(filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), []byte("core\nerp\n"), 0644)
+	if _, err := ConvertToMono(scriptDir, "core", wtPath, "feat/amb",
+		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false); err != nil {
+		t.Fatalf("same-set group should accept a new branch: %v", err)
+	}
+}

@@ -77,6 +77,16 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	}
 	_, statErr := os.Stat(ltsPath)
 	groupPreExisted := statErr == nil
+	if groupPreExisted {
+		// Hyphenated repo names make dir names ambiguous ({a, b-c} and
+		// {a-b, c} both join to a-b-c-lts) — never merge into a group
+		// whose recorded repo set differs from ours.
+		existing := getLTSRepos(scriptDir, groupDir)
+		if !sameRepoSet(existing, names) {
+			return nil, fmt.Errorf("%s already exists for repos %s — not %s",
+				groupDir, strings.Join(existing, "+"), strings.Join(names, "+"))
+		}
+	}
 	if err := os.MkdirAll(branchSubdirPath, 0755); err != nil {
 		return nil, err
 	}
@@ -174,6 +184,23 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	res.WorkspaceFile = generateMonorepoWorkspace(branchSubdirPath, branchDirName, pairs,
 		opts.AICliCommand, opts.IDECommand, opts.OpenEnvInIDE)
 	return res, nil
+}
+
+// sameRepoSet compares two repo-name lists as sets.
+func sameRepoSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]bool, len(a))
+	for _, n := range a {
+		set[n] = true
+	}
+	for _, n := range b {
+		if !set[n] {
+			return false
+		}
+	}
+	return true
 }
 
 // moveWorktreeIntoDir relocates a worktree via git (metadata stays valid),
