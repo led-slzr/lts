@@ -106,3 +106,26 @@ func TestAutoUpdateDefaultsOffWhenKeyAbsent(t *testing.T) {
 		t.Fatal("update checks (badge only) stay on by default")
 	}
 }
+
+func TestSetupScriptRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+	script := `pnpm --filter @gorocky/shared-types build && echo done`
+	if err := c.SetRepoSetupScript("core", script); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != script {
+		t.Fatalf("setup script did not survive reload: %q", reloaded["CORE"].SetupScript)
+	}
+	// Clearing removes the key entirely.
+	if err := c.SetRepoSetupScript("core", ""); err != nil {
+		t.Fatal(err)
+	}
+	reloaded = map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != "" {
+		t.Fatal("cleared script should not persist")
+	}
+}

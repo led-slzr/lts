@@ -3017,9 +3017,21 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 
 // workspaceOpts assembles the create-time options from config, snapshotting
 // everything on the caller's (Update) thread — see basisResolver.
+// setupResolver snapshots per-repo setup scripts (see basisResolver).
+func setupResolver(cfg *config.Config) func(string) string {
+	snap := make(map[string]string, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.SetupScript
+	}
+	return func(repoName string) string {
+		return snap[strings.ToUpper(repoName)]
+	}
+}
+
 func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 	return git.WorkspaceOptions{
 		PkgManager:   pkgResolver(cfg),
+		SetupScript:  setupResolver(cfg),
 		AICliCommand: cfg.Global.AICliCommand,
 		IDECommand:   cfg.Global.IDECommand,
 		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,

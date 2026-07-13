@@ -102,7 +102,7 @@ func formatLastRefresh(ts int64) string {
 
 func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	ti := textinput.New()
-	ti.CharLimit = 100
+	ti.CharLimit = 250 // setup scripts chain commands with &&
 	ti.Width = 40
 
 	s := SettingsModel{
@@ -142,6 +142,10 @@ func toolWarning(key, value string) string {
 	case "REPO_PACKAGE_MANAGER":
 		if value != "default" && value != "" && !tools.Has(value) {
 			return value + " not found"
+		}
+	case "REPO_SETUP_SCRIPT":
+		if value != "" && !tools.CommandPresent(value) {
+			return tools.FirstWord(value) + " not found"
 		}
 	}
 	return ""
@@ -257,6 +261,8 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Package Manager", Key: "REPO_PACKAGE_MANAGER",
 					Value: pm, Kind: SettingEnum, RepoName: repo,
 					Options: []string{"default", "pnpm", "npm", "yarn", "bun"}},
+				SettingsItem{Section: "Local (" + repo + ")", Label: "Setup Script", Key: "REPO_SETUP_SCRIPT",
+					Value: rc.SetupScript, Kind: SettingText, RepoName: repo},
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Last Refresh", Key: "LAST_REFRESH",
 					Value: formatLastRefresh(rc.LastRefresh), Kind: SettingDisplay, RepoName: repo},
 			)
@@ -604,7 +610,7 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	s.SaveError = ""
 	s.SaveStatus = ""
 
-	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" {
+	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" && item.Key != "REPO_SETUP_SCRIPT" {
 		s.SaveError = item.Label + " cannot be empty"
 		s.Items[s.CursorIdx].Value = s.previousValue(item)
 		return nil
@@ -680,6 +686,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 				pm = ""
 			}
 			saveErr = s.Config.SetRepoPackageManager(item.RepoName, pm)
+		case "REPO_SETUP_SCRIPT":
+			saveErr = s.Config.SetRepoSetupScript(item.RepoName, item.Value)
 		}
 	}
 	if saveErr != nil {

@@ -60,8 +60,9 @@ type WorkspaceOptions struct {
 	AICliCommand string
 	IDECommand   string
 	OpenEnvInIDE bool
-	CopyEnv      bool // copy .env* files
-	CopyMCP      bool // copy .mcp.json files
+	CopyEnv      bool                         // copy .env* files
+	CopyMCP      bool                         // copy .mcp.json files
+	SetupScript  func(repoName string) string // optional post-create command per repo
 }
 
 func (o WorkspaceOptions) pkgFor(repoName string) string {
@@ -69,6 +70,39 @@ func (o WorkspaceOptions) pkgFor(repoName string) string {
 		return ""
 	}
 	return o.PkgManager(repoName)
+}
+
+func (o WorkspaceOptions) setupFor(repoName string) string {
+	if o.SetupScript == nil {
+		return ""
+	}
+	return o.SetupScript(repoName)
+}
+
+// runSetupScript runs the repo's configured post-create command inside the
+// new worktree via the user's login shell (PATH matches their terminal;
+// && chains work). Failures are logged, never fatal — the worktree is
+// already usable, and the log names what to run by hand.
+func runSetupScript(wtPath, script string, log *CreateLog) {
+	if script == "" {
+		return
+	}
+	log.Add("Running setup script: " + script)
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	cmd := exec.Command(sh, "-lc", script)
+	cmd.Dir = wtPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 200 {
+			msg = msg[len(msg)-200:]
+		}
+		log.AddError("Setup script failed: " + msg)
+		return
+	}
+	log.Add("Setup script ✓")
 }
 
 // ValidateBranchName checks if a branch name is valid.
@@ -395,6 +429,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	} else {
 		log.Add("Skipping dependency install")
 	}
+	runSetupScript(wtPath, opts.setupFor(filepath.Base(repoPath)), log)
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
@@ -514,6 +549,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 		} else {
 			log.Add("Skipping dependency install")
 		}
+		runSetupScript(wtPath, opts.setupFor(repoName), log)
 
 		results = append(results, &CreateResult{
 			WorktreePath: wtPath,
@@ -1882,6 +1918,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	// Install dependencies
 	pkgManager := opts.pkgFor(repoName)
 	runPackageInstall(wtPath, pkgManager, &CreateLog{Stream: logFn, Context: ctx})
+	runSetupScript(wtPath, opts.setupFor(repoName), &CreateLog{Stream: logFn, Context: ctx})
 
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)

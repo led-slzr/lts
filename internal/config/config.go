@@ -45,6 +45,7 @@ type GlobalConfig struct {
 type RepoLocalConfig struct {
 	BasisBranch    string // main, dev, master, etc.
 	PackageManager string // per-repo override; empty = use global default
+	SetupScript    string // optional post-create command, run in the new worktree ("" = none)
 	LastRefresh    int64  // unix timestamp
 }
 
@@ -224,6 +225,18 @@ func (c *Config) SetRepoPackageManager(repoName, pm string) error {
 	return c.SaveLocal()
 }
 
+// SetRepoSetupScript persists a per-repo post-create command ("" clears it).
+func (c *Config) SetRepoSetupScript(repoName, script string) error {
+	key := strings.ToUpper(repoName)
+	rc, ok := c.Local[key]
+	if !ok {
+		rc = DefaultRepoLocal()
+	}
+	rc.SetupScript = script
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
 	c.Global.LastUpdateCheck = ts
@@ -320,6 +333,9 @@ func (c *Config) SaveLocal() error {
 		lines = append(lines, fmt.Sprintf("%s_BASIS_BRANCH=\"%s\"", key, rc.BasisBranch))
 		if rc.PackageManager != "" {
 			lines = append(lines, fmt.Sprintf("%s_PACKAGE_MANAGER=\"%s\"", key, rc.PackageManager))
+		}
+		if rc.SetupScript != "" {
+			lines = append(lines, fmt.Sprintf("%s_SETUP_SCRIPT=\"%s\"", key, rc.SetupScript))
 		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
@@ -448,6 +464,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			repo := strings.TrimSuffix(k, "_PACKAGE_MANAGER")
 			rc := local[repo]
 			rc.PackageManager = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_SETUP_SCRIPT") {
+			repo := strings.TrimSuffix(k, "_SETUP_SCRIPT")
+			rc := local[repo]
+			rc.SetupScript = v
 			local[repo] = rc
 		} else if strings.HasSuffix(k, "_LAST_REFRESH") {
 			repo := strings.TrimSuffix(k, "_LAST_REFRESH")
