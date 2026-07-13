@@ -53,6 +53,14 @@ const (
 	BtnCreatePR
 
 	BtnHibernate
+
+	BtnHideRepo
+	BtnUnhideRepo
+
+	BtnConvertMono
+	BtnReduceMono
+
+	BtnManualHibernate
 )
 
 // innerWidth returns the usable content width inside a card.
@@ -116,7 +124,9 @@ func RenderCard(repo git.Repo, cardWidth int, focused bool, focusedWT int, hover
 	// Header line
 	isHeaderHovered := focused && focusedWT == -2
 	var header string
-	if repo.IsMonorepo {
+	if repo.Hidden {
+		header = BranchDimStyle.Render(repo.Name + " (" + repo.MainBranch + ") (hidden)")
+	} else if repo.IsMonorepo {
 		// Monorepo card: show name with repo count
 		monoLabel := lipgloss.NewStyle().Foreground(ColorMagenta).Background(ColorBlack).Render("mono")
 		header = RepoNameStyle.Render(repo.Name) + " " + BranchDimStyle.Render("(") + monoLabel + BranchDimStyle.Render(")")

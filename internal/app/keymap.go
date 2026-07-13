@@ -22,6 +22,14 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return handleHibernateKey(m, msg)
 	}
 
+	// Mono conversion dialogs
+	if m.convertActive {
+		return handleConvertKey(m, msg)
+	}
+	if m.reduceActive {
+		return handleReduceKey(m, msg)
+	}
+
 	// If context menu is active
 	if m.contextMenu.Active {
 		return handleContextMenuKey(m, msg)
@@ -107,7 +115,7 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 
 	case "n":
 		if len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -141,6 +149,22 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "down", "j":
 		m.scrollY += 2
 		m.clampScroll()
+		return m, nil
+
+	case ".":
+		// Keyboard route to the [⋮] menu — parity with the Explorer's
+		if m.focusedCard >= 0 && m.focusedCard < len(m.repos) && !m.repoBusy(m.repos[m.focusedCard]) {
+			repo := m.repos[m.focusedCard]
+			if repo.NeedsMigration {
+				return m, nil
+			}
+			if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
+				return m.openWorktreeMenu(repo, repo.Worktrees[m.focusedWT]), nil
+			}
+			if m.focusedWT == -2 {
+				return m.openRepoMenu(repo), nil
+			}
+		}
 		return m, nil
 
 	case "esc":
@@ -214,7 +238,7 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			}
 			lock := lockSet(repo)
 			logFn, startCmd := m.beginOp("Rebasing "+wt.Branch+"...", lock...)
-			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.config.GetRepoPackageManager(repo.Name), wt.Branch, lock))
+			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.resolvePM(repo.Name), wt.Branch, lock))
 		}
 
 	case ui.BtnRename:
@@ -251,9 +275,43 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			return m, tea.Batch(startCmd, cleanModulesCmd(logFn, wt.Path, wt.Branch, lock))
 		}
 
+	case ui.BtnHideRepo, ui.BtnUnhideRepo:
+		if !hasWT && repo.Path != "" && !repo.IsMonorepo {
+			hide := action == ui.BtnHideRepo
+			if hide && len(repo.Worktrees) > 0 {
+				m.statusMsg = "Delete " + repo.Name + "'s worktrees first"
+				return m, clearStatusCmd()
+			}
+			if err := m.config.SetRepoHidden(repo.Name, hide); err != nil {
+				m.statusMsg = "Failed to save: " + err.Error()
+				return m, clearStatusCmd()
+			}
+			if hide {
+				m.statusMsg = "Hid " + repo.Name + " — Settings → Show Hidden Repos brings it back"
+			} else {
+				m.statusMsg = "Unhid " + repo.Name
+			}
+			return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+		}
+
 	case ui.BtnHibernate:
 		if !hasWT && m.canHibernate(repo) && !m.repoBusy(repo) {
-			return startHibernate(m, repo)
+			return startHibernate(m, repo, false)
+		}
+
+	case ui.BtnManualHibernate:
+		if !hasWT && m.canManualHibernate(repo) && !m.repoBusy(repo) {
+			return startHibernate(m, repo, true)
+		}
+
+	case ui.BtnConvertMono:
+		if hasWT && !repo.IsMonorepo && !m.repoBusy(repo) {
+			return startConvert(m, repo, wt)
+		}
+
+	case ui.BtnReduceMono:
+		if hasWT && repo.IsMonorepo && !m.repoBusy(repo) {
+			return startReduce(m, repo, wt)
 		}
 
 	case ui.BtnDelete:
@@ -626,6 +684,17 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 			m2, cmd := explorerAction(m, ui.BtnCreatePR)
 			return true, m2, cmd
 		}
+	case ".":
+		// Full context menu (with details) for the selection — every
+		// action available on the Board is available here too
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnContextMenu)
+			return true, m2, cmd
+		}
+		if !repo.NeedsMigration && !m.repoBusy(repo) {
+			return true, m.openRepoMenu(repo), nil
+		}
+		return true, m, nil
 	}
 	return false, m, nil
 }
@@ -650,6 +719,14 @@ func explorerAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 		base := m.config.GetRepoBasisBranch(repo.Name)
 		m.statusMsg = "Opening PR page for " + wt.Branch + "..."
 		return m, tea.Batch(clearStatusCmd(), prCreateCmd(wt.Path, base, wt.Branch))
+	}
+
+	if action == ui.BtnContextMenu {
+		if m.repoBusy(repo) {
+			m.statusMsg = repo.Name + " is busy — wait for the running operation"
+			return m, clearStatusCmd()
+		}
+		return m.openWorktreeMenu(repo, wt), nil
 	}
 
 	if action == ui.BtnKillSession {

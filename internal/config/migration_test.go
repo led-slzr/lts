@@ -106,3 +106,58 @@ func TestAutoUpdateDefaultsOffWhenKeyAbsent(t *testing.T) {
 		t.Fatal("update checks (badge only) stay on by default")
 	}
 }
+
+func TestSetupScriptRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+	script := `pnpm --filter @gorocky/shared-types build && echo done`
+	if err := c.SetRepoSetupScript("core", script); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != script {
+		t.Fatalf("setup script did not survive reload: %q", reloaded["CORE"].SetupScript)
+	}
+	// Clearing removes the key entirely.
+	if err := c.SetRepoSetupScript("core", ""); err != nil {
+		t.Fatal(err)
+	}
+	reloaded = map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != "" {
+		t.Fatal("cleared script should not persist")
+	}
+}
+
+// A value ENDING in a quote must survive too — Trim-all-quotes mangled
+// `echo "done"` into `echo "done` on reload.
+func TestTrailingQuoteValuesSurvive(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+	script := `pnpm build && echo "done"`
+	if err := c.SetRepoSetupScript("core", script); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != script {
+		t.Fatalf("trailing-quote script mangled: saved %q, loaded %q", script, reloaded["CORE"].SetupScript)
+	}
+}
+
+// Setup scripts with embedded quotes and shell operators survive the
+// KEY="value" config format (only leading/trailing quotes are trimmed).
+func TestSetupScriptEmbeddedQuotesSurvive(t *testing.T) {
+	dir := t.TempDir()
+	c := Config{Global: DefaultGlobal(), Local: map[string]RepoLocalConfig{}, WorkDir: dir}
+	script := `pnpm build && echo "shared types ready" | tee -a log.txt`
+	if err := c.SetRepoSetupScript("core", script); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := map[string]RepoLocalConfig{}
+	loadLocal(dir, reloaded)
+	if reloaded["CORE"].SetupScript != script {
+		t.Fatalf("script drifted through save/load:\n saved  %q\n loaded %q", script, reloaded["CORE"].SetupScript)
+	}
+}

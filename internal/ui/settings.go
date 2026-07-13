@@ -6,6 +6,7 @@ import (
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
+	"lts-revamp/internal/tools"
 	"lts-revamp/internal/version"
 	"os"
 	"strconv"
@@ -35,6 +36,7 @@ type SettingsItem struct {
 	Kind     SettingKind
 	Options  []string // for Enum kind
 	RepoName string   // empty for global, repo name for local
+	Warn     string   // inline ⚠ note (e.g. "bun not found") — set by toolWarning
 }
 
 type SettingsModel struct {
@@ -100,7 +102,7 @@ func formatLastRefresh(ts int64) string {
 
 func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	ti := textinput.New()
-	ti.CharLimit = 100
+	ti.CharLimit = 250 // setup scripts chain commands with &&
 	ti.Width = 40
 
 	s := SettingsModel{
@@ -116,71 +118,118 @@ func NewSettings(cfg *config.Config, repoNames []string) SettingsModel {
 	return s
 }
 
+// toolWarning reports why a setting's current value won't work: the chosen
+// program isn't installed (or isn't on PATH where LTS can see it). Shown
+// inline in yellow so misconfigurations surface before anything is tried.
+func toolWarning(key, value string) string {
+	switch key {
+	case "IDE_COMMAND", "AI_CLI_COMMAND":
+		if value != "" && !tools.CommandPresent(value) {
+			return tools.FirstWord(value) + " not found"
+		}
+	case "TERMINAL":
+		if value != "" && !tools.TerminalPresent(value) {
+			return value + " not found"
+		}
+	case "TERMINAL_MULTIPLEXER":
+		if value == "tmux" && !TmuxAvailableFn() {
+			return "tmux not found"
+		}
+	case "PACKAGE_MANAGER":
+		if value != "auto" && value != "" && !tools.Has(value) {
+			return value + " not found"
+		}
+	case "REPO_PACKAGE_MANAGER":
+		if value != "default" && value != "" && !tools.Has(value) {
+			return value + " not found"
+		}
+	case "REPO_SETUP_SCRIPT":
+		if value != "" && !tools.ScriptRunnable(value) {
+			return tools.FirstWord(value) + " not found"
+		}
+	}
+	return ""
+}
+
+// TmuxAvailableFn is swappable for tests.
+var TmuxAvailableFn = opener.TmuxAvailable
+
 func (s *SettingsModel) buildItems(repoNames []string) {
 	s.Items = nil
 	s.RepoNames = repoNames
 
 	switch s.ActiveTab {
 	case TabPreferences:
-		// Tool preferences — which commands LTS drives
+		// Grouped into titled sections — same mechanism the Worktrees tab
+		// uses, so scrolling and hit-testing stay lockstep-consistent.
+		const (
+			secTools      = "Tools"
+			secWorkflow   = "Workflow"
+			secAppearance = "Appearance"
+			secFeatures   = "Updates & Features"
+		)
 		s.Items = append(s.Items,
-			SettingsItem{Label: "IDE Command", Key: "IDE_COMMAND",
+			SettingsItem{Section: secTools, Label: "IDE Command", Key: "IDE_COMMAND",
 				Value: s.Config.Global.IDECommand, Kind: SettingEnum,
 				Options: []string{"windsurf", "code", "cursor", "zed"}},
-			SettingsItem{Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
+			SettingsItem{Section: secTools, Label: "AI CLI Command", Key: "AI_CLI_COMMAND",
 				Value: s.Config.Global.AICliCommand, Kind: SettingText},
-			SettingsItem{Label: "Terminal", Key: "TERMINAL",
+			SettingsItem{Section: secTools, Label: "Terminal", Key: "TERMINAL",
 				Value: s.Config.Global.Terminal, Kind: SettingEnum,
 				Options: []string{"ghostty", "iterm", "terminal", "wezterm", "alacritty", "kitty"}},
-			SettingsItem{Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
+			SettingsItem{Section: secTools, Label: "Multiplexer", Key: "TERMINAL_MULTIPLEXER",
 				Value: s.Config.Global.Multiplexer, Kind: SettingEnum,
 				Options: []string{"none", "tmux"}},
 		)
 		if s.Config.Global.Multiplexer == "tmux" {
 			// Layout of newly created sessions (existing ones keep theirs)
 			s.Items = append(s.Items,
-				SettingsItem{Label: "Tmux AI Pane Width %", Key: "TMUX_AI_PANE_WIDTH",
+				SettingsItem{Section: secTools, Label: "Tmux AI Pane Width %", Key: "TMUX_AI_PANE_WIDTH",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxAIPaneWidth), Kind: SettingText},
-				SettingsItem{Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
+				SettingsItem{Section: secTools, Label: "Tmux Right Panes", Key: "TMUX_RIGHT_PANES",
 					Value: fmt.Sprintf("%d", s.Config.Global.TmuxRightPanes), Kind: SettingEnum,
 					Options: []string{"1", "2", "3"}},
-				SettingsItem{Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
+				SettingsItem{Section: secTools, Label: "Auto Kill Tmux By Age", Key: "AUTO_KILL_TMUX",
 					Value: s.Config.Global.AutoKillTmux, Kind: SettingEnum,
 					Options: []string{"OFF", "8H", "1D", "3D", "7D"}},
 			)
 		}
 		s.Items = append(s.Items,
-			SettingsItem{Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
+			SettingsItem{Section: secWorkflow, Label: "Default Package Manager", Key: "PACKAGE_MANAGER",
 				Value: s.Config.Global.PackageManager, Kind: SettingEnum,
-				Options: []string{"pnpm", "npm", "yarn", "bun"}},
-			SettingsItem{Label: "Auto Refresh", Key: "AUTO_REFRESH",
+				Options: []string{"auto", "pnpm", "npm", "yarn", "bun"}},
+			SettingsItem{Section: secWorkflow, Label: "Auto Refresh", Key: "AUTO_REFRESH",
 				Value: s.Config.Global.AutoRefresh, Kind: SettingEnum,
 				Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}},
-			SettingsItem{Label: "Completion Sound", Key: "DONE_SOUND",
-				Value: s.Config.Global.DoneSound, Kind: SettingEnum,
-				Options: []string{"off", "glass", "submarine", "ping", "pop", "hero", "bell"}},
-			SettingsItem{Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
-				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
-				Options: []string{"activity", "created", "name"}},
-			SettingsItem{Label: "Layout", Key: "LAYOUT",
-				Value: s.Config.Global.Layout, Kind: SettingEnum,
-				Options: []string{"board", "explorer"}},
-			SettingsItem{Label: "Theme", Key: "THEME_STUDIO_ACTION",
-				Value: ThemeByKey(s.Config.Global.Theme).Name + " — press enter to browse", Kind: SettingAction},
-			SettingsItem{Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
+			SettingsItem{Section: secWorkflow, Label: "Auto Clean Modules By Age", Key: "AUTO_CLEAN_MODULES",
 				Value: s.Config.Global.AutoCleanModules, Kind: SettingEnum,
 				Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}},
-			SettingsItem{Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
-				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
-			SettingsItem{Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
-				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
-			SettingsItem{Label: "Launch Greeting", Key: "LAUNCH_GREETING",
+			SettingsItem{Section: secWorkflow, Label: "Sort Repos & Worktrees", Key: "SORT_ORDER",
+				Value: s.Config.Global.SortOrder, Kind: SettingEnum,
+				Options: []string{"activity", "created", "name"}},
+			SettingsItem{Section: secWorkflow, Label: "Show Hidden Repos", Key: "SHOW_HIDDEN_REPOS",
+				Value: boolToStr(s.Config.Global.ShowHiddenRepos), Kind: SettingBool},
+
+			SettingsItem{Section: secAppearance, Label: "Layout", Key: "LAYOUT",
+				Value: s.Config.Global.Layout, Kind: SettingEnum,
+				Options: []string{"board", "explorer"}},
+			SettingsItem{Section: secAppearance, Label: "Theme", Key: "THEME_STUDIO_ACTION",
+				Value: ThemeByKey(s.Config.Global.Theme).Name + " — press enter to browse", Kind: SettingAction},
+			SettingsItem{Section: secAppearance, Label: "Launch Greeting", Key: "LAUNCH_GREETING",
 				Value: boolToStr(s.Config.Global.LaunchGreeting), Kind: SettingBool},
-			SettingsItem{Label: "Worktree Size Scanning", Key: "SIZE_SCANNING",
+			SettingsItem{Section: secAppearance, Label: "Completion Sound", Key: "DONE_SOUND",
+				Value: s.Config.Global.DoneSound, Kind: SettingEnum,
+				Options: []string{"off", "glass", "submarine", "ping", "pop", "hero", "bell"}},
+			SettingsItem{Section: secAppearance, Label: "Worktree Size Scanning", Key: "SIZE_SCANNING",
 				Value: boolToStr(s.Config.Global.SizeScanning), Kind: SettingBool},
-			SettingsItem{Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
+
+			SettingsItem{Section: secFeatures, Label: "Check for Updates", Key: "DAILY_CHECK_FOR_UPDATES",
+				Value: boolToStr(s.Config.Global.CheckForUpdates), Kind: SettingBool},
+			SettingsItem{Section: secFeatures, Label: "Auto Update", Key: "AUTO_UPDATE_NEW_RELEASE",
+				Value: boolToStr(s.Config.Global.AutoUpdate), Kind: SettingBool},
+			SettingsItem{Section: secFeatures, Label: "GitHub Integration", Key: "GITHUB_INTEGRATION",
 				Value: boolToStr(s.Config.Global.GithubIntegration), Kind: SettingBool},
-			SettingsItem{Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
+			SettingsItem{Section: secFeatures, Label: "Enable Hibernate", Key: "ENABLE_HIBERNATE",
 				Value: boolToStr(s.Config.Global.EnableHibernate), Kind: SettingBool},
 		)
 	case TabWorkspace:
@@ -214,12 +263,38 @@ func (s *SettingsModel) buildItems(repoNames []string) {
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Package Manager", Key: "REPO_PACKAGE_MANAGER",
 					Value: pm, Kind: SettingEnum, RepoName: repo,
 					Options: []string{"default", "pnpm", "npm", "yarn", "bun"}},
+				SettingsItem{Section: "Local (" + repo + ")", Label: "Setup Script", Key: "REPO_SETUP_SCRIPT",
+					Value: rc.SetupScript, Kind: SettingText, RepoName: repo},
 				SettingsItem{Section: "Local (" + repo + ")", Label: "Last Refresh", Key: "LAST_REFRESH",
 					Value: formatLastRefresh(rc.LastRefresh), Kind: SettingDisplay, RepoName: repo},
 			)
 		}
 	case TabDiagnostics:
 		s.Items = append(s.Items, s.diagnosticItems()...)
+	}
+	for i := range s.Items {
+		s.Items[i].Warn = toolWarning(s.Items[i].Key, s.Items[i].Value)
+	}
+}
+
+// pmInventory summarizes every package manager LTS can drive: found ones
+// with versions, missing ones named — "this is what auto-detect can use".
+func pmInventory() string {
+	var have, missing []string
+	for _, info := range tools.PMVersions() {
+		if info.Version != "" {
+			have = append(have, info.Name+" "+info.Version)
+		} else {
+			missing = append(missing, info.Name)
+		}
+	}
+	switch {
+	case len(have) == 0:
+		return "none found ✗ — install one of pnpm/npm/yarn/bun"
+	case len(missing) == 0:
+		return strings.Join(have, " · ")
+	default:
+		return strings.Join(have, " · ") + "  (" + strings.Join(missing, ", ") + " not found)"
 	}
 }
 
@@ -276,6 +351,7 @@ func (s *SettingsModel) diagnosticItems() []SettingsItem {
 
 	return []SettingsItem{
 		{Label: "Git", Key: "DIAG_GIT", Value: gitStatus, Kind: SettingDisplay},
+		{Label: "Package Managers", Key: "DIAG_PM", Value: pmInventory(), Kind: SettingDisplay},
 		{Label: "Working Directory", Key: "DIAG_WORKDIR", Value: shortenHome(s.Config.WorkDir), Kind: SettingDisplay},
 		{Label: "Repositories", Key: "DIAG_REPOS", Value: repoStatus, Kind: SettingDisplay},
 		{Label: "Config File", Key: "DIAG_CONFIG", Value: configStatus, Kind: SettingDisplay},
@@ -536,7 +612,7 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	s.SaveError = ""
 	s.SaveStatus = ""
 
-	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" {
+	if item.Kind == SettingText && item.Value == "" && item.Key != "AI_CLI_COMMAND" && item.Key != "REPO_SETUP_SCRIPT" {
 		s.SaveError = item.Label + " cannot be empty"
 		s.Items[s.CursorIdx].Value = s.previousValue(item)
 		return nil
@@ -592,6 +668,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 			s.Config.Global.CopyMCPJson = item.Value == "true"
 		case "ENABLE_HIBERNATE":
 			s.Config.Global.EnableHibernate = item.Value == "true"
+		case "SHOW_HIDDEN_REPOS":
+			s.Config.Global.ShowHiddenRepos = item.Value == "true"
 		case "GITHUB_INTEGRATION":
 			s.Config.Global.GithubIntegration = item.Value == "true"
 		case "LAYOUT":
@@ -612,6 +690,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 				pm = ""
 			}
 			saveErr = s.Config.SetRepoPackageManager(item.RepoName, pm)
+		case "REPO_SETUP_SCRIPT":
+			saveErr = s.Config.SetRepoSetupScript(item.RepoName, item.Value)
 		}
 	}
 	if saveErr != nil {
@@ -621,6 +701,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	if item.Key == "TERMINAL_MULTIPLEXER" {
 		// Reveal/hide the tmux layout settings
 		s.buildItems(s.RepoNames)
+	} else if s.CursorIdx < len(s.Items) {
+		s.Items[s.CursorIdx].Warn = toolWarning(item.Key, item.Value)
 	}
 	s.SaveStatus = "Saved!"
 	s.saveGen++
@@ -848,6 +930,12 @@ func (s SettingsModel) View(width, height int) string {
 		var valueFmt string
 		switch item.Kind {
 		case SettingEnum:
+			if item.Warn != "" {
+				// A warned row shows only its selected value — the option
+				// list would push the ⚠ past the modal's width
+				valueFmt = cyanStyle.Render("[" + item.Value + "]")
+				break
+			}
 			var opts []string
 			found := false
 			for _, opt := range item.Options {
@@ -880,10 +968,16 @@ func (s SettingsModel) View(width, height int) string {
 			valueFmt = dimStyle.Render(item.Value)
 		}
 
+		warnFmt := ""
+		if item.Warn != "" {
+			warnStyle := lipgloss.NewStyle().Foreground(ColorYellow).Background(ColorBlack).Bold(true)
+			warnFmt = warnStyle.Render("  ⚠ " + item.Warn)
+		}
+
 		cursor := "  "
 		if isCursor {
 			cursor = "▸ "
-			line := activeStyle.Render(cursor+label+": ") + valueFmt
+			line := activeStyle.Render(cursor+label+": ") + valueFmt + warnFmt
 			if item.Kind == SettingEnum && !s.Editing {
 				line += editStyle.Render("  ⏎ cycle")
 			} else if item.Kind == SettingText && !s.Editing {
@@ -895,7 +989,7 @@ func (s SettingsModel) View(width, height int) string {
 			}
 			lines = append(lines, line)
 		} else {
-			line := dimStyle.Render(cursor) + whiteStyle.Render(label+": ") + valueFmt
+			line := dimStyle.Render(cursor) + whiteStyle.Render(label+": ") + valueFmt + warnFmt
 			lines = append(lines, line)
 		}
 	}

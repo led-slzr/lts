@@ -60,8 +60,9 @@ type WorkspaceOptions struct {
 	AICliCommand string
 	IDECommand   string
 	OpenEnvInIDE bool
-	CopyEnv      bool // copy .env* files
-	CopyMCP      bool // copy .mcp.json files
+	CopyEnv      bool                         // copy .env* files
+	CopyMCP      bool                         // copy .mcp.json files
+	SetupScript  func(repoName string) string // optional post-create command per repo
 }
 
 func (o WorkspaceOptions) pkgFor(repoName string) string {
@@ -69,6 +70,39 @@ func (o WorkspaceOptions) pkgFor(repoName string) string {
 		return ""
 	}
 	return o.PkgManager(repoName)
+}
+
+func (o WorkspaceOptions) setupFor(repoName string) string {
+	if o.SetupScript == nil {
+		return ""
+	}
+	return o.SetupScript(repoName)
+}
+
+// runSetupScript runs the repo's configured post-create command inside the
+// new worktree via the user's login shell (PATH matches their terminal;
+// && chains work). Failures are logged, never fatal — the worktree is
+// already usable, and the log names what to run by hand.
+func runSetupScript(wtPath, script string, log *CreateLog) {
+	if script == "" {
+		return
+	}
+	log.Add("Running setup script: " + script)
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	cmd := exec.Command(sh, "-lc", script)
+	cmd.Dir = wtPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if len(msg) > 200 {
+			msg = msg[len(msg)-200:]
+		}
+		log.AddError("Setup script failed: " + msg)
+		return
+	}
+	log.Add("Setup script ✓")
 }
 
 // ValidateBranchName checks if a branch name is valid.
@@ -395,6 +429,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	} else {
 		log.Add("Skipping dependency install")
 	}
+	runSetupScript(wtPath, opts.setupFor(filepath.Base(repoPath)), log)
 
 	// Generate individual workspace
 	log.Add("Generating workspace file")
@@ -514,6 +549,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 		} else {
 			log.Add("Skipping dependency install")
 		}
+		runSetupScript(wtPath, opts.setupFor(repoName), log)
 
 		results = append(results, &CreateResult{
 			WorktreePath: wtPath,
@@ -969,10 +1005,17 @@ func noopLog(_, _ string, _ bool) {}
 
 // RefreshAllRepos refreshes all repos in the script directory.
 // Returns (refreshed count, failed repo names, error).
-func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn ...LogFunc) (int, []string, error) {
+// SkipResolver reports repos an all-repo operation must leave alone
+// (hidden repos — the user marked them "don't touch"). nil = skip none.
+type SkipResolver func(repoName string) bool
+
+func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, skip SkipResolver, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
+	}
+	if skip == nil {
+		skip = func(string) bool { return false }
 	}
 
 	repos := DiscoverRepos(scriptDir, getBasisBranch)
@@ -981,14 +1024,14 @@ func RefreshAllRepos(scriptDir string, getBasisBranch BasisBranchResolver, logFn
 	var lastErr error
 	total := 0
 	for _, r := range repos {
-		if !r.IsMonorepo {
+		if !r.IsMonorepo && !skip(r.Name) {
 			total++
 		}
 	}
 
 	idx := 0
 	for _, r := range repos {
-		if r.IsMonorepo {
+		if r.IsMonorepo || skip(r.Name) {
 			continue
 		}
 		idx++
@@ -1551,14 +1594,23 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 // Also cleans up workspace files and empty directories. Returns the count and
 // the paths of the deleted worktrees (so callers can release attached
 // resources like tmux sessions).
-func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, logFn ...LogFunc) (int, []string, error) {
+func CleanupMergedCleanables(scriptDir string, getBasisBranch BasisBranchResolver, deleteRemote bool, skip SkipResolver, logFn ...LogFunc) (int, []string, error) {
 	log := noopLog
 	if len(logFn) > 0 && logFn[0] != nil {
 		log = logFn[0]
 	}
+	if skip == nil {
+		skip = func(string) bool { return false }
+	}
 
 	log("cleanup", "Discovering repos and scanning worktree statuses...", false)
-	repos := DiscoverRepos(scriptDir, getBasisBranch)
+	all := DiscoverRepos(scriptDir, getBasisBranch)
+	repos := all[:0]
+	for _, r := range all {
+		if r.IsMonorepo || !skip(r.Name) {
+			repos = append(repos, r)
+		}
+	}
 	cleaned := 0
 	var deletedPaths []string
 
@@ -1882,6 +1934,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	// Install dependencies
 	pkgManager := opts.pkgFor(repoName)
 	runPackageInstall(wtPath, pkgManager, &CreateLog{Stream: logFn, Context: ctx})
+	runSetupScript(wtPath, opts.setupFor(repoName), &CreateLog{Stream: logFn, Context: ctx})
 
 	// Generate workspace file
 	logFn(ctx, "Generating workspace file", false)

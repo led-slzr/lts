@@ -15,7 +15,7 @@ import (
 type GlobalConfig struct {
 	IDECommand        string // windsurf, code, cursor, zed
 	AICliCommand      string // claude, opencode, "claude --dangerously-skip-permissions"
-	PackageManager    string // pnpm, npm, yarn, bun
+	PackageManager    string // auto (detect per repo), pnpm, npm, yarn, bun
 	AutoRefresh       string // 30M, 1H, 24H, etc.
 	Terminal          string // ghostty, iterm, terminal, wezterm, alacritty
 	Multiplexer       string // none, tmux — session layer inside the terminal
@@ -24,6 +24,7 @@ type GlobalConfig struct {
 	Layout            string // main view layout: board, explorer
 	ClickUsage        string // header click mode: ide, ai, terminal — restored on launch
 	Theme             string // color theme key (see internal/ui/theme.go registry)
+	ShowHiddenRepos   bool   // show hidden repos grayed out instead of omitting them
 	SortOrder         string // repo/worktree ordering: activity, created, name
 	DoneSound         string // completion sound: off, glass, submarine, ping, pop, hero, bell
 	AutoCleanModules  string // remove node_modules of idle worktrees: OFF, 1D, 3D, 7D, 14D, 30D
@@ -45,6 +46,8 @@ type GlobalConfig struct {
 type RepoLocalConfig struct {
 	BasisBranch    string // main, dev, master, etc.
 	PackageManager string // per-repo override; empty = use global default
+	SetupScript    string // optional post-create command, run in the new worktree ("" = none)
+	Hidden         bool   // hide this repo from the main view (unwanted folders like .nvm)
 	LastRefresh    int64  // unix timestamp
 }
 
@@ -59,7 +62,7 @@ func DefaultGlobal() GlobalConfig {
 	return GlobalConfig{
 		IDECommand:        "windsurf",
 		AICliCommand:      "claude",
-		PackageManager:    "pnpm",
+		PackageManager:    "auto",
 		AutoRefresh:       "OFF",
 		Terminal:          "terminal",
 		Multiplexer:       "none",
@@ -68,6 +71,7 @@ func DefaultGlobal() GlobalConfig {
 		Layout:            "board",
 		ClickUsage:        "ide",
 		Theme:             "classic-lts",
+		ShowHiddenRepos:   false,
 		SortOrder:         "activity",
 		DoneSound:         "off",
 		AutoCleanModules:  "OFF",
@@ -224,6 +228,36 @@ func (c *Config) SetRepoPackageManager(repoName, pm string) error {
 	return c.SaveLocal()
 }
 
+// SetRepoHidden marks a repo hidden from (or restored to) the main view.
+func (c *Config) SetRepoHidden(repoName string, hidden bool) error {
+	key := strings.ToUpper(repoName)
+	rc, ok := c.Local[key]
+	if !ok {
+		rc = DefaultRepoLocal()
+	}
+	rc.Hidden = hidden
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
+// IsRepoHidden reports whether a repo is marked hidden.
+func (c *Config) IsRepoHidden(repoName string) bool {
+	rc, ok := c.Local[strings.ToUpper(repoName)]
+	return ok && rc.Hidden
+}
+
+// SetRepoSetupScript persists a per-repo post-create command ("" clears it).
+func (c *Config) SetRepoSetupScript(repoName, script string) error {
+	key := strings.ToUpper(repoName)
+	rc, ok := c.Local[key]
+	if !ok {
+		rc = DefaultRepoLocal()
+	}
+	rc.SetupScript = script
+	c.Local[key] = rc
+	return c.SaveLocal()
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
 	c.Global.LastUpdateCheck = ts
@@ -286,6 +320,7 @@ func (c *Config) SaveGlobal() error {
 		fmt.Sprintf("LAYOUT=\"%s\"", c.Global.Layout),
 		fmt.Sprintf("CLICK_USAGE=\"%s\"", c.Global.ClickUsage),
 		fmt.Sprintf("THEME=\"%s\"", c.Global.Theme),
+		fmt.Sprintf("SHOW_HIDDEN_REPOS=\"%t\"", c.Global.ShowHiddenRepos),
 		fmt.Sprintf("SORT_ORDER=\"%s\"", c.Global.SortOrder),
 		fmt.Sprintf("DONE_SOUND=\"%s\"", c.Global.DoneSound),
 		fmt.Sprintf("AUTO_CLEAN_MODULES=\"%s\"", c.Global.AutoCleanModules),
@@ -320,6 +355,12 @@ func (c *Config) SaveLocal() error {
 		lines = append(lines, fmt.Sprintf("%s_BASIS_BRANCH=\"%s\"", key, rc.BasisBranch))
 		if rc.PackageManager != "" {
 			lines = append(lines, fmt.Sprintf("%s_PACKAGE_MANAGER=\"%s\"", key, rc.PackageManager))
+		}
+		if rc.SetupScript != "" {
+			lines = append(lines, fmt.Sprintf("%s_SETUP_SCRIPT=\"%s\"", key, rc.SetupScript))
+		}
+		if rc.Hidden {
+			lines = append(lines, fmt.Sprintf("%s_HIDDEN=\"true\"", key))
 		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
@@ -377,6 +418,9 @@ func loadGlobal(g *GlobalConfig) {
 	}
 	if v, ok := kv["THEME"]; ok {
 		g.Theme = v
+	}
+	if v, ok := kv["SHOW_HIDDEN_REPOS"]; ok {
+		g.ShowHiddenRepos = v == "true"
 	}
 	if v, ok := kv["LAYOUT"]; ok {
 		g.Layout = v
@@ -449,6 +493,16 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			rc := local[repo]
 			rc.PackageManager = v
 			local[repo] = rc
+		} else if strings.HasSuffix(k, "_SETUP_SCRIPT") {
+			repo := strings.TrimSuffix(k, "_SETUP_SCRIPT")
+			rc := local[repo]
+			rc.SetupScript = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_HIDDEN") {
+			repo := strings.TrimSuffix(k, "_HIDDEN")
+			rc := local[repo]
+			rc.Hidden = v == "true"
+			local[repo] = rc
 		} else if strings.HasSuffix(k, "_LAST_REFRESH") {
 			repo := strings.TrimSuffix(k, "_LAST_REFRESH")
 			rc := local[repo]
@@ -473,7 +527,13 @@ func parseKeyValue(f *os.File) map[string]string {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		val := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		// Strip exactly the one wrapping quote pair SaveGlobal/SaveLocal
+		// write — never more, or values ending in a quote (setup scripts
+		// like `echo "done"`) get silently mangled on reload.
+		val := strings.TrimSpace(parts[1])
+		if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+			val = val[1 : len(val)-1]
+		}
 		kv[key] = val
 	}
 	return kv

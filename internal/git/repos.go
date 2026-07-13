@@ -46,6 +46,9 @@ type Repo struct {
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
 
+	// Hidden: marked in local config (grayed out when Show Hidden Repos is on)
+	Hidden bool
+
 	// Migration state: true when the main repo dir has work on a non-main branch
 	NeedsMigration  bool
 	MigrationBranch string // current branch name (e.g. "fix/hotfix")

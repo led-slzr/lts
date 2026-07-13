@@ -28,6 +28,19 @@ func (m *Model) canHibernate(repo git.Repo) bool {
 		m.ghState == ui.CloneReady && !repo.IsMonorepo && repo.Path != "" && m.githubRemotes[repo.Name]
 }
 
+// canManualHibernate: the strict gate can't cover this repo (no gh, no
+// GitHub remote, maybe no remote at all) but the user still wants the env
+// backup + delete. Advisory checks, repo-name confirmation — and only for
+// repos WITHOUT live worktrees: manual mode's checks don't block, so a
+// dirty worktree could be typed past. A repo with worktrees isn't "old";
+// delete or split them first. (Strict mode allows worktrees — its audit
+// hard-blocks anything unsafe.)
+func (m *Model) canManualHibernate(repo git.Repo) bool {
+	return m.config.Global.EnableHibernate &&
+		!repo.IsMonorepo && repo.Path != "" &&
+		len(repo.Worktrees) == 0 && !m.canHibernate(repo)
+}
+
 // envBackupRoot is where hibernate parks untracked env files, one
 // timestamped dir per backup: ~/.config/lts/env-backup/<repo>/<stamp>/.
 func envBackupRoot() string {
@@ -35,12 +48,23 @@ func envBackupRoot() string {
 }
 
 // startHibernate opens the dialog and dispatches the audit, holding the
-// repo's lock for the whole dialog lifetime.
-func startHibernate(m Model, repo git.Repo) (Model, tea.Cmd) {
+// repo's lock for the whole dialog lifetime. Manual mode keeps the same
+// audit and env backup but treats failed checks as advisory.
+func startHibernate(m Model, repo git.Repo, manual bool) (Model, tea.Cmd) {
 	m.hibernateActive = true
+	m.hibernateManual = manual
 	m.hibernateRepo = repo
 	m.hibernateAudit = nil
 	m.hibernateAuditPending = true
+	if manual {
+		m.hibernateInput.Placeholder = repo.Name
+		m.hibernateInput.CharLimit = len(repo.Name) + 8
+		m.hibernateInput.Width = maxIntApp(12, len(repo.Name)+2)
+	} else {
+		m.hibernateInput.Placeholder = "DELETE"
+		m.hibernateInput.CharLimit = 6
+		m.hibernateInput.Width = 10
+	}
 	lock := lockSet(repo)
 	logFn, startCmd := m.beginOp("Auditing "+repo.Name+" for hibernation...", lock...)
 	return m, tea.Batch(startCmd, hibernateAuditCmd(logFn, m.config.WorkDir, repo, m.config.GetRepoBasisBranch(repo.Name), lock))
@@ -92,24 +116,43 @@ func handleHibernateKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		if m.hibernateAudit != nil && m.hibernateAudit.Blockers() == 0 &&
-			strings.ToUpper(strings.TrimSpace(m.hibernateInput.Value())) == "DELETE" {
+		if m.hibernateAudit == nil {
+			return m, nil
+		}
+		typed := strings.TrimSpace(m.hibernateInput.Value())
+		if m.hibernateManual {
+			// Manual mode: checks are advisory — the confirmation is
+			// typing the repo's own name
+			if strings.EqualFold(typed, m.hibernateRepo.Name) {
+				return confirmHibernate(m)
+			}
+			return m, nil
+		}
+		if m.hibernateAudit.Blockers() == 0 && strings.ToUpper(typed) == "DELETE" {
 			return confirmHibernate(m)
 		}
 		return m, nil
 	}
 
 	// With blockers shown the typed input isn't active, so 'r' re-audits
-	// (after pushing / dropping a stash in another terminal)
-	if msg.String() == "r" && m.hibernateAudit != nil && m.hibernateAudit.Blockers() > 0 {
+	// (after pushing / dropping a stash in another terminal). Manual mode
+	// always types — esc and reopen to re-audit there.
+	if !m.hibernateManual && msg.String() == "r" && m.hibernateAudit != nil && m.hibernateAudit.Blockers() > 0 {
 		return reauditHibernate(m)
 	}
-	if m.hibernateAudit != nil && m.hibernateAudit.Blockers() == 0 {
+	if m.hibernateAudit != nil && (m.hibernateManual || m.hibernateAudit.Blockers() == 0) {
 		var cmd tea.Cmd
 		m.hibernateInput, cmd = m.hibernateInput.Update(msg)
 		return m, cmd
 	}
 	return m, nil
+}
+
+func maxIntApp(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func confirmHibernate(m Model) (Model, tea.Cmd) {
@@ -165,12 +208,21 @@ func (m Model) renderHibernateDialog() string {
 	critStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
 
 	repo := m.hibernateRepo
-	content := titleStyle.Render("Hibernate " + repo.Name)
+	title := "Hibernate " + repo.Name
+	if m.hibernateManual {
+		title = "Manual Hibernate " + repo.Name
+	}
+	content := titleStyle.Render(title)
 	if m.hibernateAudit != nil {
 		content += dimStyle.Render("  ·  frees ~" + git.HumanBytes(m.hibernateAudit.FreedBytes))
 	}
 	content += "\n\n"
-	content += dimStyle.Render("Deletes the local repo and its worktrees — GitHub keeps the rest.") + "\n\n"
+	if m.hibernateManual {
+		content += warnStyle.Render("No verified remote — the checks below are advisory.") + "\n"
+		content += dimStyle.Render("Anything not pushed or backed up elsewhere will be LOST.") + "\n\n"
+	} else {
+		content += dimStyle.Render("Deletes the local repo and its worktrees — GitHub keeps the rest.") + "\n\n"
+	}
 
 	if m.hibernateAudit == nil {
 		content += dimStyle.Render("  Auditing — fetching origin, checking branches, stashes,") + "\n"
@@ -184,6 +236,10 @@ func (m Model) renderHibernateDialog() string {
 	for _, c := range audit.Checks {
 		switch c.State {
 		case git.CheckFail:
+			if m.hibernateManual {
+				content += warnStyle.Render("  ⚠ "+c.Label) + "\n"
+				break
+			}
 			content += critStyle.Render("  ✗ "+c.Label) + "\n"
 		case git.CheckWarn:
 			content += warnStyle.Render("  ⚠ "+c.Label) + "\n"
@@ -199,7 +255,7 @@ func (m Model) renderHibernateDialog() string {
 		}
 	}
 	if n := len(audit.EnvFiles); n > 0 {
-		content += warnStyle.Render(fmt.Sprintf("  ⚠ %d .env file(s) → backup: ~/.config/lts/env-backup/%s/", n, repo.Name)) + "\n"
+		content += clipLine(warnStyle.Render(fmt.Sprintf("  ⚠ %d .env file(s) → backup: ~/.config/lts/env-backup/%s/", n, repo.Name)), 58) + "\n"
 		for i, f := range audit.EnvFiles {
 			if i == maxDetails {
 				content += dimStyle.Render(fmt.Sprintf("      … and %d more", n-i)) + "\n"
@@ -212,6 +268,12 @@ func (m Model) renderHibernateDialog() string {
 	}
 
 	content += "\n"
+	if m.hibernateManual {
+		content += warnStyle.Render("  Type the repo name to confirm:") + "\n\n"
+		content += "  " + m.hibernateInput.View() + "\n\n"
+		content += dimStyle.Render("  enter confirm • esc cancel")
+		return ui.ModalStyle.Width(64).Render(content)
+	}
 	if audit.Blockers() > 0 {
 		content += critStyle.Render("  Resolve the ✗ items above, then press r to re-audit") + "\n\n"
 		content += dimStyle.Render("  r re-audit • esc close")

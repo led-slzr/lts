@@ -11,6 +11,7 @@ import (
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
+	"lts-revamp/internal/tools"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 	"lts-revamp/internal/version"
@@ -134,6 +135,7 @@ type Model struct {
 	// audit start until the dialog closes so nothing mutates it while the
 	// user reads the checklist
 	hibernateActive       bool
+	hibernateManual       bool // advisory checks, repo-name confirmation
 	hibernateRepo         git.Repo
 	hibernateAudit        *git.HibernateAudit // nil while the audit runs
 	hibernateAuditPending bool                // an audit goroutine is in flight
@@ -153,6 +155,18 @@ type Model struct {
 
 	// Theme Studio (full-screen theme browser with live preview)
 	themeStudio ui.StudioModel
+
+	// Mono conversion dialogs — targets snapshotted at open
+	convertActive  bool
+	convertRepo    git.Repo
+	convertWT      git.Worktree
+	convertChoices []convertChoice
+	convertCursor  int
+	reduceActive   bool
+	reduceRepo     git.Repo
+	reduceWT       git.Worktree
+	reduceRows     []reduceRow
+	reduceCursor   int
 
 	// Explorer layout state (selection, pane focus, scrolls)
 	explorer    ui.ExplorerState
@@ -513,7 +527,7 @@ func (m *Model) maintenanceCandidates(maxAge time.Duration) (paths, locks []stri
 	cutoff := time.Now().Add(-maxAge).Unix()
 	lockSeen := make(map[string]bool)
 	for _, r := range m.repos {
-		if m.repoBusy(r) || r.NeedsMigration {
+		if m.repoBusy(r) || r.NeedsMigration || r.Hidden {
 			continue
 		}
 		for _, wt := range r.Worktrees {
@@ -741,11 +755,15 @@ func maintenanceCmd(logFn git.LogFunc, paths []string, tmuxIdle time.Duration, l
 // openCreateModalFor opens the create modal pre-seeded with a repo's
 // selection and jumps straight to the branch step.
 func (m Model) openCreateModalFor(repoIdx int) (Model, tea.Cmd) {
+	if repoIdx >= 0 && repoIdx < len(m.repos) && m.repos[repoIdx].Hidden {
+		m.statusMsg = m.repos[repoIdx].Name + " is hidden — unhide it first"
+		return m, clearStatusCmd()
+	}
 	if repoIdx < 0 || repoIdx >= len(m.repos) {
 		return m, nil
 	}
 	target := m.repos[repoIdx]
-	m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+	m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 	// Monorepo cards pre-select their constituent repos
 	want := map[string]bool{target.Name: true}
 	if target.IsMonorepo {
@@ -1060,6 +1078,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReposLoadedMsg:
 		wasInitialLoad := m.initialLoad
+		msg.Repos = m.applyHiddenRepos(msg.Repos)
 		sortRepos(msg.Repos, m.config.Global.SortOrder)
 		m.repos = msg.Repos
 		m.tmuxLive = msg.TmuxLive
@@ -1451,12 +1470,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hibernateAuditPending = false
 		audit := msg.Audit
 		m.hibernateAudit = &audit
-		if audit.Blockers() == 0 {
+		if m.hibernateManual || audit.Blockers() == 0 {
 			m.hibernateInput.SetValue("")
 			m.hibernateInput.Focus()
 			return m, textinput.Blink
 		}
 		return m, nil
+
+	case ConvertDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Convert failed: " + msg.Err.Error()
+		} else {
+			m.statusMsg = "Converted " + msg.Branch + " into " + msg.Group
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
+
+	case ReduceDoneMsg:
+		m.clearBusy(msg.Locked...)
+		if msg.Err != nil {
+			m.statusMsg = "Split failed: " + msg.Err.Error()
+		} else {
+			m.statusMsg = fmt.Sprintf("Split %s — %d kept as single, %d deleted", msg.Branch, msg.Kept, msg.Deleted)
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd())
 
 	case HibernateDoneMsg:
 		m.clearBusy(msg.Locked...)
@@ -1566,7 +1605,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.contextMenu.Active {
 		menuRendered := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
 		contentStartY, _, _ := modalMetrics(menuRendered, m.height)
-		itemStartY := contentStartY + 2 // skip title + empty line
+		itemStartY := contentStartY + m.contextMenu.ItemsStartOffset()
 
 		hoveredItem := msg.Y - itemStartY
 		if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
@@ -1651,6 +1690,10 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.hibernateActive {
+		return m, nil
+	}
+
+	if m.convertActive || m.reduceActive {
 		return m, nil
 	}
 
@@ -2253,7 +2296,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// Create button (only when repos exist) — the modal opens anytime;
 		// busy conflicts are checked when creation is confirmed
 		if m.hoveredBtn == ui.BtnCreateWT && len(m.repos) > 0 {
-			m.modal = ui.NewModal(m.repos, m.config.WorkDir, m.config.GetRepoPackageManager, m.config.Global.InstallOnCreate)
+			m.modal = ui.NewModal(m.creatableRepos(), m.config.WorkDir, m.resolvePM, m.config.Global.InstallOnCreate)
 			return m, textinput.Blink
 		}
 
@@ -2283,26 +2326,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			!isMigrationCard && !m.repoBusy(m.repos[m.focusedCard]) {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
-				// Repo header context menu
-				m.contextMenu = ui.ContextMenuModel{
-					Active: true,
-					Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo)),
-					X:      x, Y: y,
-				}
-				m.menuRepo = repo
-				m.menuWT = git.Worktree{}
-				m.menuHasWT = false
+				m = m.openRepoMenu(repo)
 			} else if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
-				// Worktree context menu
-				wt := repo.Worktrees[m.focusedWT]
-				m.contextMenu = ui.ContextMenuModel{
-					Active: true,
-					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)], m.prAble(repo, wt)),
-					X:      x, Y: y,
-				}
-				m.menuRepo = repo
-				m.menuWT = repo.Worktrees[m.focusedWT]
-				m.menuHasWT = true
+				m = m.openWorktreeMenu(repo, repo.Worktrees[m.focusedWT])
 			}
 			return m, nil
 		}
@@ -2462,6 +2488,14 @@ func (m Model) View() string {
 	// Hibernate audit/confirm
 	if m.hibernateActive {
 		return paintBlack(placeDialog(m.renderHibernateDialog()), m.width, m.height)
+	}
+
+	// Mono conversion dialogs
+	if m.convertActive {
+		return paintBlack(placeDialog(m.renderConvertDialog()), m.width, m.height)
+	}
+	if m.reduceActive {
+		return paintBlack(placeDialog(m.renderReduceDialog()), m.width, m.height)
 	}
 
 	// Theme Studio — full screen, renders in whichever theme the cursor
@@ -2797,19 +2831,53 @@ func basisResolver(cfg *config.Config) git.BasisBranchResolver {
 	}
 }
 
-// pkgResolver snapshots the per-repo package-manager config (see basisResolver).
+// hiddenResolver snapshots which repos are hidden (see basisResolver) —
+// all-repo operations must leave hidden repos untouched, network included.
+func hiddenResolver(cfg *config.Config) git.SkipResolver {
+	snap := make(map[string]bool, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.Hidden
+	}
+	return func(repoName string) bool {
+		return snap[strings.ToUpper(repoName)]
+	}
+}
+
+// pkgResolver snapshots the per-repo package-manager config (see
+// basisResolver). "auto" resolves per repo via lockfile/corepack detection
+// — inside the returned closure, so goroutines detect against the repo's
+// files without touching live config.
 func pkgResolver(cfg *config.Config) func(string) string {
 	def := cfg.Global.PackageManager
+	workDir := cfg.WorkDir
 	snap := make(map[string]string, len(cfg.Local))
 	for key, rc := range cfg.Local {
 		snap[key] = rc.PackageManager
 	}
 	return func(repoName string) string {
-		if pm, ok := snap[strings.ToUpper(repoName)]; ok && pm != "" {
-			return pm
+		pm, ok := snap[strings.ToUpper(repoName)]
+		if !ok || pm == "" {
+			pm = def
 		}
-		return def
+		if pm == "auto" {
+			return tools.DetectPM(filepath.Join(workDir, repoName))
+		}
+		return pm
 	}
+}
+
+// resolvePM resolves a repo's package manager to a concrete tool on the
+// Update thread (rebase, rename, modal display) — never returns "auto".
+func resolvePMWith(cfg *config.Config, repoName string) string {
+	pm := cfg.GetRepoPackageManager(repoName)
+	if pm == "auto" {
+		return tools.DetectPM(filepath.Join(cfg.WorkDir, repoName))
+	}
+	return pm
+}
+
+func (m *Model) resolvePM(repoName string) string {
+	return resolvePMWith(&m.config, repoName)
 }
 
 func checkMigrationCmd(cfg *config.Config) tea.Cmd {
@@ -2861,6 +2929,98 @@ func (m *Model) headerGhUser() string {
 // anyBusy reports whether any operation is running.
 func (m *Model) anyBusy() bool {
 	return len(m.busy) > 0
+}
+
+// applyHiddenRepos annotates repos marked hidden in local config, dropping
+// them entirely unless Show Hidden Repos is on. Hiding is what makes the
+// empty-state folder suggestions reachable in directories full of unwanted
+// repo-shaped folders (.nvm, .oh-my-zsh, ...).
+func (m *Model) applyHiddenRepos(repos []git.Repo) []git.Repo {
+	out := repos[:0]
+	for _, r := range repos {
+		if !r.IsMonorepo && m.config.IsRepoHidden(r.Name) {
+			if !m.config.Global.ShowHiddenRepos {
+				continue
+			}
+			r.Hidden = true
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// creatableRepos: hidden repos never appear in the create modal, even when
+// Show Hidden Repos renders them grayed out.
+func (m *Model) creatableRepos() []git.Repo {
+	out := make([]git.Repo, 0, len(m.repos))
+	for _, r := range m.repos {
+		if !r.Hidden {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// openRepoMenu opens the repo-header context menu with its detail block —
+// the same info the Explorer shows, available in both layouts.
+func (m Model) openRepoMenu(repo git.Repo) Model {
+	m.contextMenu = ui.ContextMenuModel{
+		Active: true,
+		Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canManualHibernate(repo), m.canHideRepo(repo), repo.Hidden),
+		Info:   ui.RepoMenuInfo(repo, m.config.GetRepoBasisBranch(repo.Name)),
+	}
+	m.menuRepo = repo
+	m.menuWT = git.Worktree{}
+	m.menuHasWT = false
+	return m
+}
+
+// openWorktreeMenu opens the worktree context menu with its detail block.
+func (m Model) openWorktreeMenu(repo git.Repo, wt git.Worktree) Model {
+	hasSession := m.tmuxLive[opener.SessionName(wt.Path)]
+	m.contextMenu = ui.ContextMenuModel{
+		Active: true,
+		Items:  ui.WorktreeContextItems(repo.IsMonorepo, hasSession, m.prAble(repo, wt), m.canConvert(repo)),
+		Info:   ui.WorktreeMenuInfo(wt, m.wtSizes()[wt.Path], hasSession),
+	}
+	m.menuRepo = repo
+	m.menuWT = wt
+	m.menuHasWT = true
+	return m
+}
+
+// canConvert: a plain repo's worktree can join a mono group when at least
+// one other plain repo exists to group with.
+func (m *Model) canConvert(repo git.Repo) bool {
+	if repo.IsMonorepo || repo.Path == "" {
+		return false
+	}
+	for _, r := range m.repos {
+		if !r.IsMonorepo && !r.Hidden && r.Path != "" && r.Name != repo.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// canHideRepo: only worktree-less plain repos can hide — a repo with live
+// LTS worktrees is clearly wanted, and a live mono-group constituent
+// (which shows zero single worktrees) must stay visible with its group.
+func (m *Model) canHideRepo(repo git.Repo) bool {
+	if repo.IsMonorepo || repo.Path == "" || len(repo.Worktrees) > 0 || repo.Hidden {
+		return false
+	}
+	for _, r := range m.repos {
+		if !r.IsMonorepo {
+			continue
+		}
+		for _, n := range r.RepoNames {
+			if n == repo.Name {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // lockSet returns the repo names an operation on repo must lock —
@@ -2952,8 +3112,9 @@ func (m *Model) beginOp(statusMsg string, lock ...string) (git.LogFunc, tea.Cmd)
 func refreshAllCmd(logFn git.LogFunc, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
+	skip := hiddenResolver(cfg)
 	return func() tea.Msg {
-		count, failed, err := git.RefreshAllRepos(workDir, resolve, logFn)
+		count, failed, err := git.RefreshAllRepos(workDir, resolve, skip, logFn)
 		return RefreshDoneMsg{Count: count, Failed: failed, Locked: locked, Err: err}
 	}
 }
@@ -2994,9 +3155,21 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 
 // workspaceOpts assembles the create-time options from config, snapshotting
 // everything on the caller's (Update) thread — see basisResolver.
+// setupResolver snapshots per-repo setup scripts (see basisResolver).
+func setupResolver(cfg *config.Config) func(string) string {
+	snap := make(map[string]string, len(cfg.Local))
+	for key, rc := range cfg.Local {
+		snap[key] = rc.SetupScript
+	}
+	return func(repoName string) string {
+		return snap[strings.ToUpper(repoName)]
+	}
+}
+
 func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 	return git.WorkspaceOptions{
 		PkgManager:   pkgResolver(cfg),
+		SetupScript:  setupResolver(cfg),
 		AICliCommand: cfg.Global.AICliCommand,
 		IDECommand:   cfg.Global.IDECommand,
 		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
@@ -3024,8 +3197,9 @@ func createWorktreeCmd(logFn git.LogFunc, repoNames []string, branch string, ins
 func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
+	skip := hiddenResolver(cfg)
 	return func() tea.Msg {
-		cleaned, deletedPaths, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, logFn)
+		cleaned, deletedPaths, err := git.CleanupMergedCleanables(workDir, resolve, deleteRemote, skip, logFn)
 		// Cleaned worktrees are gone — their tmux sessions must not linger
 		for _, p := range deletedPaths {
 			opener.KillSession(p)
@@ -3035,7 +3209,7 @@ func cleanupCmd(logFn git.LogFunc, cfg *config.Config, deleteRemote bool, locked
 }
 
 func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
-	pm := cfg.GetRepoPackageManager(filepath.Base(repoPath))
+	pm := resolvePMWith(cfg, filepath.Base(repoPath))
 	aiCli, ide, openEnv := cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
 		res, err := git.RenameWorktree(repoPath, wtPath, oldBranch, newBranch, renameRemote,
@@ -3051,7 +3225,9 @@ func renameCmd(logFn git.LogFunc, repoPath, wtPath, oldBranch, newBranch string,
 
 func renameMonorepoCmd(logFn git.LogFunc, branchSubdirPath string, repoNames []string, oldBranch, newBranch string, renameRemote bool, cfg *config.Config, locked []string) tea.Cmd {
 	workDir := cfg.WorkDir
-	pm, aiCli, ide, openEnv := cfg.Global.PackageManager, cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
+	// Resolve "auto" against the first constituent — a literal "auto" must
+	// never reach regenerated workspace files
+	pm, aiCli, ide, openEnv := resolvePMWith(cfg, repoNames[0]), cfg.Global.AICliCommand, cfg.Global.IDECommand, cfg.Global.OpenEnvInIDE
 	return func() tea.Msg {
 		res, err := git.RenameMonorepoWorktrees(workDir, branchSubdirPath, repoNames, oldBranch, newBranch, renameRemote,
 			pm, aiCli, ide, openEnv, logFn)
