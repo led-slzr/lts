@@ -83,8 +83,8 @@ func TestExplorerHitZonesMatchRender(t *testing.T) {
 	}
 	// selected row's strip: rebase, pr, rename, modules, delete
 	// (open isn't listed — clicking the row is the primary action)
-	if seenActions != 5 {
-		t.Errorf("expected 5 action zones, got %d", seenActions)
+	if seenActions != 6 {
+		t.Errorf("expected 6 action zones (incl [. more]), got %d", seenActions)
 	}
 	hasPR := false
 	for _, z := range res.HitZones {
@@ -124,8 +124,8 @@ func TestExplorerMonorepoActions(t *testing.T) {
 			}
 		}
 	}
-	if actions != 3 {
-		t.Errorf("expected 3 actions for monorepo (rename/modules/delete), got %d", actions)
+	if actions != 4 {
+		t.Errorf("expected 4 actions for monorepo (rename/modules/delete/more), got %d", actions)
 	}
 }
 

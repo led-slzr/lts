@@ -118,6 +118,7 @@ func explorerActions(repo git.Repo, hasSession, canPR bool) []stripAction {
 	if hasSession {
 		actions = append(actions, stripAction{"x session", BtnKillSession})
 	}
+	actions = append(actions, stripAction{". more", BtnContextMenu})
 	return actions
 }
 
@@ -387,7 +388,7 @@ func LayoutExplorer(repos []git.Repo, termWidth, yOffset, height int, st Explore
 	for len(shLines) < innerH-1 {
 		shLines = append(shLines, "")
 	}
-	shLines = append(shLines, truncate(dimStyle.Render("↑/↓ navigate · ←/→ switch pane · ⏎ open · n new"), shInner))
+	shLines = append(shLines, truncate(dimStyle.Render("↑/↓ navigate · ←/→ switch pane · ⏎ open · n new · . more"), shInner))
 
 	sheetBorder := CardBorderNormal
 	if st.FocusSheet {

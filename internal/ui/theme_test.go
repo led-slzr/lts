@@ -191,3 +191,23 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+// Context-menu mouse hit-testing depends on ItemsStartOffset matching the
+// render — pin it with and without the info block.
+func TestContextMenuItemsOffsetLockstep(t *testing.T) {
+	menu := ContextMenuModel{Active: true, Items: []ContextMenuItem{{Label: "Rebase"}, {Label: "Delete"}}}
+	plain := strings.Split(stripANSI(RenderContextMenu(menu, 80, 40)), "\n")
+	// content starts after border+padding (2 lines) in the modal render;
+	// within content, item rows begin at ItemsStartOffset.
+	if !strings.Contains(plain[2+menu.ItemsStartOffset()], "Rebase") {
+		t.Fatalf("no-info menu: first item not at offset %d", menu.ItemsStartOffset())
+	}
+	menu.Info = []string{"branch feat/x", "status clean", "size 120M"}
+	plain = strings.Split(stripANSI(RenderContextMenu(menu, 80, 40)), "\n")
+	if !strings.Contains(plain[2+menu.ItemsStartOffset()], "Rebase") {
+		t.Fatalf("info menu: first item not at offset %d:\n%s", menu.ItemsStartOffset(), strings.Join(plain, "\n"))
+	}
+	if !strings.Contains(plain[4], "branch feat/x") {
+		t.Fatal("info lines should render above the actions")
+	}
+}

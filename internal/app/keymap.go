@@ -151,6 +151,22 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		m.clampScroll()
 		return m, nil
 
+	case ".":
+		// Keyboard route to the [⋮] menu — parity with the Explorer's
+		if m.focusedCard >= 0 && m.focusedCard < len(m.repos) && !m.repoBusy(m.repos[m.focusedCard]) {
+			repo := m.repos[m.focusedCard]
+			if repo.NeedsMigration {
+				return m, nil
+			}
+			if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
+				return m.openWorktreeMenu(repo, repo.Worktrees[m.focusedWT]), nil
+			}
+			if m.focusedWT == -2 {
+				return m.openRepoMenu(repo), nil
+			}
+		}
+		return m, nil
+
 	case "esc":
 		m.focusedCard = -1
 		m.focusedWT = -1
@@ -663,6 +679,17 @@ func handleExplorerKey(m Model, msg tea.KeyMsg) (bool, Model, tea.Cmd) {
 			m2, cmd := explorerAction(m, ui.BtnCreatePR)
 			return true, m2, cmd
 		}
+	case ".":
+		// Full context menu (with details) for the selection — every
+		// action available on the Board is available here too
+		if st.FocusSheet {
+			m2, cmd := explorerAction(m, ui.BtnContextMenu)
+			return true, m2, cmd
+		}
+		if !repo.NeedsMigration && !m.repoBusy(repo) {
+			return true, m.openRepoMenu(repo), nil
+		}
+		return true, m, nil
 	}
 	return false, m, nil
 }
@@ -687,6 +714,14 @@ func explorerAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 		base := m.config.GetRepoBasisBranch(repo.Name)
 		m.statusMsg = "Opening PR page for " + wt.Branch + "..."
 		return m, tea.Batch(clearStatusCmd(), prCreateCmd(wt.Path, base, wt.Branch))
+	}
+
+	if action == ui.BtnContextMenu {
+		if m.repoBusy(repo) {
+			m.statusMsg = repo.Name + " is busy — wait for the running operation"
+			return m, clearStatusCmd()
+		}
+		return m.openWorktreeMenu(repo, wt), nil
 	}
 
 	if action == ui.BtnKillSession {

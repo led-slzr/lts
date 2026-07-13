@@ -1604,7 +1604,7 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.contextMenu.Active {
 		menuRendered := ui.RenderContextMenu(m.contextMenu, m.width, m.height)
 		contentStartY, _, _ := modalMetrics(menuRendered, m.height)
-		itemStartY := contentStartY + 2 // skip title + empty line
+		itemStartY := contentStartY + m.contextMenu.ItemsStartOffset()
 
 		hoveredItem := msg.Y - itemStartY
 		if hoveredItem >= 0 && hoveredItem < len(m.contextMenu.Items) {
@@ -2325,26 +2325,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			!isMigrationCard && !m.repoBusy(m.repos[m.focusedCard]) {
 			repo := m.repos[m.focusedCard]
 			if m.focusedWT == -2 {
-				// Repo header context menu
-				m.contextMenu = ui.ContextMenuModel{
-					Active: true,
-					Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canHideRepo(repo), repo.Hidden),
-					X:      x, Y: y,
-				}
-				m.menuRepo = repo
-				m.menuWT = git.Worktree{}
-				m.menuHasWT = false
+				m = m.openRepoMenu(repo)
 			} else if m.focusedWT >= 0 && m.focusedWT < len(repo.Worktrees) {
-				// Worktree context menu
-				wt := repo.Worktrees[m.focusedWT]
-				m.contextMenu = ui.ContextMenuModel{
-					Active: true,
-					Items:  ui.WorktreeContextItems(repo.IsMonorepo, m.tmuxLive[opener.SessionName(wt.Path)], m.prAble(repo, wt), m.canConvert(repo)),
-					X:      x, Y: y,
-				}
-				m.menuRepo = repo
-				m.menuWT = repo.Worktrees[m.focusedWT]
-				m.menuHasWT = true
+				m = m.openWorktreeMenu(repo, repo.Worktrees[m.focusedWT])
 			}
 			return m, nil
 		}
@@ -2975,6 +2958,34 @@ func (m *Model) creatableRepos() []git.Repo {
 		}
 	}
 	return out
+}
+
+// openRepoMenu opens the repo-header context menu with its detail block —
+// the same info the Explorer shows, available in both layouts.
+func (m Model) openRepoMenu(repo git.Repo) Model {
+	m.contextMenu = ui.ContextMenuModel{
+		Active: true,
+		Items:  ui.RepoContextItems(repo.IsMonorepo, m.canHibernate(repo), m.canHideRepo(repo), repo.Hidden),
+		Info:   ui.RepoMenuInfo(repo, m.config.GetRepoBasisBranch(repo.Name)),
+	}
+	m.menuRepo = repo
+	m.menuWT = git.Worktree{}
+	m.menuHasWT = false
+	return m
+}
+
+// openWorktreeMenu opens the worktree context menu with its detail block.
+func (m Model) openWorktreeMenu(repo git.Repo, wt git.Worktree) Model {
+	hasSession := m.tmuxLive[opener.SessionName(wt.Path)]
+	m.contextMenu = ui.ContextMenuModel{
+		Active: true,
+		Items:  ui.WorktreeContextItems(repo.IsMonorepo, hasSession, m.prAble(repo, wt), m.canConvert(repo)),
+		Info:   ui.WorktreeMenuInfo(wt, m.wtSizes()[wt.Path], hasSession),
+	}
+	m.menuRepo = repo
+	m.menuWT = wt
+	m.menuHasWT = true
+	return m
 }
 
 // canConvert: a plain repo's worktree can join a mono group when at least
