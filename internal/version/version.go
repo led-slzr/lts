@@ -1,7 +1,7 @@
 package version
 
 const (
-	Version = "3.1.0"
+	Version = "3.1.1"
 	Name    = "LTS"
 )
 
@@ -15,7 +15,7 @@ func IsDev() bool {
 	return Source != "release"
 }
 
-// Display returns the version with a dev marker when applicable, e.g. "3.1.0 (dev)".
+// Display returns the version with a dev marker when applicable, e.g. "3.1.1 (dev)".
 func Display() string {
 	if IsDev() {
 		return Version + " (dev)"
@@ -23,7 +23,7 @@ func Display() string {
 	return Version
 }
 
-// Full returns e.g. "LTS v3.1.0 (dev)".
+// Full returns e.g. "LTS v3.1.1 (dev)".
 func Full() string {
 	return Name + " v" + Display()
 }
