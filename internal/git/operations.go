@@ -179,6 +179,25 @@ func isLegacyDirName(name, prefix, branch string) bool {
 	return false
 }
 
+// isLegacyWorktreeDir is isLegacyDirName plus a metadata guard: anything LTS
+// recorded in .lts-meta.json was created by a version that already used the
+// new naming, so it can never be legacy even if its name happens to look like
+// "<prefix>-<suffix>" (e.g. repo "core" with branch "core/login" → "core-login").
+func isLegacyWorktreeDir(ltsDir, name, prefix, branch string) bool {
+	if isKnownNewStyle(ltsDir, name) {
+		return false
+	}
+	return isLegacyDirName(name, prefix, branch)
+}
+
+// isKnownNewStyle reports whether .lts-meta.json vouches for the dir: either
+// LTS created it (new naming since creation) or a previous startup check
+// certified it. Pre-meta dirs get certified on the first check that passes.
+func isKnownNewStyle(ltsDir, name string) bool {
+	m := readLTSMeta(ltsDir).Worktrees[name]
+	return m.CreatedAt != 0 || m.NamingVerified
+}
+
 // isTokenChar reports whether r can be part of a directory/branch name token.
 func isTokenChar(r byte) bool {
 	return r == '-' || r == '_' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
@@ -2061,6 +2080,7 @@ func hasMismatchedSingleDirs(ltsPath, repoName string) bool {
 	if err != nil {
 		return false
 	}
+	var verified []string
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -2075,60 +2095,110 @@ func hasMismatchedSingleDirs(ltsPath, repoName string) bool {
 		}
 		// Only legacy "<repo>-<suffix>" dirs need migrating. A dir whose branch
 		// was switched in place is intentionally left alone.
-		if isLegacyDirName(e.Name(), repoName, branch) && e.Name() != BranchToDirName(branch) {
+		if isLegacyWorktreeDir(ltsPath, e.Name(), repoName, branch) && e.Name() != BranchToDirName(branch) {
 			return true
 		}
+		verified = append(verified, e.Name())
 	}
+	// Everything here uses the current naming: certify it so a later branch
+	// switch can never make one of these dirs look legacy.
+	markNamingVerified(ltsPath, verified)
 	return false
 }
 
 // hasMismatchedMonorepoDirs checks monorepo LTS dirs for old naming.
+// Uses the same all-or-nothing decision as migrateMonorepoLTS, so the check
+// can never report work the migrator will refuse to do.
 func hasMismatchedMonorepoDirs(ltsPath, scriptDir, ltsDirName string) bool {
 	entries, err := os.ReadDir(ltsPath)
 	if err != nil {
 		return false
 	}
 	repoNames := getLTSRepos(scriptDir, ltsDirName)
-	ltsPrefix := strings.TrimSuffix(ltsDirName, "-lts")
+	var verified []string
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		branchSubdirPath := filepath.Join(ltsPath, e.Name())
-		subEntries, err := os.ReadDir(branchSubdirPath)
-		if err != nil {
-			continue
+		plan := planLegacyGroup(ltsPath, e.Name(), repoNames)
+		if plan.migrate {
+			return true
 		}
-		for _, se := range subEntries {
-			if !se.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(branchSubdirPath, se.Name())
-			if !isWorktreeDir(wtPath) {
-				continue
-			}
-			branch, _ := RunGit(wtPath, "branch", "--show-current")
-			if branch == "" {
-				continue
-			}
-			expectedSubdir := BranchToDirName(branch)
-			// Check branch subdir name: only legacy "<lts-prefix>-<suffix>" needs migrating
-			if e.Name() != expectedSubdir && isLegacyDirName(e.Name(), ltsPrefix, branch) {
-				return true
-			}
-			// Check worktree dir name (match longest repo prefix)
-			bestRepo := matchRepoPrefix(se.Name(), repoNames)
-			if bestRepo != "" {
-				expectedWtName := bestRepo + "-" + expectedSubdir
-				if se.Name() != expectedWtName && isLegacyDirName(se.Name(), bestRepo, branch) {
-					return true
-				}
-			}
-			// One branch check per subdir is enough
-			break
+		if plan.certify {
+			verified = append(verified, e.Name())
 		}
 	}
+	markNamingVerified(ltsPath, verified)
 	return false
+}
+
+// legacyGroupPlan is the decision for one monorepo branch subdir.
+type legacyGroupPlan struct {
+	branch  string // common branch of every worktree in the group
+	migrate bool   // whole group is a legacy layout and can be renamed as a unit
+	certify bool   // group is consistent and already uses the current naming
+}
+
+// planLegacyGroup decides whether a monorepo branch subdir is a fully legacy
+// layout. A group migrates only when every worktree inside is on the same
+// branch and every name (worktrees and the subdir) is either already the
+// current form or the legacy form for that branch. Anything else (a switched
+// or detached sibling, a "-2" counter, an unknown dir) pins the whole group:
+// nothing in it is renamed, so a group is never left half-migrated.
+func planLegacyGroup(ltsPath, subdirName string, repoNames []string) legacyGroupPlan {
+	if isKnownNewStyle(ltsPath, subdirName) {
+		return legacyGroupPlan{}
+	}
+	subdirPath := filepath.Join(ltsPath, subdirName)
+	subEntries, err := os.ReadDir(subdirPath)
+	if err != nil {
+		return legacyGroupPlan{}
+	}
+	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
+
+	var plan legacyGroupPlan
+	needs := false
+	for _, se := range subEntries {
+		if !se.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(subdirPath, se.Name())
+		if !isWorktreeDir(wtPath) {
+			continue
+		}
+		b, _ := RunGit(wtPath, "branch", "--show-current")
+		if b == "" {
+			return legacyGroupPlan{} // detached / mid-rebase: hands off
+		}
+		if plan.branch == "" {
+			plan.branch = b
+		} else if b != plan.branch {
+			return legacyGroupPlan{} // mixed branches: hands off
+		}
+		repo := matchRepoPrefix(se.Name(), repoNames)
+		if repo == "" {
+			return legacyGroupPlan{}
+		}
+		if se.Name() == repo+"-"+BranchToDirName(b) {
+			continue
+		}
+		if !isLegacyDirName(se.Name(), repo, b) {
+			return legacyGroupPlan{}
+		}
+		needs = true
+	}
+	if plan.branch == "" {
+		return legacyGroupPlan{}
+	}
+	if subdirName != BranchToDirName(plan.branch) {
+		if !isLegacyDirName(subdirName, ltsPrefix, plan.branch) {
+			return legacyGroupPlan{}
+		}
+		needs = true
+	}
+	plan.migrate = needs
+	plan.certify = !needs
+	return plan
 }
 
 // matchRepoPrefix returns the longest repo name that prefixes "<repo>-..." in name.
@@ -2191,7 +2261,7 @@ func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
 			continue
 		}
 		expectedName := BranchToDirName(branch)
-		if e.Name() == expectedName || !isLegacyDirName(e.Name(), repoName, branch) {
+		if e.Name() == expectedName || !isLegacyWorktreeDir(ltsPath, e.Name(), repoName, branch) {
 			continue
 		}
 
@@ -2209,6 +2279,8 @@ func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
 			}
 			RunGit(repoPath, "worktree", "repair")
 		}
+
+		renameWorktreeMeta(ltsPath, e.Name(), expectedName)
 
 		// Rename workspace file and update its contents
 		oldWs := filepath.Join(ltsPath, e.Name()+".code-workspace")
@@ -2230,7 +2302,6 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 		return 0
 	}
 
-	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
 	migrated := 0
 	for _, e := range entries {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
@@ -2238,23 +2309,14 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 		}
 		branchSubdirPath := filepath.Join(ltsPath, e.Name())
 
-		// Find a worktree inside to get the branch name
-		branch := ""
-		subEntries, err := os.ReadDir(branchSubdirPath)
-		if err != nil {
+		// All-or-nothing: only fully legacy, single-branch groups are touched
+		plan := planLegacyGroup(ltsPath, e.Name(), repoNames)
+		if !plan.migrate {
 			continue
 		}
-		for _, se := range subEntries {
-			if !se.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(branchSubdirPath, se.Name())
-			if isWorktreeDir(wtPath) {
-				branch, _ = RunGit(wtPath, "branch", "--show-current")
-				break
-			}
-		}
-		if branch == "" {
+		branch := plan.branch
+		subEntries, err := os.ReadDir(branchSubdirPath)
+		if err != nil {
 			continue
 		}
 
@@ -2281,9 +2343,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 			}
 
 			expectedWtName := bestRepo + "-" + branchDirName
-			// Only legacy "<repo>-<suffix>" dirs are renamed; a worktree whose
-			// branch was switched in place keeps its directory.
-			if se.Name() == expectedWtName || !isLegacyDirName(se.Name(), bestRepo, branch) {
+			if se.Name() == expectedWtName {
 				continue
 			}
 
@@ -2319,10 +2379,11 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 			continue
 		}
 		subdirRenamed := false
-		if e.Name() != expectedSubdir && isLegacyDirName(e.Name(), ltsPrefix, branch) {
+		if e.Name() != expectedSubdir {
 			newSubdirPath := filepath.Join(ltsPath, expectedSubdir)
 			if _, err := os.Stat(newSubdirPath); err != nil {
 				if os.Rename(branchSubdirPath, newSubdirPath) == nil {
+					renameWorktreeMeta(ltsPath, e.Name(), expectedSubdir)
 					branchSubdirPath = newSubdirPath
 					subdirRenamed = true
 					// Repair all worktrees after parent move
@@ -2522,9 +2583,14 @@ func repairMonorepoWorkspaceContent(branchSubdirPath, fileName, content string, 
 		if strings.Contains(updated, `"path": "`+de.Name()+`"`) {
 			continue
 		}
-		// Find stale path entries that share a repo with this dir and point them at it
+		// Point dangling path entries (nothing on disk) that share a repo with
+		// this dir at it. Paths that resolve, including a sibling "-2" worktree
+		// or a developer-chosen sub-path, are never touched.
 		for _, stalePath := range extractWSPaths(updated) {
 			if stalePath == de.Name() {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(branchSubdirPath, stalePath)); err == nil {
 				continue
 			}
 			staleRepo := repoOf(stalePath)
@@ -2536,28 +2602,53 @@ func repairMonorepoWorkspaceContent(branchSubdirPath, fileName, content string, 
 
 	// Display names left with stacked prefixes by older versions
 	expectedSuffix := monorepoWorkspaceSuffix(fileName)
-	for _, stale := range staleDisplaySuffixes(updated, expectedSuffix) {
+	for _, stale := range staleDisplaySuffixes(updated, expectedSuffix, repoNames) {
 		updated = replaceDisplaySuffix(updated, stale, expectedSuffix)
 	}
 	return updated
 }
 
-// staleDisplaySuffixes returns the distinct suffixes used in folder display
-// names ("<repo> - <suffix>") that differ from the expected suffix.
-func staleDisplaySuffixes(content, expected string) []string {
+// staleDisplaySuffixes returns the distinct suffixes in LTS-generated folder
+// display names ("<repo> - <suffix>") that carry the stacked-prefix damage
+// signature (see isStackedPrefix) for one of the group's repos. Anything
+// else, including names a developer customised, is left alone.
+func staleDisplaySuffixes(content, expected string, repoNames []string) []string {
 	var stale []string
 	seen := map[string]bool{}
+	known := map[string]bool{}
+	for _, r := range repoNames {
+		known[r] = true
+	}
 	for _, m := range wsFolderNameRe.FindAllStringSubmatch(content, -1) {
-		suffix := m[1]
-		if suffix != expected && !seen[suffix] {
-			seen[suffix] = true
-			stale = append(stale, suffix)
+		repo, suffix := m[1], m[2]
+		if !known[repo] || suffix == expected || seen[suffix] {
+			continue
 		}
+		if !isStackedPrefix(suffix, expected) {
+			continue
+		}
+		seen[suffix] = true
+		stale = append(stale, suffix)
 	}
 	return stale
 }
 
-var wsFolderNameRe = regexp.MustCompile(`"name":\s*"[^"]*? - ([^"]+)"`)
+// isStackedPrefix reports whether name is expected with its own first segment
+// repeated in front one or more times: "fix-fix-login" for "fix-login",
+// "led-led-led-queries-only" for "led-queries-only". That is exactly the
+// damage the old substring replace produced; "api-fix-login" is not it.
+func isStackedPrefix(name, expected string) bool {
+	seg, _, ok := strings.Cut(expected, "-")
+	if !ok || name == expected {
+		return false
+	}
+	for strings.HasPrefix(name, seg+"-") && name != expected {
+		name = strings.TrimPrefix(name, seg+"-")
+	}
+	return name == expected
+}
+
+var wsFolderNameRe = regexp.MustCompile(`"name":\s*"([^"]+?) - ([A-Za-z0-9_.-]+)"`)
 
 // RepairWorkspaceContents fixes .code-workspace files whose internal paths
 // don't match the current directory names. This repairs workspaces left stale

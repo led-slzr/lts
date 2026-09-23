@@ -287,3 +287,204 @@ func TestMonorepo_RepairStackedDisplayNames(t *testing.T) {
 		t.Fatal("still needs repair after repairing")
 	}
 }
+
+// A worktree created by LTS (recorded in .lts-meta.json) whose branch was
+// switched to one whose legacy form coincides with its directory name must
+// still not be renamed. Repo "core", dir "core-login" (new-style for
+// core/login), branch switched to feat/login → legacy form is "core-login".
+func TestSingleRepo_MetaGuard_BranchPrefixEqualsRepoName(t *testing.T) {
+	root := t.TempDir()
+	repo := initRepo(t, root, "core")
+	ltsPath := filepath.Join(root, "core-lts")
+	wt := filepath.Join(ltsPath, "core-login")
+	addWorktree(t, repo, wt, "core/login")
+	recordWorktreeCreated(ltsPath, "core-login", 1700000000)
+
+	run(t, wt, "git", "checkout", "-q", "-b", "feat/login")
+
+	if NeedsMigration(root) {
+		t.Fatal("meta-recorded worktree must never be treated as legacy")
+	}
+	MigrateDirectoryStructure(root)
+	if !exists(wt) {
+		t.Fatal("worktree was renamed")
+	}
+}
+
+// Without meta the same layout is legacy and migrates, and meta follows the rename.
+func TestSingleRepo_Legacy_MetaFollowsRename(t *testing.T) {
+	root := t.TempDir()
+	repo := initRepo(t, root, "core")
+	ltsPath := filepath.Join(root, "core-lts")
+	addWorktree(t, repo, filepath.Join(ltsPath, "core-login"), "feat/login")
+	if n := MigrateDirectoryStructure(root); n != 1 {
+		t.Fatalf("migrated %d, want 1", n)
+	}
+	if worktreeCreatedAt(ltsPath, "core-login") != 0 {
+		t.Fatal("stale meta entry left behind")
+	}
+}
+
+// Developer-customised folder names in a monorepo workspace are preserved by repair.
+func TestMonorepo_Repair_PreservesCustomFolderNames(t *testing.T) {
+	root := t.TempDir()
+	_, subdirPath := setupMonorepo(t, root, "fix-login", "fix/login",
+		map[string]string{"core": "core-fix-login", "erp-ui": "erp-ui-fix-login"})
+	generateMonorepoWorkspace(subdirPath, "fix-login", []string{"core:core-fix-login", "erp-ui:erp-ui-fix-login"}, "claude", "code", false)
+	wsPath := filepath.Join(subdirPath, "monorepo-fix-login.code-workspace")
+	ws := readFile(t, wsPath)
+
+	// Developer edits: a custom name for core, plus an extra folder with a dash in its name
+	custom := strings.Replace(ws, `"name": "core - fix-login"`, `"name": "core - my-api"`, 1)
+	custom = strings.Replace(custom, `"folders": [`, `"folders": [
+    { "name": "docs - notes", "path": "../../docs" },`, 1)
+	os.WriteFile(wsPath, []byte(custom), 0644)
+
+	if NeedsWorkspaceRepair(root) {
+		t.Fatal("custom names must not look stale")
+	}
+	RepairWorkspaceContents(root)
+	if got := readFile(t, wsPath); got != custom {
+		t.Fatalf("repair modified a customised workspace:\n%s", got)
+	}
+}
+
+// In a legacy group where one repo's worktree was switched to another branch,
+// nothing in the group is renamed (no half-migrated group).
+func TestMonorepo_Legacy_OneRepoSwitched_GroupPinned(t *testing.T) {
+	root := t.TempDir()
+	ltsPath, subdirPath := setupMonorepo(t, root, "core-erp-ui-login", "feat/login",
+		map[string]string{"core": "core-login", "erp-ui": "erp-ui-login"})
+	run(t, filepath.Join(subdirPath, "erp-ui-login"), "git", "checkout", "-q", "-b", "fix/other")
+
+	if NeedsMigration(root) {
+		t.Fatal("a mixed group must not be reported as needing migration")
+	}
+	MigrateDirectoryStructure(root)
+	if exists(filepath.Join(ltsPath, "feat-login")) {
+		t.Fatal("branch subdir was renamed although the group is mixed")
+	}
+	for _, d := range []string{"core-login", "erp-ui-login"} {
+		if !exists(filepath.Join(subdirPath, d)) {
+			t.Fatalf("%s was renamed: group is half-migrated", d)
+		}
+	}
+	// A detached sibling (mid-rebase) pins the group the same way
+	run(t, filepath.Join(subdirPath, "erp-ui-login"), "git", "checkout", "-q", "--detach")
+	if NeedsMigration(root) || MigrateDirectoryStructure(root) != 0 {
+		t.Fatal("detached sibling must pin the group")
+	}
+}
+
+// Switching a worktree to the basis branch must not make it renamed or cleanable.
+func TestSingleRepo_SwitchToMain_NotRenamedNotCleanable(t *testing.T) {
+	root := t.TempDir()
+	repo := initRepo(t, root, "core")
+	ltsPath := filepath.Join(root, "core-lts")
+	wt := filepath.Join(ltsPath, "feat-login")
+	addWorktree(t, repo, wt, "feat/login")
+	// main is checked out in the primary repo; detach it so the worktree can take main
+	run(t, repo, "git", "checkout", "-q", "--detach")
+	run(t, wt, "git", "checkout", "-q", "main")
+
+	if NeedsMigration(root) {
+		t.Fatal("should not migrate")
+	}
+	status, _ := GetWorktreeStatus(wt, "main")
+	if status == StatusMergedCleanable {
+		t.Fatal("worktree on main must not be cleanable")
+	}
+}
+
+func TestIsStackedPrefix(t *testing.T) {
+	yes := [][2]string{{"fix-fix-login", "fix-login"}, {"led-led-led-queries-only", "led-queries-only"}}
+	no := [][2]string{{"fix-login", "fix-login"}, {"api-fix-login", "fix-login"}, {"fixfix-login", "fix-login"}, {"login", "login"}, {"x-login", "login"}}
+	for _, c := range yes {
+		if !isStackedPrefix(c[0], c[1]) {
+			t.Errorf("%q should be stacked for %q", c[0], c[1])
+		}
+	}
+	for _, c := range no {
+		if isStackedPrefix(c[0], c[1]) {
+			t.Errorf("%q should NOT be stacked for %q", c[0], c[1])
+		}
+	}
+}
+
+// Pre-meta worktree (nothing in .lts-meta.json) on a slash-less branch: its
+// new-style dir name equals the legacy form of "<anything>/<same-name>". One
+// startup check certifies it, after which a branch switch cannot rename it.
+func TestSingleRepo_PreMeta_SlashlessBranch_CertifiedThenSwitched(t *testing.T) {
+	root := t.TempDir()
+	repo := initRepo(t, root, "core")
+	ltsPath := filepath.Join(root, "core-lts")
+	wt := filepath.Join(ltsPath, "core-login")
+	addWorktree(t, repo, wt, "core/login") // new-style dir for core/login, no meta
+	if NeedsMigration(root) {
+		t.Fatal("consistent dir must not need migration")
+	}
+	if !namingVerified(ltsPath, "core-login") {
+		t.Fatal("startup check should certify the dir")
+	}
+	run(t, wt, "git", "checkout", "-q", "-b", "feat/login")
+	if NeedsMigration(root) || MigrateDirectoryStructure(root) != 0 || !exists(wt) {
+		t.Fatal("certified dir was renamed after branch switch")
+	}
+}
+
+func TestMonorepo_PreMeta_SlashlessBranch_CertifiedThenSwitched(t *testing.T) {
+	root := t.TempDir()
+	_, subdirPath := setupMonorepo(t, root, "login", "login",
+		map[string]string{"core": "core-login", "erp-ui": "erp-ui-login"})
+	if NeedsMigration(root) {
+		t.Fatal("consistent group must not need migration")
+	}
+	for _, d := range []string{"core-login", "erp-ui-login"} {
+		run(t, filepath.Join(subdirPath, d), "git", "checkout", "-q", "-b", "feat/login")
+	}
+	if NeedsMigration(root) || MigrateDirectoryStructure(root) != 0 {
+		t.Fatal("certified group was migrated after branch switch")
+	}
+	if !exists(filepath.Join(subdirPath, "core-login")) {
+		t.Fatal("worktree renamed")
+	}
+}
+
+// A sibling "-2" worktree for the same repo must not hijack the workspace path,
+// and a developer-chosen sub-path must survive repair.
+func TestMonorepo_Repair_LeavesResolvablePathsAlone(t *testing.T) {
+	root := t.TempDir()
+	_, subdirPath := setupMonorepo(t, root, "feat-login", "feat/login",
+		map[string]string{"core": "core-feat-login", "erp-ui": "erp-ui-feat-login"})
+	generateMonorepoWorkspace(subdirPath, "feat-login", []string{"core:core-feat-login", "erp-ui:erp-ui-feat-login"}, "claude", "code", false)
+	wsPath := filepath.Join(subdirPath, "monorepo-feat-login.code-workspace")
+
+	// second core worktree in the same group (manual git worktree add)
+	addWorktree(t, filepath.Join(root, "core"), filepath.Join(subdirPath, "core-feat-login-2"), "feat/login-2")
+	// developer points erp-ui folder at a sub-path
+	ws := strings.Replace(readFile(t, wsPath), `"path": "erp-ui-feat-login"`, `"path": "erp-ui-feat-login/src"`, 1)
+	os.MkdirAll(filepath.Join(subdirPath, "erp-ui-feat-login", "src"), 0755)
+	os.WriteFile(wsPath, []byte(ws), 0644)
+
+	if NeedsWorkspaceRepair(root) {
+		t.Fatal("resolvable paths must not look stale")
+	}
+	RepairWorkspaceContents(root)
+	if got := readFile(t, wsPath); got != ws {
+		t.Fatalf("repair changed resolvable paths:\n%s", got)
+	}
+}
+
+// A customised name that merely ends in the expected suffix is not "stacked".
+func TestMonorepo_Repair_KeepsSuffixLikeCustomName(t *testing.T) {
+	root := t.TempDir()
+	_, subdirPath := setupMonorepo(t, root, "fix-login", "fix/login",
+		map[string]string{"core": "core-fix-login", "erp-ui": "erp-ui-fix-login"})
+	generateMonorepoWorkspace(subdirPath, "fix-login", []string{"core:core-fix-login", "erp-ui:erp-ui-fix-login"}, "claude", "code", false)
+	wsPath := filepath.Join(subdirPath, "monorepo-fix-login.code-workspace")
+	ws := strings.Replace(readFile(t, wsPath), `"name": "core - fix-login"`, `"name": "core - api-fix-login"`, 1)
+	os.WriteFile(wsPath, []byte(ws), 0644)
+	if NeedsWorkspaceRepair(root) {
+		t.Fatal("custom name flagged as stale")
+	}
+}
