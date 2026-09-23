@@ -14,6 +14,11 @@ const ltsMetaFile = ".lts-meta.json"
 
 type wtMeta struct {
 	CreatedAt int64 `json:"created_at"`
+	// NamingVerified marks a directory that the startup migration check has
+	// certified as using the current naming convention. Once set, the dir is
+	// never treated as legacy again, even if a later branch switch makes its
+	// name coincide with the legacy form of the new branch.
+	NamingVerified bool `json:"naming_verified,omitempty"`
 }
 
 type ltsMeta struct {
@@ -52,6 +57,32 @@ func recordWorktreeCreated(ltsDir, wtName string, ts int64) {
 // worktreeCreatedAt returns the recorded creation time, 0 if unknown.
 func worktreeCreatedAt(ltsDir, wtName string) int64 {
 	return readLTSMeta(ltsDir).Worktrees[wtName].CreatedAt
+}
+
+// namingVerified reports whether the dir was certified by a migration check.
+func namingVerified(ltsDir, wtName string) bool {
+	return readLTSMeta(ltsDir).Worktrees[wtName].NamingVerified
+}
+
+// markNamingVerified certifies the given dirs (single worktrees or monorepo
+// branch subdirs). Writes only when something actually changed.
+func markNamingVerified(ltsDir string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	meta := readLTSMeta(ltsDir)
+	changed := false
+	for _, n := range names {
+		m := meta.Worktrees[n]
+		if !m.NamingVerified {
+			m.NamingVerified = true
+			meta.Worktrees[n] = m
+			changed = true
+		}
+	}
+	if changed {
+		writeLTSMeta(ltsDir, meta)
+	}
 }
 
 // renameWorktreeMeta follows a worktree directory rename.
