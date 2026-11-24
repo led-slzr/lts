@@ -73,7 +73,14 @@ func TryAcquire(workDir string, repos []string, owner string) (*Held, error) {
 			h.Release()
 			return nil, err
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		// A Holder() probe takes the lock for microseconds; retry briefly
+		// so a concurrent busy check never reads as "busy"
+		for i := 0; err != nil && errors.Is(err, syscall.EWOULDBLOCK) && i < 5; i++ {
+			time.Sleep(10 * time.Millisecond)
+			err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		}
+		if err != nil {
 			f.Close()
 			h.Release()
 			if errors.Is(err, syscall.EWOULDBLOCK) {

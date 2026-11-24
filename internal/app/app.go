@@ -808,7 +808,7 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.usageLabels(), ui.HeaderOpts{
-		Loading:            m.anyBusy(),
+		Loading:            m.ownBusy(),
 		Frame:              m.loaderFrame,
 		StatusMsg:          m.statusMsg,
 		VersionHovered:     m.versionHovered,
@@ -962,7 +962,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 
 	case LoaderTickMsg:
-		if m.initialLoad || m.anyBusy() {
+		if m.initialLoad || m.ownBusy() {
 			m.loaderFrame++
 			m.recomputeLayout()
 			return m, loaderTickCmd()
@@ -994,7 +994,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "RESET_SETUP_ACTION":
 			// Resetting exec-relaunches the process — it would kill
 			// running operations mid-flight
-			if m.anyBusy() {
+			if m.ownBusy() {
 				m.settings.SaveError = "Wait for running operations to finish"
 				return m, nil
 			}
@@ -1301,7 +1301,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StatusClearMsg:
 		// Gen 0 = legacy (always clear). Gen > 0 = only clear if matching current gen.
-		if !m.anyBusy() && (msg.Gen == 0 || msg.Gen == m.statusGen) {
+		if !m.ownBusy() && (msg.Gen == 0 || msg.Gen == m.statusGen) {
 			m.statusMsg = ""
 			m.recomputeLayout()
 		}
@@ -2812,6 +2812,12 @@ func (m *Model) headerGhUser() string {
 }
 
 // anyBusy reports whether any operation is running.
+// ownBusy: this TUI has an operation running (drives the loader and
+// status clearing; external locks only gate conflicting actions).
+func (m *Model) ownBusy() bool {
+	return len(m.busy) > 0
+}
+
 func (m *Model) anyBusy() bool {
 	return len(m.busy) > 0 || len(m.extBusy) > 0
 }
