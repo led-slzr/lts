@@ -1,6 +1,7 @@
 package git
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,5 +47,29 @@ func TestRebaseRestoresOwnStash(t *testing.T) {
 	}
 	if list := gitRun(t, core, "stash", "list"); strings.Contains(list, "lts-rebase") {
 		t.Fatalf("stash left behind: %q", list)
+	}
+}
+
+// An interactive rebase the user is in the middle of must not be aborted.
+func TestRebaseRefusesOngoingRebase(t *testing.T) {
+	scriptDir, _ := hibernateFixture(t, "core")
+	core := filepath.Join(scriptDir, "core")
+	wt := filepath.Join(scriptDir, "core-lts", "feat-r")
+	gitRun(t, core, "worktree", "add", "-b", "feat/r", wt)
+	writeFileT(t, filepath.Join(wt, "a.txt"), "a\n")
+	gitRun(t, wt, "add", ".")
+	gitRun(t, wt, "commit", "-m", "a")
+	// Simulate "stopped at edit": an in-progress rebase-merge dir
+	gitDir := strings.TrimSpace(gitRun(t, wt, "rev-parse", "--git-dir"))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(wt, gitDir)
+	}
+	writeFileT(t, filepath.Join(gitDir, "rebase-merge", "head-name"), "refs/heads/feat/r\n")
+	err := RebaseWorktree(wt, "main", "")
+	if err == nil || !strings.Contains(err.Error(), "ongoing rebase") {
+		t.Fatalf("want refusal for an ongoing rebase, got %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(gitDir, "rebase-merge")); serr != nil {
+		t.Fatal("the user's in-progress rebase was aborted")
 	}
 }

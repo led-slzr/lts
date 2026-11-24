@@ -1381,6 +1381,12 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		ctx = filepath.Base(wtPath)
 	}
 
+	// A rebase/merge/cherry-pick the user is in the middle of must never be
+	// aborted by us (the abort below would discard their progress)
+	if err := CheckOngoingOperations(wtPath); err != nil {
+		return err
+	}
+
 	log(ctx, "Checking for uncommitted changes...", false)
 	status, _ := RunGit(wtPath, "status", "--porcelain")
 

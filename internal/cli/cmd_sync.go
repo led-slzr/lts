@@ -137,6 +137,9 @@ Mono-group worktrees are not supported yet (exit 4).` + targetHelp + exitCodesHe
 				return guardErr("rebase isn't supported for mono-group worktrees yet (%s)", t.ID()).
 					withHint("rebase each member with git: cd \"$(lts path %s --member <repo>)\" && git rebase <basis>", t.ID())
 			}
+			if err := git.CheckOngoingOperations(t.WT.Path); err != nil {
+				return guardErr("%s", err.Error()).withHint("finish or abort it yourself in %s (git rebase --continue / --abort)", t.WT.Path)
+			}
 			basis := env.Cfg.GetRepoBasisBranch(t.Repo.Name)
 			main := t.Repo.MainBranch
 			if main == "" {
