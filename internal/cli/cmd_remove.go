@@ -250,7 +250,7 @@ func addCleanupMerged(a *app, root *cobra.Command) {
 	var repoFlag []string
 	cmd := &cobra.Command{
 		Use:     "cleanup-merged",
-		Aliases: []string{"cleanup", "prune"},
+		Aliases: []string{"cleanup"},
 		Short:   "Delete every merged, clean worktree (and its local branch)",
 		GroupID: groupRemove,
 		Long: `Delete every worktree whose branch is merged into the basis branch

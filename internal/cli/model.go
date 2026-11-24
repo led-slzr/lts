@@ -25,6 +25,9 @@ type repoView struct {
 	Hidden         bool           `json:"hidden,omitempty"`
 	MainCheckout   *mainCheckout  `json:"main_checkout,omitempty"`
 	Worktrees      []worktreeView `json:"worktrees"`
+	// Stale: worktrees git still has registered whose folder is gone —
+	// clean up with `lts prune`
+	Stale []git.StaleWorktree `json:"stale,omitempty"`
 }
 
 // mainCheckout flags work sitting in the repo's own folder instead of an
@@ -95,6 +98,7 @@ func (e *Env) repoView(r git.Repo, tmux map[string]bool, busy func(git.Repo) boo
 		v.BasisBranch = e.Cfg.GetRepoBasisBranch(r.Name)
 		v.PackageManager = core.ResolvePM(&e.Cfg, r.Name)
 		v.MainCheckout = &mainCheckout{NeedsMigration: r.NeedsMigration, Branch: r.MigrationBranch, Reason: r.MigrationReason}
+		v.Stale = r.Stale
 	}
 	v.Worktrees = []worktreeView{}
 	for _, wt := range r.Worktrees {

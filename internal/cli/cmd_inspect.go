@@ -114,8 +114,13 @@ func renderLs(w io.Writer, env *Env, views []repoView) {
 		if v.MainCheckout != nil && v.MainCheckout.NeedsMigration {
 			fmt.Fprintf(w, "  ! main checkout is on %s (%s) — open the TUI to migrate it into a worktree\n", v.MainCheckout.Branch, v.MainCheckout.Reason)
 		}
+		for _, st := range v.Stale {
+			fmt.Fprintf(w, "  ! missing: %s (%s) — folder deleted; run `lts prune %s`\n", branchLabel(st.Branch), st.Path, v.Name)
+		}
 		if len(v.Worktrees) == 0 {
-			fmt.Fprintln(w, "  (no worktrees)")
+			if len(v.Stale) == 0 {
+				fmt.Fprintln(w, "  (no worktrees)")
+			}
 			continue
 		}
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
