@@ -18,6 +18,10 @@ const (
 	KindInt  KeyKind = "int"
 )
 
+// MaxValueLen caps a setting's length (setup scripts chain commands, but a
+// config line is not a script file).
+const MaxValueLen = 4096
+
 // KeyDef documents one settable key. It is the single source of truth for
 // validation shared by the Settings UI and `lts config set`.
 type KeyDef struct {
@@ -110,6 +114,14 @@ func keyNames(defs []KeyDef) []string {
 // Validate normalizes and checks a value against the definition.
 func (d KeyDef) Validate(value string) (string, error) {
 	value = strings.TrimSpace(value)
+	// Config files are one KEY="value" per line: a line break or NUL in a
+	// value would inject extra keys (or truncate the file) on reload
+	if strings.ContainsAny(value, "\n\r\x00") {
+		return "", fmt.Errorf("%s cannot contain line breaks", d.Key)
+	}
+	if len(value) > MaxValueLen {
+		return "", fmt.Errorf("%s is too long (max %d characters)", d.Key, MaxValueLen)
+	}
 	if value == "" {
 		if d.AllowEmpty {
 			return "", nil

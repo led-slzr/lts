@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestGlobalSetGetRoundTrip(t *testing.T) {
 	g := DefaultGlobal()
@@ -67,5 +70,24 @@ func TestWritesMergeWithOtherProcesses(t *testing.T) {
 	}
 	if fresh.Local["CORE"].LastRefresh != 42 || !fresh.Global.CopyMCPJson || fresh.Global.Layout != "explorer" {
 		t.Fatalf("lost a write: %+v / mcp=%v layout=%s", fresh.Local["CORE"], fresh.Global.CopyMCPJson, fresh.Global.Layout)
+	}
+}
+
+func TestValuesCannotInjectKeys(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("LTS_CONFIG_DIR", t.TempDir())
+	c := LoadReadOnly(ws)
+	if err := c.SetRepoKey("app", "SETUP_SCRIPT", "true\nERP_LTS_ROOT=\"/elsewhere"); err == nil {
+		t.Fatal("a value with a newline must be rejected")
+	}
+	g := DefaultGlobal()
+	if err := g.Set("IDE_COMMAND", "code\nTHEME=\"x"); err == nil {
+		t.Fatal("global value with a newline must be rejected")
+	}
+	// A long (but legal-length) line must not truncate parsing of later keys
+	c.SetRepoKey("aaa", "SETUP_SCRIPT", strings.Repeat("x", MaxValueLen))
+	c.SetRepoKey("zzz", "BASIS_BRANCH", "dev")
+	if got := LoadReadOnly(ws).Local["ZZZ"].BasisBranch; got != "dev" {
+		t.Fatalf("keys after a long line were lost: %q", got)
 	}
 }

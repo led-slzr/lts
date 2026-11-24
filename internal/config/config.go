@@ -590,6 +590,9 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 func parseKeyValue(f *os.File) map[string]string {
 	kv := make(map[string]string)
 	scanner := bufio.NewScanner(f)
+	// Default 64KB token limit silently stopped parsing at a long line and
+	// the next save dropped every key after it
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
