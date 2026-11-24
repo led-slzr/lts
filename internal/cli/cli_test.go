@@ -352,3 +352,41 @@ func TestHelpSurfaces(t *testing.T) {
 		}
 	}
 }
+
+func TestHooks(t *testing.T) {
+	f := newFixture(t, "core")
+	wt := f.addWorktree("core", "feat/h")
+	run := func(event, input string) string {
+		var out bytes.Buffer
+		stdout, stdin = &out, strings.NewReader(input)
+		defer func() { stdout, stdin = os.Stdout, os.Stdin }()
+		if code := Execute([]string{"hook", event}, nil); code != 0 {
+			t.Fatalf("hook %s exit %d", event, code)
+		}
+		return out.String()
+	}
+	out := run("session-start", `{"cwd":"`+wt+`"}`)
+	var m map[string]map[string]any
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatalf("hook output not JSON: %q", out)
+	}
+	ctx := m["hookSpecificOutput"]["additionalContext"].(string)
+	if !strings.Contains(ctx, "core-lts/feat-h") || !strings.Contains(ctx, "--dry-run") {
+		t.Fatalf("context = %q", ctx)
+	}
+	if out := run("session-start", `{"cwd":"`+t.TempDir()+`"}`); out != "" {
+		t.Fatalf("outside LTS the hook must print nothing, got %q", out)
+	}
+	// worktree-create: clean main checkout → LTS worktree; rerun reuses it
+	p1 := run("worktree-create", `{"cwd":"`+f.repo("core")+`","name":"agent-x1"}`)
+	p2 := run("worktree-create", `{"cwd":"`+f.repo("core")+`","name":"agent-x1"}`)
+	want := filepath.Join(f.ws, "core-lts", "agent-x1")
+	if !strings.Contains(p1, want) || p1 != p2 {
+		t.Fatalf("worktree-create: %q / %q", p1, p2)
+	}
+	// dirty main checkout → step aside
+	os.WriteFile(filepath.Join(f.repo("core"), "README.md"), []byte("dirty\n"), 0644)
+	if out := run("worktree-create", `{"cwd":"`+f.repo("core")+`","name":"agent-x2"}`); out != "" {
+		t.Fatalf("dirty main checkout must fall back, got %q", out)
+	}
+}
