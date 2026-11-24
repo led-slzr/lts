@@ -23,7 +23,9 @@ var (
 func SetLTSRoots(roots map[string]string) {
 	m := make(map[string]string, len(roots))
 	for k, v := range roots {
-		if v = strings.TrimSpace(v); v != "" {
+		// Only absolute roots: a hand-edited relative value would resolve
+		// against whatever directory lts happens to run from
+		if v = strings.TrimSpace(v); v != "" && filepath.IsAbs(v) {
 			m[strings.ToUpper(k)] = filepath.Clean(v)
 		}
 	}

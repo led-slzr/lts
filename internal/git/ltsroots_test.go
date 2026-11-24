@@ -3,6 +3,7 @@ package git
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -52,5 +53,37 @@ func TestCustomLTSRootCreateDiscoverDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(want); !os.IsNotExist(err) {
 		t.Fatal("worktree should be removed")
+	}
+}
+
+// A clean, pushed worktree under a custom LTS root must not block hibernate.
+func TestHibernateAllowsCustomRootWorktrees(t *testing.T) {
+	scriptDir, _ := hibernateFixture(t, "core")
+	root := t.TempDir()
+	SetLTSRoots(map[string]string{"core": root})
+	t.Cleanup(func() { SetLTSRoots(nil) })
+	res, err := CreateSingleRepoWorktree(filepath.Join(scriptDir, "core"), scriptDir, "feat/h", "main", WorkspaceOptions{}, false, &CreateLog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, res.WorktreePath, "push", "-u", "origin", "feat/h")
+	var repo Repo
+	for _, r := range DiscoverRepos(scriptDir, mainBasis) {
+		if r.Name == "core" {
+			repo = r
+		}
+	}
+	audit := AuditHibernate(scriptDir, repo, "main")
+	for _, c := range audit.Checks {
+		for _, d := range c.Details {
+			if strings.Contains(d, "outside") {
+				t.Fatalf("custom-root worktree flagged: %s", d)
+			}
+		}
+	}
+	// Relative roots are ignored (would resolve against the cwd)
+	SetLTSRoots(map[string]string{"core": "relative/dir"})
+	if got := LTSRootFor(scriptDir, "core"); got != scriptDir {
+		t.Fatalf("relative root used: %s", got)
 	}
 }
