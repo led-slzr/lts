@@ -138,15 +138,16 @@ func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opt
 			repo.Worktrees = append(repo.Worktrees, wts...)
 		}
 
-		// Check if main repo needs migration to LTS worktree
-		if !opts.SkipMigrationCheck {
-			needsMigration, migBranch, migReason := checkMigrationNeeded(dirPath, mainBranch)
-			repo.NeedsMigration = needsMigration
-			repo.MigrationBranch = migBranch
-			repo.MigrationReason = migReason
-		}
-
 		repos = append(repos, repo)
+	}
+
+	// Main-checkout scans (a git status per repo) are independent — run
+	// them in parallel
+	if !opts.SkipMigrationCheck {
+		parallelEach(len(repos), func(i int) {
+			r := &repos[i]
+			r.NeedsMigration, r.MigrationBranch, r.MigrationReason = checkMigrationNeeded(r.Path, r.MainBranch)
+		})
 	}
 
 	// Phase 2: Discover multi-repo LTS directories and create monorepo cards
@@ -202,35 +203,34 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 		return nil
 	}
 
-	var wts []Worktree
-	seen := make(map[string]bool)
-
+	var subdirs []os.DirEntry
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+		if e.IsDir() {
+			subdirs = append(subdirs, e)
 		}
-		// Each subdirectory is a branch group (e.g. core-erp-ui-login)
+	}
+	// One entry per branch subdir, built in parallel. The group's branch
+	// is the one most members are on; a member on another branch (or
+	// detached) makes the whole group "unknown" — deleting the group
+	// force-deletes the group branch in every repo, so it must never look
+	// safe.
+	built := make([]*Worktree, len(subdirs))
+	parallelEach(len(subdirs), func(i int) {
+		e := subdirs[i]
 		branchSubdir := filepath.Join(ltsPath, e.Name())
-		// One entry per branch subdir. The group's branch is the one most
-		// members are on; a member on another branch (or detached) makes
-		// the whole group "unknown" — deleting the group force-deletes the
-		// group branch in every repo, so it must never look safe.
 		members := MonoMembers(branchSubdir)
 		if len(members) == 0 {
-			continue
+			return
 		}
 		branch := monoGroupBranch(members)
-		if branch == "" || seen[branch] {
-			continue
+		if branch == "" {
+			return
 		}
-		seen[branch] = true
-
 		var status WTStatus
 		var statusText string
 		if !opts.SkipStatus {
 			status, statusText, _ = MonoGroupStatus(members, branch, func(string) string { return basisBranch })
 		}
-
 		// Last activity: newest across the branch's per-repo worktrees
 		var activity int64
 		for _, m := range members {
@@ -238,8 +238,7 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 				activity = a
 			}
 		}
-
-		wts = append(wts, Worktree{
+		built[i] = &Worktree{
 			Name:         branch,
 			Branch:       branch,
 			Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
@@ -248,9 +247,17 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 			LTSDir:       ltsDir,
 			LastActivity: activity,
 			CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
-		})
+		}
+	})
+	var wts []Worktree
+	seen := make(map[string]bool)
+	for _, w := range built {
+		if w == nil || seen[w.Branch] {
+			continue
+		}
+		seen[w.Branch] = true
+		wts = append(wts, *w)
 	}
-
 	return wts
 }
 
@@ -267,7 +274,7 @@ func monoGroupBranch(members []MonoMember) string {
 	counts := map[string]int{}
 	best, bestN := "", 0
 	for _, m := range members {
-		b, _ := RunGit(m.Path, "branch", "--show-current")
+		b := currentBranch(m.Path)
 		if b == "" {
 			continue
 		}
@@ -286,7 +293,7 @@ func MonoGroupStatus(members []MonoMember, branch string, basisFor func(repo str
 	var txts []string
 	var out []MemberStatus
 	for _, m := range members {
-		cur, _ := RunGit(m.Path, "branch", "--show-current")
+		cur := currentBranch(m.Path)
 		var st WTStatus
 		var txt string
 		if cur != branch {
@@ -414,7 +421,7 @@ func detectMainBranch(repoPath, basisBranch string) string {
 	}
 
 	for _, c := range candidates {
-		if _, err := RunGit(repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+c); err == nil {
+		if refExists(repoPath, "refs/heads/"+c) {
 			return c
 		}
 	}
@@ -489,7 +496,8 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string, opts Discove
 		return nil
 	}
 
-	var wts []Worktree
+	type cand struct{ path, name string }
+	var cands []cand
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -497,8 +505,7 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string, opts Discove
 		dirPath := filepath.Join(ltsPath, e.Name())
 
 		if isWorktreeDir(dirPath) {
-			wt := buildWorktree(dirPath, e.Name(), repoName, ltsDir, basisBranch, opts)
-			wts = append(wts, wt)
+			cands = append(cands, cand{dirPath, e.Name()})
 			continue
 		}
 
@@ -513,11 +520,16 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string, opts Discove
 			}
 			subPath := filepath.Join(dirPath, se.Name())
 			if isWorktreeDir(subPath) {
-				wt := buildWorktree(subPath, se.Name(), repoName, ltsDir, basisBranch, opts)
-				wts = append(wts, wt)
+				cands = append(cands, cand{subPath, se.Name()})
 			}
 		}
 	}
+	// Building a worktree (branch, activity, status) is independent per
+	// worktree — do them in parallel, keeping directory order
+	wts := make([]Worktree, len(cands))
+	parallelEach(len(cands), func(i int) {
+		wts[i] = buildWorktree(cands[i].path, cands[i].name, repoName, ltsDir, basisBranch, opts)
+	})
 	return wts
 }
 
@@ -543,7 +555,7 @@ func isWorktreeDir(path string) bool {
 }
 
 func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string, opts DiscoverOptions) Worktree {
-	branch, _ := RunGit(path, "branch", "--show-current")
+	branch := currentBranch(path)
 
 	// Use actual git branch name for display (not folder name)
 	// This ensures rename is reflected immediately. A detached HEAD has no
@@ -576,6 +588,11 @@ func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string, opts Dis
 // newer of the branch tip's commit time and the worktree's git index mtime
 // (the index changes on add/checkout/etc, so uncommitted activity counts).
 func worktreeLastActivity(wtPath string) int64 {
+	// Fast path: git touches the index/reflog on every commit, checkout,
+	// reset and stage — no process needed
+	if ts, ok := headActivity(wtPath); ok && ts > 0 {
+		return ts
+	}
 	var ts int64
 	if out, err := RunGit(wtPath, "log", "-1", "--format=%ct"); err == nil {
 		var n int64
