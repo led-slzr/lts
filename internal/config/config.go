@@ -173,6 +173,7 @@ func LoadReadOnly(workDir string) Config {
 
 // InitLocalForRepos ensures all discovered repos have local config entries and saves.
 func (c *Config) InitLocalForRepos(repoNames []string) {
+	c.ReloadLocal()
 	changed := false
 	for _, name := range repoNames {
 		key := strings.ToUpper(name)
@@ -206,23 +207,12 @@ func (c *Config) GetRepoLastRefresh(repoName string) int64 {
 
 // SetRepoLastRefresh updates the last refresh timestamp for a repo and saves.
 func (c *Config) SetRepoLastRefresh(repoName string, ts int64) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.LastRefresh = ts
-	if rc.BasisBranch == "" {
-		rc.BasisBranch = "main"
-	}
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.LastRefresh = ts })
 }
 
 // SetRepoBasisBranch updates the basis branch for a repo and saves.
 func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.BasisBranch = branch
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.BasisBranch = branch })
 }
 
 // GetRepoPackageManager returns the repo's package manager override,
@@ -238,26 +228,12 @@ func (c *Config) GetRepoPackageManager(repoName string) string {
 // SetRepoPackageManager updates a repo's package manager override and saves.
 // Empty means "use the global default".
 func (c *Config) SetRepoPackageManager(repoName, pm string) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.PackageManager = pm
-	if rc.BasisBranch == "" {
-		rc.BasisBranch = "main"
-	}
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.PackageManager = pm })
 }
 
 // SetRepoHidden marks a repo hidden from (or restored to) the main view.
 func (c *Config) SetRepoHidden(repoName string, hidden bool) error {
-	key := strings.ToUpper(repoName)
-	rc, ok := c.Local[key]
-	if !ok {
-		rc = DefaultRepoLocal()
-	}
-	rc.Hidden = hidden
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.Hidden = hidden })
 }
 
 // IsRepoHidden reports whether a repo is marked hidden.
@@ -268,14 +244,57 @@ func (c *Config) IsRepoHidden(repoName string) bool {
 
 // SetRepoSetupScript persists a per-repo post-create command ("" clears it).
 func (c *Config) SetRepoSetupScript(repoName, script string) error {
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.SetupScript = script })
+}
+
+// ReloadLocal re-reads .lts.conf so values written by another lts process
+// (the CLI while the TUI runs, or the reverse) are picked up. Entries only
+// held in memory are kept.
+func (c *Config) ReloadLocal() {
+	if c.WorkDir == "" {
+		return
+	}
+	fresh := make(map[string]RepoLocalConfig)
+	loadLocal(c.WorkDir, fresh)
+	for k, v := range c.Local {
+		if _, onDisk := fresh[k]; !onDisk {
+			fresh[k] = v
+		}
+	}
+	c.Local = fresh
+}
+
+// UpdateRepo applies fn to one repo's settings on a fresh read of
+// .lts.conf and saves — a write never reverts what another process saved.
+func (c *Config) UpdateRepo(repoName string, fn func(rc *RepoLocalConfig)) error {
+	c.ReloadLocal()
+	if c.Local == nil {
+		c.Local = make(map[string]RepoLocalConfig)
+	}
 	key := strings.ToUpper(repoName)
 	rc, ok := c.Local[key]
 	if !ok {
 		rc = DefaultRepoLocal()
 	}
-	rc.SetupScript = script
+	fn(&rc)
+	if rc.BasisBranch == "" {
+		rc.BasisBranch = "main"
+	}
 	c.Local[key] = rc
 	return c.SaveLocal()
+}
+
+// UpdateGlobal applies fn on a fresh read of the global config and saves,
+// so a TUI toggle never reverts a value \`lts config set\` just wrote.
+// fn's error aborts without saving.
+func (c *Config) UpdateGlobal(fn func(g *GlobalConfig) error) error {
+	fresh := c.Global
+	loadGlobal(&fresh)
+	if err := fn(&fresh); err != nil {
+		return err
+	}
+	c.Global = fresh
+	return c.SaveGlobal()
 }
 
 // LTSRoots returns the per-repo custom LTS roots (upper-cased repo keys).
@@ -291,8 +310,7 @@ func (c *Config) LTSRoots() map[string]string {
 
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
-	c.Global.LastUpdateCheck = ts
-	return c.SaveGlobal()
+	return c.UpdateGlobal(func(g *GlobalConfig) error { g.LastUpdateCheck = ts; return nil })
 }
 
 // commandLabel derives a display label from a command string: first word

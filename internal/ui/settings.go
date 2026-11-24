@@ -620,7 +620,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 	var saveErr error
 	if item.RepoName == "" {
 		// Validation and assignment live in config (shared with `lts config set`)
-		if err := s.Config.Global.Set(item.Key, item.Value); err != nil {
+		probe := s.Config.Global
+		if err := probe.Set(item.Key, item.Value); err != nil {
 			s.SaveError = strings.Replace(err.Error(), item.Key, item.Label, 1)
 			s.Items[s.CursorIdx].Value = s.previousValue(item)
 			return nil
@@ -628,7 +629,8 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 		if item.Key == "DONE_SOUND" {
 			opener.PlayDoneSound(item.Value) // preview on change
 		}
-		saveErr = s.Config.SaveGlobal()
+		// Merge-on-write: never revert values another lts process saved
+		saveErr = s.Config.UpdateGlobal(func(g *config.GlobalConfig) error { return g.Set(item.Key, item.Value) })
 	} else {
 		repoKey := strings.TrimPrefix(item.Key, "REPO_")
 		saveErr = s.Config.SetRepoKey(item.RepoName, repoKey, item.Value)

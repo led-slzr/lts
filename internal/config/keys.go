@@ -305,35 +305,30 @@ func (c *Config) SetRepoKey(repoName, key, value string) error {
 	if err != nil {
 		return err
 	}
-	k := strings.ToUpper(repoName)
-	rc, ok := c.Local[k]
-	if !ok {
-		rc = DefaultRepoLocal()
-	}
-	switch def.Key {
-	case "BASIS_BRANCH":
-		rc.BasisBranch = v
-	case "PACKAGE_MANAGER":
-		if v == "default" {
-			v = ""
-		}
-		rc.PackageManager = v
-	case "SETUP_SCRIPT":
-		rc.SetupScript = v
-	case "HIDDEN":
-		rc.Hidden = v == "true"
-	case "LTS_ROOT":
-		if v != "" && !filepath.IsAbs(v) {
+	if def.Key == "LTS_ROOT" && v != "" {
+		if !filepath.IsAbs(v) {
 			return fmt.Errorf("LTS_ROOT must be an absolute path")
 		}
-		if v != "" {
-			v = filepath.Clean(v)
-		}
+		v = filepath.Clean(v)
 		if v == filepath.Clean(c.WorkDir) {
 			v = "" // the default location — store as unset
 		}
-		rc.LTSRoot = v
 	}
-	c.Local[k] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) {
+		switch def.Key {
+		case "BASIS_BRANCH":
+			rc.BasisBranch = v
+		case "PACKAGE_MANAGER":
+			if v == "default" {
+				v = ""
+			}
+			rc.PackageManager = v
+		case "SETUP_SCRIPT":
+			rc.SetupScript = v
+		case "HIDDEN":
+			rc.Hidden = v == "true"
+		case "LTS_ROOT":
+			rc.LTSRoot = v
+		}
+	})
 }

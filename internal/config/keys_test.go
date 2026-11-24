@@ -41,3 +41,31 @@ func TestGlobalSetRejectsInvalid(t *testing.T) {
 		}
 	}
 }
+
+// Two processes (TUI + CLI) holding their own Config must not revert each
+// other's saved values.
+func TestWritesMergeWithOtherProcesses(t *testing.T) {
+	ws := t.TempDir()
+	t.Setenv("LTS_CONFIG_DIR", t.TempDir())
+	tui := LoadReadOnly(ws)
+	tui.SetRepoBasisBranch("core", "main") // TUI has an in-memory snapshot
+	cli := LoadReadOnly(ws)
+	root := t.TempDir()
+	if err := cli.SetRepoKey("core", "LTS_ROOT", root); err != nil {
+		t.Fatal(err)
+	}
+	if err := cli.UpdateGlobal(func(g *GlobalConfig) error { return g.Set("COPY_MCP_JSON", "true") }); err != nil {
+		t.Fatal(err)
+	}
+	// The stale TUI now saves unrelated things
+	tui.SetRepoLastRefresh("core", 42)
+	tui.UpdateGlobal(func(g *GlobalConfig) error { g.Layout = "explorer"; return nil })
+
+	fresh := LoadReadOnly(ws)
+	if got := fresh.Local["CORE"].LTSRoot; got != root {
+		t.Fatalf("LTS_ROOT reverted: %q", got)
+	}
+	if fresh.Local["CORE"].LastRefresh != 42 || !fresh.Global.CopyMCPJson || fresh.Global.Layout != "explorer" {
+		t.Fatalf("lost a write: %+v / mcp=%v layout=%s", fresh.Local["CORE"], fresh.Global.CopyMCPJson, fresh.Global.Layout)
+	}
+}

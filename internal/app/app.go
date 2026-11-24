@@ -768,21 +768,20 @@ func clickUsageString(u opener.ClickUsage) string {
 // it's "where I left off" state restored on the next launch.
 func (m *Model) setClickUsage(u opener.ClickUsage) {
 	m.clickUsage = u
-	m.config.Global.ClickUsage = clickUsageString(u)
-	m.config.SaveGlobal()
+	v := clickUsageString(u)
+	m.config.UpdateGlobal(func(g *config.GlobalConfig) error { g.ClickUsage = v; return nil })
 }
 
 // toggleLayout switches Board ↔ Explorer and persists the choice.
 func (m *Model) toggleLayout() {
+	next := "explorer"
 	if m.config.Global.Layout == "explorer" {
-		m.config.Global.Layout = "board"
-	} else {
-		m.config.Global.Layout = "explorer"
-		if m.explorer.SelectedWT < 0 && len(m.repos) > 0 && len(m.repos[0].Worktrees) > 0 {
-			m.explorer.SelectedWT = 0
-		}
+		next = "board"
+	} else if m.explorer.SelectedWT < 0 && len(m.repos) > 0 && len(m.repos[0].Worktrees) > 0 {
+		m.explorer.SelectedWT = 0
 	}
-	m.config.SaveGlobal()
+	m.config.Global.Layout = next
+	m.config.UpdateGlobal(func(g *config.GlobalConfig) error { g.Layout = next; return nil })
 	m.statusMsg = "Layout: " + m.config.Global.Layout
 }
 
@@ -2779,6 +2778,10 @@ func doMigrationCmd(cfg *config.Config) tea.Cmd {
 }
 
 func loadReposCmd(cfg *config.Config) tea.Cmd {
+	// Pick up per-repo settings another lts process saved (e.g. a CLI
+	// LTS_ROOT), on the Update thread before the snapshot below
+	cfg.ReloadLocal()
+	core.ApplyLTSRoots(cfg)
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
 	ghEnabled := cfg.Global.GithubIntegration

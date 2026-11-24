@@ -59,14 +59,15 @@ func (a *app) configSetGlobal(key, value string, dryRun bool) error {
 	}
 	k := strings.ToUpper(key)
 	prev, _ := env.Cfg.Global.Get(k)
-	if err := env.Cfg.Global.Set(k, value); err != nil {
+	probe := env.Cfg.Global
+	if err := probe.Set(k, value); err != nil {
 		return usageErr("%s", err.Error())
 	}
-	val, _ := env.Cfg.Global.Get(k)
+	val, _ := probe.Get(k)
 	warnMissingTool(a, k, val)
 	existed := fileExists(config.GlobalConfigPath())
 	if !dryRun {
-		if err := env.Cfg.SaveGlobal(); err != nil {
+		if err := env.Cfg.UpdateGlobal(func(g *config.GlobalConfig) error { return g.Set(k, value) }); err != nil {
 			return err
 		}
 		if !existed {
