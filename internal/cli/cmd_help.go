@@ -229,7 +229,7 @@ func addCompletions(a *app, root *cobra.Command) {
 			})
 		}
 		switch c.Name() {
-		case "status", "path", "rebase", "rename", "delete", "clean-modules", "pr":
+		case "status", "path", "rebase", "rename", "delete", "clean-modules", "pr", "open":
 			c.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 				if len(args) > 0 {
 					return nil, cobra.ShellCompDirectiveNoFileComp

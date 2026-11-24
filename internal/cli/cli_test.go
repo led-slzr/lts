@@ -441,3 +441,30 @@ func TestKeepBranchLowersRiskToUncommittedOnly(t *testing.T) {
 		t.Fatal("help --json on an unknown topic must fail")
 	}
 }
+
+func TestOpenUsesWorkspaceFile(t *testing.T) {
+	f := newFixture(t, "core")
+	if _, _, code := f.run("create", "feat/o", "-r", "core", "--no-install"); code != 0 {
+		t.Fatal("create failed")
+	}
+	logf := filepath.Join(t.TempDir(), "ide.log")
+	script := filepath.Join(t.TempDir(), "ide.sh")
+	os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > "+logf+"\n"), 0755)
+	if _, _, code := f.run("config", "set", "IDE_COMMAND", script); code != 0 {
+		t.Fatal("config set failed")
+	}
+	if _, errs, code := f.run("open", "feat/o", "--ide"); code != 0 {
+		t.Fatalf("open: %d %s", code, errs)
+	}
+	var got []byte
+	for i := 0; i < 50 && len(got) == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+		got, _ = os.ReadFile(logf)
+	}
+	if !strings.Contains(string(got), "feat-o.code-workspace") {
+		t.Fatalf("IDE should get the workspace file, got %q", got)
+	}
+	if _, _, code := f.run("open", "feat/o", "--ide", "--terminal"); code != ExitUsage {
+		t.Fatalf("two modes should be a usage error, got %d", code)
+	}
+}

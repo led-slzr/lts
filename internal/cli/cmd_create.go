@@ -151,7 +151,7 @@ func parseUsage(s string) (opener.ClickUsage, error) {
 	case "terminal", "term":
 		return opener.ClickTerminal, nil
 	}
-	return 0, usageErr("invalid --open %q", s).withSuggestions(suggest(s, []string{"ide", "ai", "terminal"}, 2))
+	return 0, usageErr("invalid mode %q (use ide, ai or terminal)", s).withSuggestions(suggest(s, []string{"ide", "ai", "terminal"}, 2))
 }
 
 func openerOpts(cfg *config.Config) opener.Options {
