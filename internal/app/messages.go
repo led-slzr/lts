@@ -195,3 +195,6 @@ type MigrationCheckMsg struct {
 type MigrationDoneMsg struct {
 	Count int
 }
+
+// LockPollMsg fires every lockPollInterval to refresh external locks.
+type LockPollMsg struct{}

@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"lts-revamp/internal/lock"
 )
 
 // fixture builds a workspace with repos backed by local bare origins.
@@ -236,5 +239,28 @@ func TestCreateReuseRenameRebase(t *testing.T) {
 	}
 	if _, _, code := f.run("rebase", "feat/m"); code != ExitGuard {
 		t.Fatalf("mono rebase should exit 4, got %d", code)
+	}
+}
+
+func TestBusyRepoFailsFastOrWaits(t *testing.T) {
+	f := newFixture(t, "core")
+	f.addWorktree("core", "feat/a")
+	h, err := lock.TryAcquire(f.ws, []string{"core"}, "lts TUI: Rebasing feat/a...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, code := f.runJSON("rename", "feat/a", "feat/b")
+	e := m["error"].(map[string]any)
+	if code != ExitError || e["code"] != CodeBusy || !strings.Contains(e["message"].(string), "TUI") {
+		t.Fatalf("busy rename: code=%d %v", code, m)
+	}
+	m, _ = f.runJSON("ls")
+	wt := m["repos"].([]any)[0].(map[string]any)["worktrees"].([]any)[0].(map[string]any)
+	if wt["busy"] != true {
+		t.Fatalf("ls should report busy: %v", wt)
+	}
+	go func() { time.Sleep(500 * time.Millisecond); h.Release() }()
+	if _, errs, code := f.run("--wait=5s", "rename", "feat/a", "feat/b"); code != 0 {
+		t.Fatalf("--wait should succeed after release: code=%d %s", code, errs)
 	}
 }

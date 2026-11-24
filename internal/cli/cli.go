@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"lts-revamp/internal/version"
 
@@ -30,6 +31,7 @@ type globalFlags struct {
 	verbose bool
 	noColor bool
 	noInput bool
+	wait    time.Duration
 }
 
 type app struct {
@@ -143,6 +145,8 @@ New here (human or agent)? Start with:
 	pf.BoolVarP(&a.flags.quiet, "quiet", "q", false, "suppress progress output on stderr")
 	pf.BoolVar(&a.flags.verbose, "verbose", false, "extra diagnostics on stderr")
 	pf.BoolVar(&a.flags.noColor, "no-color", false, "disable colored output (also: NO_COLOR env)")
+	pf.DurationVar(&a.flags.wait, "wait", 0, "when a repo is busy (another lts process), wait up to this long (e.g. 2m; bare --wait = 10m) instead of failing")
+	pf.Lookup("wait").NoOptDefVal = "10m"
 	pf.BoolVar(&a.flags.noInput, "no-input", false, "never prompt; fail with exit 4 when confirmation is needed (implied when stdin is not a TTY or CI is set)")
 
 	root.AddGroup(

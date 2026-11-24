@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"lts-revamp/internal/core"
+	"lts-revamp/internal/lock"
 	"math/rand/v2"
 	"os"
 	"strconv"
@@ -110,6 +111,13 @@ type Model struct {
 	// thread touches this map.
 	busy map[string]string
 
+	// Cross-process locks (internal/lock) this TUI holds, and repos locked
+	// by another lts process (repo → owner, polled every lockPollInterval).
+	// The CLI and other TUIs see heldLocks; extBusy makes this TUI treat
+	// their repos as busy.
+	heldLocks map[string]*lock.Held
+	extBusy   map[string]string
+
 	// Live LTS tmux sessions (session name → alive), for the ● indicators
 	tmuxLive map[string]bool
 
@@ -215,6 +223,8 @@ func NewModel(cfg config.Config) Model {
 		greeting:          launchGreeting(cfg),
 		ghState:           ghAvailability(cfg.Global.GithubIntegration),
 		busy:              make(map[string]string),
+		heldLocks:         make(map[string]*lock.Held),
+		extBusy:           make(map[string]string),
 		sizeCache:         make(map[string]sizeEntry),
 		logPanel:          ui.NewLogPanel(),
 		logChan:           make(chan LogEntryMsg, 64),
@@ -911,6 +921,7 @@ func (m Model) Init() tea.Cmd {
 		loaderTickCmd(),
 		listenForLogs(m.logChan), // persistent listener for all operations
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
+		lockPollTickCmd(),        // notice repos locked by other lts processes
 	}
 	if m.config.Global.GithubIntegration && gh.Available() {
 		cmds = append(cmds, ghUserCmd())
@@ -1171,6 +1182,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
+
+	case LockPollMsg:
+		if m.pollExternalLocks() {
+			m.recomputeLayout()
+		}
+		return m, lockPollTickCmd()
 
 	case MaintenanceTickMsg:
 		// Re-evaluate hourly so instances left running still sweep items
@@ -2793,7 +2810,7 @@ func (m *Model) headerGhUser() string {
 
 // anyBusy reports whether any operation is running.
 func (m *Model) anyBusy() bool {
-	return len(m.busy) > 0
+	return len(m.busy) > 0 || len(m.extBusy) > 0
 }
 
 // applyHiddenRepos annotates repos marked hidden in local config, dropping
@@ -2904,6 +2921,9 @@ func (m *Model) repoBusy(repo git.Repo) bool {
 		if _, ok := m.busy[n]; ok {
 			return true
 		}
+		if _, ok := m.extBusy[n]; ok {
+			return true
+		}
 	}
 	return false
 }
@@ -2912,7 +2932,45 @@ func (m *Model) repoBusy(repo git.Repo) bool {
 func (m *Model) clearBusy(names ...string) {
 	for _, n := range names {
 		delete(m.busy, n)
+		if h, ok := m.heldLocks[n]; ok {
+			h.Release()
+			delete(m.heldLocks, n)
+		}
 	}
+}
+
+// lockPollInterval paces the external-lock poll (see extBusy).
+const lockPollInterval = 2 * time.Second
+
+func lockPollTickCmd() tea.Cmd {
+	return tea.Tick(lockPollInterval, func(time.Time) tea.Msg { return LockPollMsg{} })
+}
+
+// pollExternalLocks refreshes extBusy; reports whether it changed.
+func (m *Model) pollExternalLocks() bool {
+	next := make(map[string]string)
+	for _, r := range m.repos {
+		if r.IsMonorepo {
+			continue
+		}
+		if _, mine := m.heldLocks[r.Name]; mine {
+			continue
+		}
+		if locked, owner := lock.Holder(m.config.WorkDir, r.Name); locked {
+			if owner == "" {
+				owner = "another lts process"
+			}
+			next[r.Name] = owner
+		}
+	}
+	changed := len(next) != len(m.extBusy)
+	for k, v := range next {
+		if m.extBusy[k] != v {
+			changed = true
+		}
+	}
+	m.extBusy = next
+	return changed
 }
 
 // allRepoNames returns every real repo name — the lock set for operations
@@ -2930,7 +2988,7 @@ func (m *Model) allRepoNames() []string {
 // busyCardNames returns the display names of cards with a running operation
 // (a monorepo card is busy when any constituent is).
 func (m *Model) busyCardNames() map[string]bool {
-	if len(m.busy) == 0 {
+	if len(m.busy) == 0 && len(m.extBusy) == 0 {
 		return nil
 	}
 	out := make(map[string]bool)
@@ -2958,11 +3016,26 @@ func listenForLogs(ch <-chan LogEntryMsg) tea.Cmd {
 // returns the log function (writing to the shared, persistent log channel)
 // plus the spinner command when this is the first running operation.
 // Callers gate on repoBusy/anyBusy before calling — locks must be disjoint.
-func (m *Model) beginOp(statusMsg string, lock ...string) (git.LogFunc, tea.Cmd) {
-	for _, n := range lock {
+func (m *Model) beginOp(statusMsg string, lockNames ...string) (git.LogFunc, tea.Cmd) {
+	var contended []string
+	for _, n := range lockNames {
 		m.busy[n] = statusMsg
+		if _, held := m.heldLocks[n]; held || m.config.WorkDir == "" {
+			continue
+		}
+		// Entry points already refuse repos in extBusy; this closes most of
+		// the remaining window. A lock lost to a race can't abort here (the
+		// caller has committed to the op), so surface it instead.
+		if h, err := lock.TryAcquire(m.config.WorkDir, []string{n}, "lts TUI: "+statusMsg); err == nil {
+			m.heldLocks[n] = h
+		} else {
+			contended = append(contended, n)
+		}
 	}
 	m.statusMsg = statusMsg
+	if len(contended) > 0 {
+		m.statusMsg += " (warning: " + strings.Join(contended, ", ") + " is also in use by another lts process)"
+	}
 	ch := m.logChan
 	logFn := func(ctx, msg string, isError bool) {
 		ch <- LogEntryMsg{Context: ctx, Message: msg, IsError: isError}
