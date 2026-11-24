@@ -98,6 +98,9 @@ func handleKeyPress(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "r":
 		if !m.anyBusy() && len(m.repos) > 0 {
 			lock := m.allRepoNames()
+			if !m.lockOrRefuse("Refreshing all repos...", lock...) {
+				return m, clearStatusCmd()
+			}
 			logFn, startCmd := m.beginOp("Refreshing all repos...", lock...)
 			return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config, lock))
 		}
@@ -215,6 +218,9 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 			m.statusMsg = "Refresh individual repos instead"
 			return m, clearStatusCmd()
 		}
+		if !m.lockOrRefuse("Refreshing "+repo.Name+"...", repo.Name) {
+			return m, clearStatusCmd()
+		}
 		logFn, startCmd := m.beginOp("Refreshing "+repo.Name+"...", repo.Name)
 		return m, tea.Batch(startCmd, singleRefreshCmd(logFn, repo.Path, m.config.GetRepoBasisBranch(repo.Name), repo.Name))
 
@@ -237,6 +243,9 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 				return m, clearStatusCmd()
 			}
 			lock := lockSet(repo)
+			if !m.lockOrRefuse("Rebasing "+wt.Branch+"...", lock...) {
+				return m, clearStatusCmd()
+			}
 			logFn, startCmd := m.beginOp("Rebasing "+wt.Branch+"...", lock...)
 			return m, tea.Batch(startCmd, rebaseCmd(logFn, wt.Path, repo.MainBranch, m.resolvePM(repo.Name), wt.Branch, lock))
 		}
@@ -271,6 +280,9 @@ func executeContextAction(m Model, action ui.HoverButton) (Model, tea.Cmd) {
 	case ui.BtnCleanModules:
 		if hasWT {
 			lock := lockSet(repo)
+			if !m.lockOrRefuse("Cleaning modules in "+wt.Branch+"...", lock...) {
+				return m, clearStatusCmd()
+			}
 			logFn, startCmd := m.beginOp("Cleaning modules in "+wt.Branch+"...", lock...)
 			return m, tea.Batch(startCmd, cleanModulesCmd(logFn, wt.Path, wt.Branch, lock))
 		}
@@ -350,6 +362,9 @@ func confirmDelete(m Model) (Model, tea.Cmd) {
 		return m, nil
 	}
 	lock := lockSet(repo)
+	if !m.lockOrRefuse("Deleting "+wt.Branch+"...", lock...) {
+		return m, clearStatusCmd()
+	}
 	logFn, startCmd := m.beginOp("Deleting "+wt.Branch+"...", lock...)
 	if repo.IsMonorepo {
 		return m, tea.Batch(startCmd, deleteMonorepoCmd(logFn, m.config.WorkDir, wt.Path, wt.Branch, repo.RepoNames, m.deleteLocalBranch, m.deleteRemoteBranch, lock))
@@ -382,6 +397,9 @@ func handleCleanupConfirmKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		deleteRemote := m.cleanupRemoteBranch
 		m.cleanupRemoteBranch = false
 		lock := m.allRepoNames()
+		if !m.lockOrRefuse("Cleaning up merged...", lock...) {
+			return m, clearStatusCmd()
+		}
 		logFn, startCmd := m.beginOp("Cleaning up merged...", lock...)
 		return m, tea.Batch(startCmd, cleanupCmd(logFn, &m.config, deleteRemote, lock))
 	}
@@ -568,6 +586,9 @@ func handleRenameKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		renameRemote := m.renameRemoteBranch
 		m.renameRemoteBranch = false
 		lock := lockSet(repo)
+		if !m.lockOrRefuse("Renaming "+wt.Branch+"...", lock...) {
+			return m, clearStatusCmd()
+		}
 		logFn, startCmd := m.beginOp("Renaming "+wt.Branch+"...", lock...)
 		if repo.IsMonorepo {
 			// wt.Path is the branch subdirectory for monorepo worktrees

@@ -186,6 +186,9 @@ func confirmConvert(m Model) (Model, tea.Cmd) {
 		}
 	}
 
+	if !m.lockOrRefuse("Converting "+m.convertWT.Branch+" to a mono group...", lock...) {
+		return m, clearStatusCmd()
+	}
 	logFn, startCmd := m.beginOp("Converting "+m.convertWT.Branch+" to a mono group...", lock...)
 	return m, tea.Batch(startCmd, convertCmd(logFn, &m.config, m.convertRepo.Name, m.convertWT.Path, m.convertWT.Branch, partners, lock))
 }
@@ -252,6 +255,9 @@ func confirmReduce(m Model) (Model, tea.Cmd) {
 	opener.KillSession(m.reduceWT.Path)
 	delete(m.tmuxLive, opener.SessionName(m.reduceWT.Path))
 
+	if !m.lockOrRefuse("Splitting "+m.reduceWT.Branch+"...", lock...) {
+		return m, clearStatusCmd()
+	}
 	logFn, startCmd := m.beginOp("Splitting "+m.reduceWT.Branch+"...", lock...)
 	return m, tea.Batch(startCmd, reduceCmd(logFn, &m.config, m.reduceWT.Path, m.reduceWT.Branch, decisions, lock))
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"lts-revamp/internal/core"
 	"lts-revamp/internal/lock"
@@ -515,6 +516,10 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 		paths, locks = m.maintenanceCandidates(modAge)
 	}
 	if len(paths) == 0 && tmuxAge == 0 {
+		return nil
+	}
+	if !m.lockOrRefuse("Auto-maintenance...", locks...) {
+		m.statusMsg = "" // background sweep: just retry next hour
 		return nil
 	}
 	logFn, startCmd := m.beginOp("Auto-maintenance...", locks...)
@@ -1387,6 +1392,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearStatusCmd()
 		}
 		lock := []string{dirName}
+		if !m.lockOrRefuse("Cloning "+name+"...", lock...) {
+			return m, clearStatusCmd()
+		}
 		logFn, startCmd := m.beginOp("Cloning "+name+"...", lock...)
 		return m, tea.Batch(startCmd, cloneRepoCmd(logFn, name, m.config.WorkDir, lock))
 
@@ -1480,6 +1488,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.recomputeLayout()
 					return m, clearStatusCmd()
 				}
+			}
+			if !m.lockOrRefuse("Creating "+msg.Branch+"...", msg.RepoNames...) {
+				return m, clearStatusCmd()
 			}
 			logFn, startCmd := m.beginOp("Creating "+msg.Branch+"...", msg.RepoNames...)
 			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, msg.InstallDeps, &m.config))
@@ -2213,6 +2224,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if !m.anyBusy() {
 			if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
 				lock := m.allRepoNames()
+				if !m.lockOrRefuse("Refreshing all repos...", lock...) {
+					return m, clearStatusCmd()
+				}
 				logFn, startCmd := m.beginOp("Refreshing all repos...", lock...)
 				return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config, lock))
 			}
@@ -2264,6 +2278,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			repo := m.repos[m.focusedCard]
 			if repo.NeedsMigration && repo.Path != "" && !m.repoBusy(repo) {
 				lock := lockSet(repo)
+				if !m.lockOrRefuse("Migrating "+repo.Name+"...", lock...) {
+					return m, clearStatusCmd()
+				}
 				logFn, startCmd := m.beginOp("Migrating "+repo.Name+"...", lock...)
 				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config, lock))
 			}
@@ -2948,6 +2965,45 @@ func (m *Model) clearBusy(names ...string) {
 	}
 }
 
+// lockOrRefuse takes the cross-process locks for an operation BEFORE it
+// starts. If another lts process (an agent's CLI run, another TUI) holds
+// any of them, nothing is acquired, the status line names the holder, and
+// the caller must not start the operation — so the TUI and the CLI can
+// never mutate the same repo at once.
+func (m *Model) lockOrRefuse(label string, names ...string) bool {
+	if m.config.WorkDir == "" {
+		return true
+	}
+	if _, err := os.Stat(m.config.WorkDir); err != nil {
+		return true // no workspace on disk → nothing another process could touch
+	}
+	var need []string
+	for _, n := range names {
+		if _, held := m.heldLocks[n]; !held {
+			need = append(need, n)
+		}
+	}
+	if len(need) == 0 {
+		return true
+	}
+	h, err := lock.TryAcquire(m.config.WorkDir, need, "lts TUI: "+label)
+	if err != nil {
+		var be *lock.BusyError
+		if errors.As(err, &be) {
+			m.statusMsg = be.Error() + " — try again when it finishes"
+			m.extBusy[be.Repo] = be.Owner
+		} else {
+			m.statusMsg = "Could not lock " + strings.Join(need, ", ") + ": " + err.Error()
+		}
+		m.recomputeLayout()
+		return false
+	}
+	for _, n := range need {
+		m.heldLocks[n] = h // one Held for the set; Release is idempotent
+	}
+	return true
+}
+
 // lockPollInterval paces the external-lock poll (see extBusy).
 const lockPollInterval = 2 * time.Second
 
@@ -3032,9 +3088,8 @@ func (m *Model) beginOp(statusMsg string, lockNames ...string) (git.LogFunc, tea
 		if _, held := m.heldLocks[n]; held || m.config.WorkDir == "" {
 			continue
 		}
-		// Entry points already refuse repos in extBusy; this closes most of
-		// the remaining window. A lock lost to a race can't abort here (the
-		// caller has committed to the op), so surface it instead.
+		// Every entry point calls lockOrRefuse first, so the locks are
+		// normally held already; this is a fallback for direct callers.
 		if h, err := lock.TryAcquire(m.config.WorkDir, []string{n}, "lts TUI: "+statusMsg); err == nil {
 			m.heldLocks[n] = h
 		} else {
