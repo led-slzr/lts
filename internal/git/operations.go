@@ -451,6 +451,9 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	repoName := filepath.Base(repoPath)
 	pkgManager := opts.pkgFor(repoName)
 	ltsPath := SingleLTSPath(scriptDir, repoName)
+	if err := checkLTSDirOwnership(ltsPath, []string{repoName}); err != nil {
+		return nil, err
+	}
 
 	// Create LTS directory
 	if err := os.MkdirAll(ltsPath, 0755); err != nil {
@@ -552,6 +555,10 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	sort.Strings(sorted)
 	ltsDir := strings.Join(sorted, "-") + "-lts"
 	ltsPath := filepath.Join(scriptDir, ltsDir)
+
+	if err := checkLTSDirOwnership(ltsPath, sorted); err != nil {
+		return nil, err
+	}
 
 	// Branch subdirectory: feat/integration → feat-integration
 	branchSubdir := branchDirName
@@ -660,6 +667,30 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	}
 
 	return results, nil
+}
+
+// checkLTSDirOwnership refuses to use an existing *-lts dir that belongs to
+// something else: a real git repo that happens to be named "<x>-lts", or a
+// mono group of a different repo set whose joined name collides
+// ("x" + "y-z" and "x-y" + "z" both make "x-y-z-lts").
+func checkLTSDirOwnership(ltsPath string, repos []string) error {
+	if info, err := os.Stat(filepath.Join(ltsPath, ".git")); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a git repository, not an LTS folder — rename that repo or move it out of the workspace", filepath.Base(ltsPath))
+	}
+	data, err := os.ReadFile(filepath.Join(ltsPath, ".lts-repos"))
+	if err != nil {
+		return nil
+	}
+	var existing []string
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			existing = append(existing, l)
+		}
+	}
+	if len(existing) > 0 && !sameRepoSet(existing, repos) {
+		return fmt.Errorf("%s already belongs to the group %s — repo names joined with \"-\" collide; rename a repo to create this group", filepath.Base(ltsPath), strings.Join(existing, " + "))
+	}
+	return nil
 }
 
 // createWorktreeWithBranchHandling creates a worktree, handling the three cases:
