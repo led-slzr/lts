@@ -131,13 +131,13 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 	}
 	sv := &statusView{}
 	if r.IsMonorepo {
-		// Group status aggregates every member (git.AggregateStatus)
-		var sts []git.WTStatus
-		var txts []string
+		// Group status: git.MonoGroupStatus (a member off the group branch
+		// is "unknown", i.e. dangerous)
+		worst, worstText, members := git.MonoGroupStatus(w.Members, wt.Branch, e.Cfg.GetRepoBasisBranch)
+		for _, m := range members {
+			sv.MemberStatuses = append(sv.MemberStatuses, memberStatus{Repo: m.Repo, State: m.Status.Slug(), Text: m.Text})
+		}
 		for _, m := range w.Members {
-			st, txt := git.GetWorktreeStatus(m.Path, e.Cfg.GetRepoBasisBranch(m.Repo))
-			sv.MemberStatuses = append(sv.MemberStatuses, memberStatus{Repo: m.Repo, State: st.Slug(), Text: txt})
-			sts, txts = append(sts, st), append(txts, txt)
 			si := git.GetSyncInfo(m.Path)
 			sv.ChangedFiles += si.ChangedFiles
 			sv.Ahead += si.Ahead
@@ -150,7 +150,6 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 				sv.UnpushedCommits += si.Ahead
 			}
 		}
-		worst, worstText := git.AggregateStatus(sts, txts)
 		sv.State, sv.Text = worst.Slug(), worstText
 		sv.HasRemoteBranch = git.HasRemoteBranch(worst)
 		sv.DeleteRisk, sv.DangerousDelete = git.DeleteRisk(worst)

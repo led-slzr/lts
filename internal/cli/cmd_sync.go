@@ -331,11 +331,6 @@ func statusOf(env *Env, t Target) git.WTStatus {
 		st, _ := git.GetWorktreeStatus(t.WT.Path, env.Cfg.GetRepoBasisBranch(t.Repo.Name))
 		return st
 	}
-	var sts []git.WTStatus
-	for _, m := range git.MonoMembers(t.WT.Path) {
-		st, _ := git.GetWorktreeStatus(m.Path, env.Cfg.GetRepoBasisBranch(m.Repo))
-		sts = append(sts, st)
-	}
-	st, _ := git.AggregateStatus(sts, nil)
+	st, _, _ := git.MonoGroupStatus(git.MonoMembers(t.WT.Path), t.WT.Branch, env.Cfg.GetRepoBasisBranch)
 	return st
 }

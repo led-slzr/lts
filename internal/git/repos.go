@@ -211,75 +211,98 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 		}
 		// Each subdirectory is a branch group (e.g. core-erp-ui-login)
 		branchSubdir := filepath.Join(ltsPath, e.Name())
-		subEntries, err := os.ReadDir(branchSubdir)
-		if err != nil {
+		// One entry per branch subdir. The group's branch is the one most
+		// members are on; a member on another branch (or detached) makes
+		// the whole group "unknown" — deleting the group force-deletes the
+		// group branch in every repo, so it must never look safe.
+		members := MonoMembers(branchSubdir)
+		if len(members) == 0 {
 			continue
 		}
-
-		// Find worktrees inside the branch subdir
-		for _, se := range subEntries {
-			if !se.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(branchSubdir, se.Name())
-			if !isWorktreeDir(wtPath) {
-				continue
-			}
-
-			// Get the branch name from git
-			branch, _ := RunGit(wtPath, "branch", "--show-current")
-			if branch == "" {
-				continue
-			}
-
-			// Deduplicate: show each branch once (not once per repo)
-			if seen[branch] {
-				continue
-			}
-			seen[branch] = true
-
-			// Group status aggregates every member (see AggregateStatus) —
-			// cleanup must never act on one member's "merged" alone
-			var status WTStatus
-			var statusText string
-			if !opts.SkipStatus {
-				var sts []WTStatus
-				var txts []string
-				for _, se2 := range subEntries {
-					p := filepath.Join(branchSubdir, se2.Name())
-					if se2.IsDir() && isWorktreeDir(p) {
-						st, txt := GetWorktreeStatus(p, basisBranch)
-						sts, txts = append(sts, st), append(txts, txt)
-					}
-				}
-				status, statusText = AggregateStatus(sts, txts)
-			}
-
-			// Last activity: newest across the branch's per-repo worktrees
-			var activity int64
-			for _, se2 := range subEntries {
-				p := filepath.Join(branchSubdir, se2.Name())
-				if se2.IsDir() && isWorktreeDir(p) {
-					if a := worktreeLastActivity(p); a > activity {
-						activity = a
-					}
-				}
-			}
-
-			wts = append(wts, Worktree{
-				Name:         branch,
-				Branch:       branch,
-				Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
-				Status:       status,
-				StatusText:   statusText,
-				LTSDir:       ltsDir,
-				LastActivity: activity,
-				CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
-			})
+		branch := monoGroupBranch(members)
+		if branch == "" || seen[branch] {
+			continue
 		}
+		seen[branch] = true
+
+		var status WTStatus
+		var statusText string
+		if !opts.SkipStatus {
+			status, statusText, _ = MonoGroupStatus(members, branch, func(string) string { return basisBranch })
+		}
+
+		// Last activity: newest across the branch's per-repo worktrees
+		var activity int64
+		for _, m := range members {
+			if a := worktreeLastActivity(m.Path); a > activity {
+				activity = a
+			}
+		}
+
+		wts = append(wts, Worktree{
+			Name:         branch,
+			Branch:       branch,
+			Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
+			Status:       status,
+			StatusText:   statusText,
+			LTSDir:       ltsDir,
+			LastActivity: activity,
+			CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
+		})
 	}
 
 	return wts
+}
+
+// MemberStatus is one mono-group member's status.
+type MemberStatus struct {
+	Repo   string
+	Branch string
+	Status WTStatus
+	Text   string
+}
+
+// monoGroupBranch picks the branch most members have checked out.
+func monoGroupBranch(members []MonoMember) string {
+	counts := map[string]int{}
+	best, bestN := "", 0
+	for _, m := range members {
+		b, _ := RunGit(m.Path, "branch", "--show-current")
+		if b == "" {
+			continue
+		}
+		counts[b]++
+		if counts[b] > bestN {
+			best, bestN = b, counts[b]
+		}
+	}
+	return best
+}
+
+// MonoGroupStatus aggregates member statuses for a group on branch. A
+// member that isn't on branch is StatusUnknown (dangerous).
+func MonoGroupStatus(members []MonoMember, branch string, basisFor func(repo string) string) (WTStatus, string, []MemberStatus) {
+	var sts []WTStatus
+	var txts []string
+	var out []MemberStatus
+	for _, m := range members {
+		cur, _ := RunGit(m.Path, "branch", "--show-current")
+		var st WTStatus
+		var txt string
+		if cur != branch {
+			on := cur
+			if on == "" {
+				on = "a detached HEAD"
+			}
+			st, txt = StatusUnknown, m.Repo+" is on "+on+", not "+branch
+		} else {
+			st, txt = GetWorktreeStatus(m.Path, basisFor(m.Repo))
+		}
+		sts, txts = append(sts, st), append(txts, txt)
+		out = append(out, MemberStatus{Repo: m.Repo, Branch: cur, Status: st, Text: txt})
+	}
+	st, txt := AggregateStatus(sts, txts)
+	return st, txt, out
 }
 
 // checkMigrationNeeded checks if the main repo directory has work on a non-main

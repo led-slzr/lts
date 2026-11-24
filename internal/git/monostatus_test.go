@@ -47,3 +47,42 @@ func TestMonoGroupStatusIsWorstMember(t *testing.T) {
 		t.Fatal("unpushed work was destroyed")
 	}
 }
+
+// A member switched to another branch must not let the group look safe:
+// deleting the group force-deletes the group branch in every repo.
+func TestMonoMemberOffGroupBranchIsDangerous(t *testing.T) {
+	scriptDir := twoRepoFixture(t)
+	group := filepath.Join(scriptDir, "core-erp-lts", "feat-m")
+	os.MkdirAll(group, 0755)
+	writeFileT(t, filepath.Join(scriptDir, "core-erp-lts", ".lts-type"), "monorepo\n")
+	writeFileT(t, filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), "core\nerp\n")
+	coreWT, erpWT := filepath.Join(group, "core-feat-m"), filepath.Join(group, "erp-feat-m")
+	gitRun(t, filepath.Join(scriptDir, "core"), "worktree", "add", "-b", "feat/m", coreWT)
+	gitRun(t, filepath.Join(scriptDir, "erp"), "worktree", "add", "-b", "feat/m", erpWT)
+	gitRun(t, coreWT, "push", "-u", "origin", "feat/m")
+	// erp: unpushed commit on feat/m, then switch to a pushed branch
+	writeFileT(t, filepath.Join(erpWT, "w.txt"), "unpushed\n")
+	gitRun(t, erpWT, "add", ".")
+	gitRun(t, erpWT, "commit", "-m", "unpushed on feat/m")
+	gitRun(t, erpWT, "checkout", "-b", "feat/other", "main")
+	gitRun(t, erpWT, "push", "-u", "origin", "feat/other")
+
+	var groups []Worktree
+	for _, r := range DiscoverRepos(scriptDir, mainBasis) {
+		if r.IsMonorepo {
+			groups = append(groups, r.Worktrees...)
+		}
+	}
+	if len(groups) != 1 {
+		t.Fatalf("want exactly one entry per branch subdir, got %d: %+v", len(groups), groups)
+	}
+	if groups[0].Branch != "feat/m" && groups[0].Branch != "feat/other" {
+		t.Fatalf("unexpected group branch %q", groups[0].Branch)
+	}
+	if _, dangerous := DeleteRisk(groups[0].Status); !dangerous {
+		t.Fatalf("group with a member off its branch reported %s", groups[0].Status.Slug())
+	}
+	if n, _, _ := CleanupMergedCleanables(scriptDir, mainBasis, false, nil); n != 0 {
+		t.Fatalf("cleanup removed %d", n)
+	}
+}
