@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // KeyKind describes how a setting's value is validated.
@@ -42,7 +43,7 @@ var globalKeys = []KeyDef{
 	{Key: "TMUX_RIGHT_PANES", Kind: KindEnum, Options: []string{"1", "2", "3"}, Description: "Stacked shell panes in the right tmux column"},
 	{Key: "AUTO_KILL_TMUX", Kind: KindEnum, Options: []string{"OFF", "8H", "1D", "3D", "7D"}, Description: "Kill unattached LTS tmux sessions idle longer than this"},
 	{Key: "PACKAGE_MANAGER", Kind: KindEnum, Options: []string{"auto", "pnpm", "npm", "yarn", "bun"}, Description: "Default package manager (auto = detect per repo)"},
-	{Key: "AUTO_REFRESH", Kind: KindEnum, Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}, Description: "Reserved: stored but not acted on by this version"},
+	{Key: "AUTO_REFRESH", Kind: KindEnum, Options: []string{"OFF", "15M", "30M", "1H", "6H", "12H", "24H"}, Description: "TUI: fetch + fast-forward each repo's basis branch in the background once its last refresh is older than this"},
 	{Key: "AUTO_CLEAN_MODULES", Kind: KindEnum, Options: []string{"OFF", "1D", "3D", "7D", "14D", "30D"}, Description: "Remove node_modules from worktrees idle longer than this (TUI startup/hourly)"},
 	{Key: "SORT_ORDER", Kind: KindEnum, Options: []string{"activity", "created", "name"}, Description: "Ordering of repos and worktrees"},
 	{Key: "SHOW_HIDDEN_REPOS", Kind: KindBool, Description: "Show hidden repos grayed out in the TUI"},
@@ -343,4 +344,26 @@ func (c *Config) SetRepoKey(repoName, key, value string) error {
 			rc.LTSRoot = v
 		}
 	})
+}
+
+// ParseAge parses an age/interval setting ("15M", "8H", "3D"); "OFF" or
+// anything invalid is 0 (disabled).
+func ParseAge(v string) time.Duration {
+	v = strings.ToUpper(strings.TrimSpace(v))
+	if v == "" || v == "OFF" || len(v) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(v[:len(v)-1])
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch v[len(v)-1] {
+	case 'M':
+		return time.Duration(n) * time.Minute
+	case 'H':
+		return time.Duration(n) * time.Hour
+	case 'D':
+		return time.Duration(n) * 24 * time.Hour
+	}
+	return 0
 }

@@ -7,7 +7,6 @@ import (
 	"lts-revamp/internal/lock"
 	"math/rand/v2"
 	"os"
-	"strconv"
 
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/gh"
@@ -456,23 +455,7 @@ func (m *Model) ensureExplorerRepoVisible() {
 var sortRepos = core.SortRepos
 
 // ageDuration parses maintenance age options ("8H", "1D"); "OFF"/"" = 0.
-func ageDuration(v string) time.Duration {
-	v = strings.ToUpper(strings.TrimSpace(v))
-	if v == "" || v == "OFF" || len(v) < 2 {
-		return 0
-	}
-	n, err := strconv.Atoi(v[:len(v)-1])
-	if err != nil || n <= 0 {
-		return 0
-	}
-	switch v[len(v)-1] {
-	case 'H':
-		return time.Duration(n) * time.Hour
-	case 'D':
-		return time.Duration(n) * 24 * time.Hour
-	}
-	return 0
-}
+func ageDuration(v string) time.Duration { return config.ParseAge(v) }
 
 // maintenanceCandidates returns the worktree paths idle for longer than
 // maxAge (by LastActivity) plus the repo locks cleaning them requires.
@@ -926,6 +909,7 @@ func (m Model) Init() tea.Cmd {
 		listenForLogs(m.logChan), // persistent listener for all operations
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
 		lockPollTickCmd(),        // notice repos locked by other lts processes
+		autoRefreshTickCmd(),     // AUTO_REFRESH: refresh repos past their interval
 	}
 	if m.config.Global.GithubIntegration && gh.Available() {
 		cmds = append(cmds, ghUserCmd())
@@ -1186,6 +1170,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.openPromptHovered = -1
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
+
+	case AutoRefreshTickMsg:
+		return m.autoRefresh()
+
+	case AutoRefreshDoneMsg:
+		m.clearBusy(msg.Locked...)
+		now := time.Now().Unix()
+		for _, name := range msg.Refreshed {
+			m.config.SetRepoLastRefresh(name, now)
+		}
+		if len(msg.Failed) > 0 {
+			m.statusMsg = fmt.Sprintf("Auto-refresh: %d repo(s) refreshed, failed: %s", len(msg.Refreshed), strings.Join(msg.Failed, ", "))
+		} else {
+			m.statusMsg = fmt.Sprintf("Auto-refreshed %s", strings.Join(msg.Refreshed, ", "))
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd(), autoRefreshTickCmd())
 
 	case LockPollMsg:
 		if m.pollExternalLocks() {
@@ -3002,6 +3003,70 @@ func (m *Model) lockOrRefuse(label string, names ...string) bool {
 		m.heldLocks[n] = h // one Held for the set; Release is idempotent
 	}
 	return true
+}
+
+// autoRefreshCheck paces the AUTO_REFRESH due-check.
+const autoRefreshCheck = time.Minute
+
+func autoRefreshTickCmd() tea.Cmd {
+	return tea.Tick(autoRefreshCheck, func(time.Time) tea.Msg { return AutoRefreshTickMsg{} })
+}
+
+// autoRefreshDue lists repos whose last refresh is older than the
+// AUTO_REFRESH interval (hidden and busy repos excluded).
+func (m *Model) autoRefreshDue(now time.Time) []git.Repo {
+	interval := ageDuration(m.config.Global.AutoRefresh)
+	if interval <= 0 {
+		return nil
+	}
+	var due []git.Repo
+	for _, r := range m.repos {
+		if r.IsMonorepo || r.Hidden || r.Path == "" || m.config.IsRepoHidden(r.Name) || m.repoBusy(r) {
+			continue
+		}
+		if now.Sub(time.Unix(m.config.GetRepoLastRefresh(r.Name), 0)) >= interval {
+			due = append(due, r)
+		}
+	}
+	return due
+}
+
+// autoRefresh starts a background refresh (fetch + fast-forward the basis
+// branch) of every due repo it can lock; repos busy elsewhere wait for the
+// next check. It never interrupts the user: the status line only reports
+// the result.
+func (m Model) autoRefresh() (tea.Model, tea.Cmd) {
+	due := m.autoRefreshDue(time.Now())
+	if len(due) == 0 || m.initialLoad {
+		return m, autoRefreshTickCmd()
+	}
+	saved := m.statusMsg
+	var repos []git.Repo
+	var lockNames []string
+	for _, r := range due {
+		if m.lockOrRefuse("Auto-refreshing "+r.Name+"...", r.Name) {
+			repos = append(repos, r)
+			lockNames = append(lockNames, r.Name)
+		}
+	}
+	m.statusMsg = saved // a busy repo is simply retried next check
+	if len(repos) == 0 {
+		return m, autoRefreshTickCmd()
+	}
+	logFn, startCmd := m.beginOp("Auto-refreshing "+strings.Join(lockNames, ", ")+"...", lockNames...)
+	m.statusMsg = saved
+	basis := basisResolver(&m.config)
+	return m, tea.Batch(startCmd, func() tea.Msg {
+		var ok, failed []string
+		for _, r := range repos {
+			if err := git.RefreshRepo(r.Path, basis(r.Name), logFn); err != nil {
+				failed = append(failed, r.Name)
+			} else {
+				ok = append(ok, r.Name)
+			}
+		}
+		return AutoRefreshDoneMsg{Refreshed: ok, Failed: failed, Locked: lockNames}
+	})
 }
 
 // lockPollInterval paces the external-lock poll (see extBusy).

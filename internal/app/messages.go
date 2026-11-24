@@ -198,3 +198,13 @@ type MigrationDoneMsg struct {
 
 // LockPollMsg fires every lockPollInterval to refresh external locks.
 type LockPollMsg struct{}
+
+// AutoRefreshTickMsg fires every autoRefreshCheck to refresh due repos.
+type AutoRefreshTickMsg struct{}
+
+// AutoRefreshDoneMsg reports a background AUTO_REFRESH pass.
+type AutoRefreshDoneMsg struct {
+	Refreshed []string
+	Failed    []string
+	Locked    []string
+}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"lts-revamp/internal/config"
 	"lts-revamp/internal/core"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
@@ -27,7 +28,7 @@ type repoResult struct {
 }
 
 func addRefresh(a *app, root *cobra.Command) {
-	var dryRun bool
+	var dryRun, due bool
 	var repoFlag []string
 	cmd := &cobra.Command{
 		Use:     "refresh [repo...]",
@@ -37,7 +38,9 @@ func addRefresh(a *app, root *cobra.Command) {
 		Long: `For each repo: git fetch origin, then fast-forward the basis branch —
 pull --ff-only when the main checkout is on it, otherwise update the ref
 (git fetch origin basis:basis). Worktrees are not touched; rebase them with
-` + "`lts rebase`" + `. With no repos, every repo that isn't hidden is refreshed.` + exitCodesHelp(ExitNotFound, ExitPartial, ExitInterrupted),
+` + "`lts rebase`" + `. With no repos, every repo that isn't hidden is refreshed.
+--due refreshes only repos whose last refresh is older than AUTO_REFRESH
+(the interval the TUI auto-refreshes on) — handy from cron or an agent.` + exitCodesHelp(ExitNotFound, ExitPartial, ExitInterrupted),
 		Example: `  lts refresh
   lts refresh core erp
   lts refresh --json | jq '.results[] | select(.ok|not)'`,
@@ -52,6 +55,20 @@ pull --ff-only when the main checkout is on it, otherwise update the ref
 				repos = env.realRepos(false)
 			} else if repos, err = env.checkRepoFilter(names); err != nil {
 				return err
+			}
+			if due {
+				interval := config.ParseAge(env.Cfg.Global.AutoRefresh)
+				if interval <= 0 {
+					return usageErr("--due needs AUTO_REFRESH set (it is %s)", env.Cfg.Global.AutoRefresh).
+						withHint("lts config set AUTO_REFRESH 1H")
+				}
+				var keep []git.Repo
+				for _, r := range repos {
+					if time.Since(time.Unix(env.Cfg.GetRepoLastRefresh(r.Name), 0)) >= interval {
+						keep = append(keep, r)
+					}
+				}
+				repos = keep
 			}
 			if dryRun {
 				var list []string
@@ -104,6 +121,7 @@ pull --ff-only when the main checkout is on it, otherwise update the ref
 		},
 	}
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "list the repos that would be refreshed")
+	cmd.Flags().BoolVar(&due, "due", false, "only repos last refreshed longer ago than AUTO_REFRESH")
 	cmd.Flags().StringSliceVarP(&repoFlag, "repo", "r", nil, "repos to refresh (same as positional args)")
 	root.AddCommand(cmd)
 }
