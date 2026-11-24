@@ -90,6 +90,9 @@ func (o *Output) Failure(e *Error) {
 			fmt.Fprintf(o.Err, "    %s\n", s)
 		}
 	}
+	if len(e.Available) > 0 {
+		fmt.Fprintf(o.Err, "\nAvailable: %s\n", strings.Join(e.Available, ", "))
+	}
 	if e.Hint != "" {
 		fmt.Fprintf(o.Err, "\n%s %s\n", o.paint("2", "hint:"), e.Hint)
 	}

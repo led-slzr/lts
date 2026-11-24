@@ -40,6 +40,8 @@ type Error struct {
 	Message     string   `json:"message"`
 	Hint        string   `json:"hint,omitempty"`
 	Suggestions []string `json:"suggestions,omitempty"`
+	// Available lists valid choices when the input was missing entirely
+	Available []string `json:"available,omitempty"`
 	// Data optionally carries a partial result (e.g. per-repo outcomes)
 	Data any `json:"-"`
 }

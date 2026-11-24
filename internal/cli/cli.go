@@ -126,6 +126,10 @@ New here (human or agent)? Start with:
 			a.out = newOutput(a.flags.json, a.flags.quiet, a.flags.verbose, a.flags.noColor, a.flags.noInput)
 			if cmd != cmd.Root() {
 				a.trapInterrupts()
+				// Never let git block on a credential prompt nobody can answer
+				if !a.out.Interactive && os.Getenv("GIT_TERMINAL_PROMPT") == "" {
+					os.Setenv("GIT_TERMINAL_PROMPT", "0")
+				}
 			}
 			return nil
 		},

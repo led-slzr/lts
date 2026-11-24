@@ -177,3 +177,64 @@ func TestConfigSet(t *testing.T) {
 		t.Fatalf("LTS_ROOT change with live worktrees must be refused, got %d", code)
 	}
 }
+
+func TestCreateReuseRenameRebase(t *testing.T) {
+	f := newFixture(t, "core", "erp")
+	out, errs, code := f.run("create", "feat/a", "-r", "core", "--no-install")
+	wantPath := filepath.Join(f.ws, "core-lts", "feat-a")
+	if code != 0 || strings.TrimSpace(out) != wantPath {
+		t.Fatalf("create: code=%d out=%q stderr=%s", code, out, errs)
+	}
+	if _, _, code := f.run("create", "feat/a", "-r", "core"); code != ExitExists {
+		t.Fatalf("second create should exit 7, got %d", code)
+	}
+	out, _, code = f.run("create", "feat/a", "-r", "core", "--reuse")
+	if code != 0 || strings.TrimSpace(out) != wantPath {
+		t.Fatalf("--reuse: code=%d out=%q", code, out)
+	}
+
+	// dry-run changes nothing and reports main-checkout side effects
+	os.WriteFile(filepath.Join(f.repo("erp"), "README.md"), []byte("dirty\n"), 0644)
+	m, code := f.runJSON("create", "feat/b", "-r", "erp", "--dry-run")
+	plan, _ := json.Marshal(m["plan"])
+	if code != 0 || !strings.Contains(string(plan), "stash") || !strings.Contains(string(plan), "side_effect") {
+		t.Fatalf("dry-run plan: code=%d %s", code, plan)
+	}
+	if fileExists(filepath.Join(f.ws, "erp-lts")) {
+		t.Fatal("dry-run must not create anything")
+	}
+	gitT(t, f.repo("erp"), "checkout", "README.md")
+
+	// mono group
+	m, code = f.runJSON("create", "feat/m", "-r", "core,erp", "--no-install")
+	if code != 0 || m["group"] != true || m["path"] != filepath.Join(f.ws, "core-erp-lts", "feat-m") {
+		t.Fatalf("mono create: code=%d %v", code, m)
+	}
+
+	// rename
+	out, _, code = f.run("rename", "feat/a", "feat/a2")
+	if code != 0 || strings.TrimSpace(out) != filepath.Join(f.ws, "core-lts", "feat-a2") {
+		t.Fatalf("rename: code=%d out=%q", code, out)
+	}
+	if _, _, code := f.run("rename", "feat/a2", "feat/m"); code != ExitExists {
+		t.Fatalf("rename onto an existing branch should exit 7, got %d", code)
+	}
+
+	// rebase conflict → exit 6, worktree restored
+	wt := filepath.Join(f.ws, "core-lts", "feat-a2")
+	os.WriteFile(filepath.Join(wt, "README.md"), []byte("branch side\n"), 0644)
+	gitT(t, wt, "commit", "-qam", "branch")
+	os.WriteFile(filepath.Join(f.repo("core"), "README.md"), []byte("main side\n"), 0644)
+	gitT(t, f.repo("core"), "commit", "-qam", "main")
+	os.WriteFile(filepath.Join(wt, "notes.txt"), []byte("untracked\n"), 0644)
+	_, _, code = f.run("rebase", "feat/a2", "--no-install")
+	if code != ExitConflict {
+		t.Fatalf("conflicting rebase should exit 6, got %d", code)
+	}
+	if !fileExists(filepath.Join(wt, "notes.txt")) {
+		t.Fatal("untracked file lost")
+	}
+	if _, _, code := f.run("rebase", "feat/m"); code != ExitGuard {
+		t.Fatalf("mono rebase should exit 4, got %d", code)
+	}
+}
