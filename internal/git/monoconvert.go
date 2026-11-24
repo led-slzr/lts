@@ -272,7 +272,7 @@ func ReduceMono(scriptDir, branchSubdirPath string, decisions []ReduceDecision,
 			continue
 		}
 
-		singleLts := filepath.Join(scriptDir, d.Name+"-lts")
+		singleLts := SingleLTSPath(scriptDir, d.Name)
 		if err := os.MkdirAll(singleLts, 0755); err != nil {
 			if firstErr == nil {
 				firstErr = err

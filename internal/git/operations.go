@@ -450,8 +450,7 @@ func CheckOngoingOperations(repoPath string) error {
 func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, opts WorkspaceOptions, installDeps bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	pkgManager := opts.pkgFor(repoName)
-	ltsDir := repoName + "-lts"
-	ltsPath := filepath.Join(scriptDir, ltsDir)
+	ltsPath := SingleLTSPath(scriptDir, repoName)
 
 	// Create LTS directory
 	if err := os.MkdirAll(ltsPath, 0755); err != nil {
@@ -1934,8 +1933,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	}
 
 	// Setup LTS directory
-	ltsDir := repoName + "-lts"
-	ltsPath := filepath.Join(scriptDir, ltsDir)
+	ltsPath := SingleLTSPath(scriptDir, repoName)
 	if err := os.MkdirAll(ltsPath, 0755); err != nil {
 		// Try to restore the original state: switch back then pop
 		_, coErr := RunGit(repoPath, "checkout", currentBranch)
@@ -2049,24 +2047,17 @@ func IsProtectedBranch(branch string) bool {
 // NeedsMigration checks if any LTS directories use the old naming convention.
 // Fast: only does stat checks and reads a single branch per LTS dir.
 func NeedsMigration(scriptDir string) bool {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
-			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			repoName := strings.TrimSuffix(d.name, "-lts")
 			if hasMismatchedSingleDirs(ltsPath, repoName) {
 				return true
 			}
 		} else {
-			if hasMismatchedMonorepoDirs(ltsPath, scriptDir, e.Name()) {
+			if hasMismatchedMonorepoDirs(ltsPath, scriptDir, d.name) {
 				return true
 			}
 		}
@@ -2215,25 +2206,18 @@ func matchRepoPrefix(name string, repoNames []string) string {
 // MigrateDirectoryStructure renames old-style LTS directories to the new convention.
 // Returns the number of directories migrated.
 func MigrateDirectoryStructure(scriptDir string) int {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return 0
-	}
 
 	migrated := 0
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
-			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			repoName := strings.TrimSuffix(d.name, "-lts")
 			repoPath := filepath.Join(scriptDir, repoName)
 			migrated += migrateSingleLTS(ltsPath, repoPath, repoName)
 		} else {
-			repoNames := getLTSRepos(scriptDir, e.Name())
+			repoNames := getLTSRepos(scriptDir, d.name)
 			migrated += migrateMonorepoLTS(ltsPath, scriptDir, repoNames)
 		}
 	}
@@ -2460,16 +2444,9 @@ func replaceDisplaySuffix(content, oldSuffix, newSuffix string) string {
 
 // NeedsWorkspaceRepair quickly checks if any .code-workspace files have stale paths.
 func NeedsWorkspaceRepair(scriptDir string) bool {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
 			if hasStaleWorkspaces(ltsPath) {
@@ -2655,18 +2632,11 @@ var wsFolderNameRe = regexp.MustCompile(`"name":\s*"([^"]+?) - ([A-Za-z0-9_.-]+)
 // by a previous migration that renamed directories without updating file contents.
 // Returns the number of workspace files repaired.
 func RepairWorkspaceContents(scriptDir string) int {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return 0
-	}
 
 	repaired := 0
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
 			repaired += repairSingleWorkspaces(ltsPath)

@@ -41,6 +41,7 @@ type Repo struct {
 	Path       string // empty for monorepo cards
 	MainBranch string
 	LTSDir     string   // e.g. "repo-lts" or "core-erp-ui-lts"
+	LTSPath    string   // absolute path of LTSDir ("" when it doesn't exist)
 	LTSType    string   // "single", "erp", "monorepo"
 	IsMonorepo bool     // true for multi-repo LTS cards
 	RepoNames  []string // for monorepo: the constituent repo names
@@ -93,12 +94,14 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		mainBranch := detectMainBranch(dirPath, repoBasis)
 		ltsDir := name + "-lts"
 		ltsType := "single"
-		ltsPath := filepath.Join(scriptDir, ltsDir)
+		ltsPath := SingleLTSPath(scriptDir, name)
+		ltsRoot := filepath.Dir(ltsPath)
 
 		if _, err := os.Stat(ltsPath); os.IsNotExist(err) {
 			ltsDir = ""
+			ltsPath = ""
 		} else {
-			ltsType = getLTSType(scriptDir, ltsDir)
+			ltsType = getLTSType(ltsRoot, ltsDir)
 		}
 
 		repo := Repo{
@@ -106,12 +109,13 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 			Path:       dirPath,
 			MainBranch: mainBranch,
 			LTSDir:     ltsDir,
+			LTSPath:    ltsPath,
 			LTSType:    ltsType,
 		}
 
 		// Only collect worktrees from the repo's own single-repo LTS dir
 		if ltsDir != "" && ltsType == "single" {
-			wts := listWorktrees(scriptDir, ltsDir, name, repoBasis)
+			wts := listWorktrees(ltsRoot, ltsDir, name, repoBasis)
 			repo.Worktrees = append(repo.Worktrees, wts...)
 		}
 
@@ -149,6 +153,7 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		monoRepo := Repo{
 			Name:       cardName,
 			LTSDir:     ltsDir,
+			LTSPath:    filepath.Join(scriptDir, ltsDir),
 			LTSType:    ltsType,
 			IsMonorepo: true,
 			RepoNames:  sorted,

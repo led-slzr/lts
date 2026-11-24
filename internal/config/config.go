@@ -48,6 +48,7 @@ type RepoLocalConfig struct {
 	PackageManager string // per-repo override; empty = use global default
 	SetupScript    string // optional post-create command, run in the new worktree ("" = none)
 	Hidden         bool   // hide this repo from the main view (unwanted folders like .nvm)
+	LTSRoot        string // dir holding <repo>-lts when not next to the repos ("" = workDir)
 	LastRefresh    int64  // unix timestamp
 }
 
@@ -258,6 +259,17 @@ func (c *Config) SetRepoSetupScript(repoName, script string) error {
 	return c.SaveLocal()
 }
 
+// LTSRoots returns the per-repo custom LTS roots (upper-cased repo keys).
+func (c *Config) LTSRoots() map[string]string {
+	roots := make(map[string]string)
+	for key, rc := range c.Local {
+		if rc.LTSRoot != "" {
+			roots[key] = rc.LTSRoot
+		}
+	}
+	return roots
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
 	c.Global.LastUpdateCheck = ts
@@ -361,6 +373,9 @@ func (c *Config) SaveLocal() error {
 		}
 		if rc.Hidden {
 			lines = append(lines, fmt.Sprintf("%s_HIDDEN=\"true\"", key))
+		}
+		if rc.LTSRoot != "" {
+			lines = append(lines, fmt.Sprintf("%s_LTS_ROOT=\"%s\"", key, rc.LTSRoot))
 		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
@@ -497,6 +512,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			repo := strings.TrimSuffix(k, "_SETUP_SCRIPT")
 			rc := local[repo]
 			rc.SetupScript = v
+			local[repo] = rc
+		} else if strings.HasSuffix(k, "_LTS_ROOT") {
+			repo := strings.TrimSuffix(k, "_LTS_ROOT")
+			rc := local[repo]
+			rc.LTSRoot = v
 			local[repo] = rc
 		} else if strings.HasSuffix(k, "_HIDDEN") {
 			repo := strings.TrimSuffix(k, "_HIDDEN")

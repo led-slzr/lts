@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +63,7 @@ var repoKeys = []KeyDef{
 	{Key: "PACKAGE_MANAGER", Kind: KindEnum, AllowEmpty: true, Options: []string{"", "default", "pnpm", "npm", "yarn", "bun"}, Description: "Per-repo package manager override (default/empty = global)"},
 	{Key: "SETUP_SCRIPT", Kind: KindText, AllowEmpty: true, Description: "Command run inside every new worktree after install"},
 	{Key: "HIDDEN", Kind: KindBool, Description: "Hide this repo from the main view and all-repo operations"},
+	{Key: "LTS_ROOT", Kind: KindText, AllowEmpty: true, Description: "Directory holding this repo's <repo>-lts folder (empty = next to the repos)"},
 }
 
 // GlobalKeys returns the documented global keys (sorted by key).
@@ -287,6 +289,8 @@ func (rc RepoLocalConfig) Get(key string) (string, bool) {
 		return rc.SetupScript, true
 	case "HIDDEN":
 		return boolStr(rc.Hidden), true
+	case "LTS_ROOT":
+		return rc.LTSRoot, true
 	}
 	return "", false
 }
@@ -318,6 +322,17 @@ func (c *Config) SetRepoKey(repoName, key, value string) error {
 		rc.SetupScript = v
 	case "HIDDEN":
 		rc.Hidden = v == "true"
+	case "LTS_ROOT":
+		if v != "" && !filepath.IsAbs(v) {
+			return fmt.Errorf("LTS_ROOT must be an absolute path")
+		}
+		if v != "" {
+			v = filepath.Clean(v)
+		}
+		if v == filepath.Clean(c.WorkDir) {
+			v = "" // the default location — store as unset
+		}
+		rc.LTSRoot = v
 	}
 	c.Local[k] = rc
 	return c.SaveLocal()

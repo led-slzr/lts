@@ -507,7 +507,7 @@ func HibernateRepo(scriptDir string, repo Repo, logFn ...LogFunc) error {
 		return fmt.Errorf("refusing to remove %q — not directly inside %q", repo.Path, scriptDir)
 	}
 	if repo.LTSDir != "" {
-		ltsPath := filepath.Join(scriptDir, repo.LTSDir)
+		ltsPath := SingleLTSPath(scriptDir, repo.Name)
 		log(ctx, "Removing "+ltsPath, false)
 		if err := os.RemoveAll(ltsPath); err != nil {
 			return fmt.Errorf("remove LTS dir: %w", err)

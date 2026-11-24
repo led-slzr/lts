@@ -178,6 +178,7 @@ type Model struct {
 }
 
 func NewModel(cfg config.Config) Model {
+	core.ApplyLTSRoots(&cfg)
 	ti := textinput.New()
 	ti.Placeholder = "new-branch-name"
 	ti.CharLimit = 100

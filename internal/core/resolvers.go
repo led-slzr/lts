@@ -98,3 +98,9 @@ func WorkspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 		CopyMCP:      cfg.Global.CopyMCPJson,
 	}
 }
+
+// ApplyLTSRoots registers the configured per-repo LTS roots with the git
+// layer. Call after every config load or LTS_ROOT change.
+func ApplyLTSRoots(cfg *config.Config) {
+	git.SetLTSRoots(cfg.LTSRoots())
+}
