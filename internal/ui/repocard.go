@@ -82,7 +82,7 @@ func truncate(s string, maxWidth int) string {
 func statusStyle(status git.WTStatus) lipgloss.Style {
 	base := lipgloss.NewStyle().Background(ColorBlack)
 	switch status {
-	case git.StatusMissing:
+	case git.StatusMissing, git.StatusUnknown:
 		return base.Foreground(ColorRed)
 	case git.StatusDiverged:
 		return base.Foreground(ColorRed)

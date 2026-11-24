@@ -22,6 +22,10 @@ const (
 	StatusMissing
 	StatusMergedDirty
 	StatusNewDirty
+	// StatusUnknown: the directory exists but git can't read it (broken
+	// worktree admin dir, git missing, safe.directory...). Its contents
+	// can't be verified, so it must never be treated as safe to delete.
+	StatusUnknown
 )
 
 type Worktree struct {

@@ -2,6 +2,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -10,7 +11,11 @@ import (
 func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 	porcelain, err := RunGit(wtPath, "status", "--porcelain")
 	if err != nil {
-		return StatusMissing, "missing"
+		// Only a directory that is really gone is "missing" (safe to prune)
+		if _, serr := os.Stat(wtPath); os.IsNotExist(serr) {
+			return StatusMissing, "missing"
+		}
+		return StatusUnknown, "unreadable by git"
 	}
 
 	// Check uncommitted changes
@@ -169,6 +174,8 @@ func DeleteRisk(status WTStatus) (warning string, dangerous bool) {
 		return "Uncommitted changes will be LOST (new branch)", true
 	case StatusMissing:
 		return "Worktree directory is missing — will clean up git references", false
+	case StatusUnknown:
+		return "Git can't read this worktree, so its contents can't be checked — everything in the folder will be LOST", true
 	default:
 		return "", false
 	}
@@ -210,6 +217,8 @@ func (s WTStatus) Slug() string {
 		return "merged_dirty"
 	case StatusNewDirty:
 		return "new_dirty"
+	case StatusUnknown:
+		return "unknown"
 	}
 	return "unknown"
 }
@@ -262,6 +271,8 @@ func StatusSeverity(s WTStatus) int {
 		return 4
 	case StatusDiverged:
 		return 5
+	case StatusUnknown:
+		return 6
 	}
 	return 2
 }
