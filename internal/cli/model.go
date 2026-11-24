@@ -138,8 +138,11 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 		for _, m := range members {
 			sv.MemberStatuses = append(sv.MemberStatuses, memberStatus{Repo: m.Repo, State: m.Status.Slug(), Text: m.Text})
 		}
-		for _, m := range w.Members {
-			si := git.GetSyncInfo(m.Path)
+		for _, m := range members {
+			si := m.Sync
+			if si.Branch == "" { // off-branch member: count its working tree anyway
+				si = git.GetSyncInfo(m.Path)
+			}
 			sv.ChangedFiles += si.ChangedFiles
 			sv.Ahead += si.Ahead
 			sv.Behind += si.Behind
@@ -156,8 +159,7 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 		sv.HasRemoteBranch = git.HasRemoteBranch(worst)
 		sv.DeleteRisk, sv.DangerousDelete = git.DeleteRisk(worst)
 	} else {
-		st, txt := git.GetWorktreeStatus(wt.Path, basis)
-		si := git.GetSyncInfo(wt.Path)
+		st, txt, si := git.GetWorktreeDetail(wt.Path, basis)
 		sv.State, sv.Text = st.Slug(), txt
 		sv.ChangedFiles, sv.Ahead, sv.Behind, sv.Upstream = si.ChangedFiles, si.Ahead, si.Behind, si.Upstream
 		sv.AheadOfBasis = countCommits(wt.Path, basis+"..HEAD")

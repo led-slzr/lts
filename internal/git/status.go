@@ -9,7 +9,20 @@ import (
 
 // GetWorktreeStatus replicates the get_worktree_status() logic from lts.sh.
 func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
-	porcelain, err := RunGit(wtPath, "status", "--porcelain")
+	st, txt, _ := GetWorktreeDetail(wtPath, basisBranch)
+	return st, txt
+}
+
+// GetWorktreeDetail is GetWorktreeStatus plus the raw sync numbers, from a
+// single `git status --porcelain=v2 --branch` (the expensive call).
+func GetWorktreeDetail(wtPath, basisBranch string) (WTStatus, string, SyncInfo) {
+	var si SyncInfo
+	st, txt := worktreeStatus(wtPath, basisBranch, &si)
+	return st, txt, si
+}
+
+func worktreeStatus(wtPath, basisBranch string, si *SyncInfo) (WTStatus, string) {
+	porcelain, err := RunGit(wtPath, "status", "--porcelain=v2", "--branch")
 	if err != nil {
 		// Only a directory that is really gone is "missing" (safe to prune)
 		if _, serr := os.Stat(wtPath); os.IsNotExist(serr) {
@@ -18,17 +31,33 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 		return StatusUnknown, "unreadable by git"
 	}
 
-	// Check uncommitted changes
+	// One pass over the v2 output: branch headers + one line per change
+	var currentBranch, upstream string
+	abKnown := false
+	var ahead, behind, changedCount int
+	for _, line := range strings.Split(porcelain, "\n") {
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "# branch.head "):
+			if h := strings.TrimPrefix(line, "# branch.head "); h != "(detached)" {
+				currentBranch = h
+			}
+		case strings.HasPrefix(line, "# branch.upstream "):
+			upstream = strings.TrimPrefix(line, "# branch.upstream ")
+		case strings.HasPrefix(line, "# branch.ab "):
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "# branch.ab "), "+%d -%d", &ahead, &behind); err == nil {
+				abKnown = true
+			}
+		case strings.HasPrefix(line, "#"):
+		default:
+			changedCount++
+		}
+	}
 	var localStatus string
-	var changedCount int
-	porcelain = strings.TrimSpace(porcelain)
-	if porcelain != "" {
-		changedCount = len(strings.Split(porcelain, "\n"))
+	if changedCount > 0 {
 		localStatus = fmt.Sprintf("%d changed", changedCount)
 	}
-
-	// Check ahead/behind
-	currentBranch, _ := RunGit(wtPath, "branch", "--show-current")
+	si.Branch, si.ChangedFiles = currentBranch, changedCount
 
 	// Detached HEAD: no branch to sync or merge. What matters is whether
 	// HEAD's commits are reachable from any branch; if not, deleting the
@@ -44,29 +73,21 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 	}
 
 	var syncStatus string
-	var ahead, behind int
 
-	// Try upstream first, then origin/<branch>
-	hasUpstream := false
-	if _, err := RunGit(wtPath, "rev-parse", "--verify", "@{upstream}"); err == nil {
-		hasUpstream = true
-	}
-
+	// Upstream first (ahead/behind straight from status), then origin/<branch>
 	var remoteRef string
-	if hasUpstream {
-		remoteRef = "@{upstream}"
-	} else if currentBranch != "" {
-		if _, err := RunGit(wtPath, "rev-parse", "--verify", "origin/"+currentBranch); err == nil {
-			remoteRef = "origin/" + currentBranch
-		}
-	}
-
-	if remoteRef != "" {
+	if upstream != "" && abKnown {
+		remoteRef = upstream
+	} else if refExists(wtPath, "refs/remotes/origin/"+currentBranch) {
+		remoteRef = "origin/" + currentBranch
 		aheadStr, _ := RunGit(wtPath, "rev-list", "--count", remoteRef+"..HEAD")
 		behindStr, _ := RunGit(wtPath, "rev-list", "--count", "HEAD.."+remoteRef)
 		ahead, _ = strconv.Atoi(aheadStr)
 		behind, _ = strconv.Atoi(behindStr)
+	}
 
+	if remoteRef != "" {
+		si.Upstream, si.Ahead, si.Behind = remoteRef, ahead, behind
 		if ahead > 0 && behind > 0 {
 			syncStatus = "diverged"
 		} else if ahead > 0 {
@@ -90,7 +111,7 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 		candidates = append(candidates, "master")
 	}
 	for _, c := range candidates {
-		if _, err := RunGit(wtPath, "show-ref", "--verify", "--quiet", "refs/heads/"+c); err == nil {
+		if refExists(wtPath, "refs/heads/"+c) {
 			mainBranch = c
 			break
 		}

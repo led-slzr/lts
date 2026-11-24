@@ -264,9 +264,11 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 // MemberStatus is one mono-group member's status.
 type MemberStatus struct {
 	Repo   string
+	Path   string
 	Branch string
 	Status WTStatus
 	Text   string
+	Sync   SyncInfo // zero for a member off the group branch
 }
 
 // monoGroupBranch picks the branch most members have checked out.
@@ -296,6 +298,7 @@ func MonoGroupStatus(members []MonoMember, branch string, basisFor func(repo str
 		cur := currentBranch(m.Path)
 		var st WTStatus
 		var txt string
+		var si SyncInfo
 		if cur != branch {
 			on := cur
 			if on == "" {
@@ -303,10 +306,10 @@ func MonoGroupStatus(members []MonoMember, branch string, basisFor func(repo str
 			}
 			st, txt = StatusUnknown, m.Repo+" is on "+on+", not "+branch
 		} else {
-			st, txt = GetWorktreeStatus(m.Path, basisFor(m.Repo))
+			st, txt, si = GetWorktreeDetail(m.Path, basisFor(m.Repo))
 		}
 		sts, txts = append(sts, st), append(txts, txt)
-		out = append(out, MemberStatus{Repo: m.Repo, Branch: cur, Status: st, Text: txt})
+		out = append(out, MemberStatus{Repo: m.Repo, Path: m.Path, Branch: cur, Status: st, Text: txt, Sync: si})
 	}
 	st, txt := AggregateStatus(sts, txts)
 	return st, txt, out
