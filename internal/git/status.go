@@ -240,3 +240,51 @@ func GetSyncInfo(wtPath string) SyncInfo {
 	}
 	return si
 }
+
+// StatusSeverity orders statuses by how much unrecoverable work they hold.
+func StatusSeverity(s WTStatus) int {
+	switch s {
+	case StatusMergedCleanable, StatusClean:
+		return 0
+	case StatusNew, StatusToPull, StatusMissing:
+		return 1
+	case StatusMergedDirty, StatusNewDirty, StatusChanged:
+		return 3
+	case StatusToPush, StatusNoRemote:
+		return 4
+	case StatusDiverged:
+		return 5
+	}
+	return 2
+}
+
+// AggregateStatus combines member statuses of a mono group: merged ·
+// cleanable only when every member is; otherwise the most severe member
+// (so one member with unpushed work protects the whole group).
+func AggregateStatus(statuses []WTStatus, texts []string) (WTStatus, string) {
+	if len(statuses) == 0 {
+		return StatusMissing, "missing"
+	}
+	allCleanable := true
+	worst, worstText := -1, ""
+	var worstSt WTStatus
+	for i, st := range statuses {
+		if st != StatusMergedCleanable {
+			allCleanable = false
+		}
+		sev := StatusSeverity(st)
+		if st == StatusMergedCleanable {
+			sev = -1 // never the representative unless all members are
+		}
+		if sev > worst {
+			worst, worstSt = sev, st
+			if i < len(texts) {
+				worstText = texts[i]
+			}
+		}
+	}
+	if allCleanable {
+		return StatusMergedCleanable, "merged · cleanable"
+	}
+	return worstSt, worstText
+}

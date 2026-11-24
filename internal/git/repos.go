@@ -229,10 +229,21 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 			}
 			seen[branch] = true
 
+			// Group status aggregates every member (see AggregateStatus) —
+			// cleanup must never act on one member's "merged" alone
 			var status WTStatus
 			var statusText string
 			if !opts.SkipStatus {
-				status, statusText = GetWorktreeStatus(wtPath, basisBranch)
+				var sts []WTStatus
+				var txts []string
+				for _, se2 := range subEntries {
+					p := filepath.Join(branchSubdir, se2.Name())
+					if se2.IsDir() && isWorktreeDir(p) {
+						st, txt := GetWorktreeStatus(p, basisBranch)
+						sts, txts = append(sts, st), append(txts, txt)
+					}
+				}
+				status, statusText = AggregateStatus(sts, txts)
 			}
 
 			// Last activity: newest across the branch's per-repo worktrees
