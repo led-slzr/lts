@@ -131,7 +131,7 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 		}
 
 		basis := getBasis(p.Name)
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(scriptDir, repoPath)
 		if err := EnsureCleanMain(repoPath, basis, log); err != nil {
 			log.AddError("Skipping: " + err.Error())
 			continue

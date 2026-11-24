@@ -51,6 +51,9 @@ type Repo struct {
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
 
+	// Stale: registered worktrees whose folder is gone (see StaleWorktrees)
+	Stale []StaleWorktree
+
 	// Hidden: marked in local config (grayed out when Show Hidden Repos is on)
 	Hidden bool
 
@@ -139,6 +142,10 @@ func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opt
 		}
 
 		repos = append(repos, repo)
+	}
+
+	for i := range repos {
+		repos[i].Stale = StaleWorktrees(scriptDir, repos[i].Path)
 	}
 
 	// Main-checkout scans (a git status per repo) are independent — run

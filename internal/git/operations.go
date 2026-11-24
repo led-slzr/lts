@@ -488,7 +488,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	}
 
 	// Prune orphaned worktree entries
-	RunGit(repoPath, "worktree", "prune")
+	pruneWorktrees(scriptDir, repoPath)
 
 	// Ensure clean main
 	if err := EnsureCleanMain(repoPath, basisBranch, log); err != nil {
@@ -611,7 +611,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 		}
 
 		// Prune and prepare
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(scriptDir, repoPath)
 
 		if err := EnsureCleanMain(repoPath, basisBranch, log); err != nil {
 			log.AddError("Skipping: " + err.Error())
@@ -1257,7 +1257,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 			if gitErr != nil {
 				log(ctx, "Git remove failed for "+e.Name()+", removing manually", true)
 				os.RemoveAll(wtPath)
-				RunGit(repoPath, "worktree", "prune")
+				pruneWorktrees(scriptDir, repoPath)
 			}
 		} else {
 			log(ctx, "Could not resolve repo for "+e.Name()+", removing manually", true)
@@ -1331,7 +1331,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
 		log(ctx, "Worktree directory missing — pruning git refs", false)
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(filepath.Dir(repoPath), repoPath)
 	} else {
 		log(ctx, "Removing worktree directory", false)
 		_, err := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
@@ -1340,7 +1340,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 			if isWorktreeDir(wtPath) {
 				os.RemoveAll(wtPath)
 			}
-			RunGit(repoPath, "worktree", "prune")
+			pruneWorktrees(filepath.Dir(repoPath), repoPath)
 		}
 	}
 
@@ -1582,7 +1582,9 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 				RunGit(wtPath, "branch", "-m", oldBranch)
 				return nil, fmt.Errorf("move worktree directory failed: %w", err2)
 			}
-			RunGit(repoPath, "worktree", "repair")
+			// repair needs the NEW path, or git keeps the old one and a later
+			// prune unregisters this worktree
+			RunGit(repoPath, "worktree", "repair", newWtPath)
 		}
 	}
 
@@ -1713,7 +1715,7 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 					log(ctx, "Move failed for "+wt.repoName+": "+err2.Error(), true)
 					continue
 				}
-				RunGit(wt.repoPath, "worktree", "repair")
+				RunGit(wt.repoPath, "worktree", "repair", newWtPath)
 			}
 			worktrees[i].path = newWtPath
 		}
@@ -1751,9 +1753,11 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 		} else {
 			renameWorktreeMeta(ltsPath, filepath.Base(branchSubdirPath), newBranchDirName)
 		}
-		// Repair all worktrees after moving the parent directory
+		// Repair every worktree at its NEW path after moving the parent
+		// directory (a bare `repair` can't find moved worktrees; git would
+		// keep the old paths and the next prune would unregister them)
 		for _, wt := range worktrees {
-			RunGit(wt.repoPath, "worktree", "repair")
+			RunGit(wt.repoPath, "worktree", "repair", filepath.Join(newBranchSubdirPath, filepath.Base(wt.path)))
 		}
 	}
 
@@ -2063,7 +2067,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	}
 
 	// Prune orphaned worktree entries
-	RunGit(repoPath, "worktree", "prune")
+	pruneWorktrees(scriptDir, repoPath)
 
 	// Generate worktree name: feat/login → feat-login
 	wtName := generateUniqueName(BranchToDirName(currentBranch), ltsPath)
@@ -2378,7 +2382,7 @@ func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
 			if err2 := os.Rename(dirPath, newPath); err2 != nil {
 				continue
 			}
-			RunGit(repoPath, "worktree", "repair")
+			RunGit(repoPath, "worktree", "repair", newPath)
 		}
 
 		renameWorktreeMeta(ltsPath, e.Name(), expectedName)
@@ -2460,7 +2464,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 					allWorktreesMigrated = false
 					continue
 				}
-				RunGit(repoPath, "worktree", "repair")
+				RunGit(repoPath, "worktree", "repair", newWtPath)
 			}
 
 			// Rename individual workspace and update its contents
@@ -2489,7 +2493,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 					subdirRenamed = true
 					// Repair all worktrees after parent move
 					for _, rn := range repoNames {
-						RunGit(filepath.Join(scriptDir, rn), "worktree", "repair")
+						RepairLinks(scriptDir, filepath.Join(scriptDir, rn))
 					}
 					migrated++
 				}
