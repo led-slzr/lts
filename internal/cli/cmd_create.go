@@ -265,7 +265,13 @@ func (a *app) runCreate(cmd *cobra.Command, branch string, repoArgs []string, f 
 			if filepath.Clean(where) == filepath.Clean(r.Path) {
 				return guardErr("%s", msg).withHint("that is the repo's main checkout — open the TUI and use \"Migrate to LTS\", or switch it back to %s", basisFor(r.Name))
 			}
-			return guardErr("%s", msg).withHint("to group an existing single-repo worktree, use the TUI's \"Add to Mono Group\"; or pick another branch name")
+			if t := targetAtPath(env, where); t != nil {
+				if mono && !t.Repo.IsMonorepo {
+					return guardErr("%s (LTS worktree %s)", msg, t.ID()).withHint("to add it to a mono group, use the TUI's \"Add to Mono Group\"; or pick another branch name")
+				}
+				return guardErr("%s (LTS worktree %s)", msg, t.ID()).withHint("use that worktree (`lts path %s`), or pick another branch name", t.ID())
+			}
+			return guardErr("%s, a worktree LTS does not manage", msg).withHint("finish or remove it there (git worktree remove %q), or pick another branch name", where)
 		}
 	}
 
@@ -405,6 +411,17 @@ func existingResult(t Target) []createdWT {
 		out = append(out, createdWT{ID: t.ID(), Repo: m.Repo, Path: m.Path, Existing: true})
 	}
 	return out
+}
+
+// targetAtPath returns the LTS worktree whose path contains p, if any.
+func targetAtPath(env *Env, p string) *Target {
+	for _, t := range env.allTargets() {
+		if pathWithin(p, t.WT.Path) {
+			tt := t
+			return &tt
+		}
+	}
+	return nil
 }
 
 // checkedOutAt returns where branch is checked out in repoPath ("" = nowhere).

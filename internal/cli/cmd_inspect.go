@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -208,7 +209,9 @@ nowhere else (the same rule ` + "`lts delete`" + ` enforces).
 						if !fetched[p] {
 							fetched[p] = true
 							a.out.Log(filepathBase(p), "Fetching origin...", false)
-							if _, err := git.RunGit(p, "fetch", "origin", "--prune"); err != nil {
+							// No --prune: deleting remote-tracking refs would flip merged
+							// branches to "new" and silently change state
+							if _, err := git.RunGit(p, "fetch", "origin"); err != nil {
 								a.out.Log(filepathBase(p), "fetch failed: "+err.Error(), true)
 							}
 						}
@@ -216,12 +219,25 @@ nowhere else (the same rule ` + "`lts delete`" + ` enforces).
 				}
 			}
 			tmux := opener.LiveSessions()
-			views := []worktreeView{}
-			for _, t := range targets {
-				w := env.worktreeView(t.Repo, t.WT, tmux, a.busyFn(env))
-				env.fillStatus(t.Repo, t.WT, &w)
-				views = append(views, w)
+			views := make([]worktreeView, len(targets))
+			busy := a.busyFn(env)
+			for i, t := range targets {
+				views[i] = env.worktreeView(t.Repo, t.WT, tmux, busy)
 			}
+			// Status is ~15 git calls per worktree; run them in parallel
+			// (bounded) — results keep their original order
+			sem := make(chan struct{}, 8)
+			var wg sync.WaitGroup
+			for i, t := range targets {
+				wg.Add(1)
+				go func(i int, t Target) {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					env.fillStatus(t.Repo, t.WT, &views[i])
+				}(i, t)
+			}
+			wg.Wait()
 			a.out.Result(map[string]any{"workspace": env.WorkDir, "worktrees": views}, func(w io.Writer) {
 				renderStatus(w, views)
 			})

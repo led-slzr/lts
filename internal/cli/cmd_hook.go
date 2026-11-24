@@ -128,7 +128,9 @@ func (a *app) hookEnv(cwd string) *Env {
 	core.ApplyLTSRoots(&cfg)
 	a.out = newOutput(false, true, false, true, true)
 	env := &Env{Out: a.out, WorkDir: root, Cfg: cfg}
-	env.discover(false) // never migrate or fetch from a hook
+	// Never migrate or fetch from a hook, and skip the per-repo main
+	// checkout scan (hookContext checks only the repo the session is in)
+	env.discoverWith(git.DiscoverOptions{SkipStatus: true, SkipMigrationCheck: true})
 	return env
 }
 
@@ -162,15 +164,27 @@ func (a *app) hookContext(cwd string) string {
 		lines = append(lines, fmt.Sprintf("You are in LTS %s %s — branch %s, status: %s.", kind, t.ID(), t.WT.Branch, w.Status.Text))
 		here = t.ID()
 	} else {
+		// Which repo is cwd a checkout of? (git's common dir → main repo)
+		top, _ := git.RunGit(cwd, "rev-parse", "--show-toplevel")
+		common, _ := git.RunGit(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		mainRepo := filepath.Dir(filepath.Clean(strings.TrimSpace(common)))
 		for _, r := range env.Repos {
-			if !r.IsMonorepo && pathWithin(cwd, r.Path) {
-				inRepo = true
-				br, _ := git.RunGit(r.Path, "branch", "--show-current")
-				lines = append(lines, fmt.Sprintf("You are in the MAIN checkout of %s (branch %s). Don't do branch work here — create a worktree: lts create <branch> -r %s, then work in the printed path.", r.Name, displayVal(br), r.Name))
-				if r.NeedsMigration {
-					lines = append(lines, fmt.Sprintf("Note: this main checkout holds work on %s (%s); the user can move it into a worktree via the TUI's \"Migrate to LTS\".", r.MigrationBranch, r.MigrationReason))
-				}
+			if r.IsMonorepo || common == "" || !pathWithin(mainRepo, r.Path) || !pathWithin(r.Path, mainRepo) {
+				continue
 			}
+			inRepo = true
+			if top != "" && !pathWithin(top, r.Path) {
+				// a linked worktree of r made by some other tool
+				br, _ := git.RunGit(cwd, "branch", "--show-current")
+				lines = append(lines, fmt.Sprintf("You are in a git worktree of %s that LTS does not manage (%s, branch %s). Work here as usual; LTS commands that take a target won't see it. New LTS worktrees: lts create <branch> -r %s.", r.Name, top, displayVal(br), r.Name))
+				break
+			}
+			br, _ := git.RunGit(r.Path, "branch", "--show-current")
+			lines = append(lines, fmt.Sprintf("You are in the MAIN checkout of %s (branch %s). Don't do branch work here — create a worktree: lts create <branch> -r %s, then work in the printed path.", r.Name, displayVal(br), r.Name))
+			if needs, mb, reason := git.MainCheckoutMigration(r.Path, r.MainBranch); needs {
+				lines = append(lines, fmt.Sprintf("Note: this main checkout holds work on %s (%s); the user can move it into a worktree via the TUI's \"Migrate to LTS\".", mb, reason))
+			}
+			break
 		}
 	}
 

@@ -71,6 +71,9 @@ type DiscoverOptions struct {
 	// SkipStatus leaves Worktree.Status/StatusText unset (StatusText "")
 	// — a fast inventory with no per-worktree status git calls.
 	SkipStatus bool
+	// SkipMigrationCheck skips the per-repo main-checkout scan (a git
+	// status on every main checkout) — Repo.NeedsMigration stays false.
+	SkipMigrationCheck bool
 }
 
 // DiscoverReposWith is DiscoverRepos with options.
@@ -132,10 +135,12 @@ func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opt
 		}
 
 		// Check if main repo needs migration to LTS worktree
-		needsMigration, migBranch, migReason := checkMigrationNeeded(dirPath, mainBranch)
-		repo.NeedsMigration = needsMigration
-		repo.MigrationBranch = migBranch
-		repo.MigrationReason = migReason
+		if !opts.SkipMigrationCheck {
+			needsMigration, migBranch, migReason := checkMigrationNeeded(dirPath, mainBranch)
+			repo.NeedsMigration = needsMigration
+			repo.MigrationBranch = migBranch
+			repo.MigrationReason = migReason
+		}
 
 		repos = append(repos, repo)
 	}
@@ -574,6 +579,12 @@ func lookupCreatedAt(wtPath string) int64 {
 	}
 	parent := filepath.Dir(dir)
 	return worktreeCreatedAt(parent, filepath.Base(dir))
+}
+
+// MainCheckoutMigration reports whether a repo's main checkout holds work
+// on a non-basis branch (the TUI's "Migrate to LTS" card).
+func MainCheckoutMigration(repoPath, mainBranch string) (needs bool, branch, reason string) {
+	return checkMigrationNeeded(repoPath, mainBranch)
 }
 
 // MonoMember is one repo's worktree inside a mono group branch subdir.

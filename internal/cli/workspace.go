@@ -149,7 +149,11 @@ func (a *app) loadEnv(o envOpts) (*Env, error) {
 
 // discover (re)loads repos, marks hidden ones, and applies the sort order.
 func (e *Env) discover(withStatus bool) {
-	repos := git.DiscoverReposWith(e.WorkDir, core.BasisResolver(&e.Cfg), git.DiscoverOptions{SkipStatus: !withStatus})
+	e.discoverWith(git.DiscoverOptions{SkipStatus: !withStatus})
+}
+
+func (e *Env) discoverWith(opts git.DiscoverOptions) {
+	repos := git.DiscoverReposWith(e.WorkDir, core.BasisResolver(&e.Cfg), opts)
 	for i := range repos {
 		if !repos[i].IsMonorepo && e.Cfg.IsRepoHidden(repos[i].Name) {
 			repos[i].Hidden = true
