@@ -15,7 +15,9 @@ description: Tidy an LTS workspace — "clean up worktrees", "what's stale", "fr
 4. **Act only after the user says yes:** `lts cleanup-merged --yes`
    (`--remote` only if they also want the branches deleted on origin).
    Exit 5 = some failed; report `.failed`.
-5. **Disk space:** `lts clean-modules <target> --dry-run` shows reclaimable
+5. **Missing worktrees:** `lts ls --json` → `.repos[].stale` lists worktrees whose
+   folder was deleted by hand; `lts prune` forgets them (branches are kept).
+6. **Disk space:** `lts clean-modules <target> --dry-run` shows reclaimable
    `node_modules`; removing them is safe (reinstall any time).
-6. Anything else (stale but unmerged worktrees) needs a per-item decision from the
+7. Anything else (stale but unmerged worktrees) needs a per-item decision from the
    user: `lts delete <id> --dry-run` first, then `--yes`. Never `--force` unasked.

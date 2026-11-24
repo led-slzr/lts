@@ -11,9 +11,11 @@ description: Finish work in an LTS worktree — "I'm done", "ship it", "open a P
 3. **Stay current (optional).** `lts rebase --refresh`. Exit 6 = conflict: the rebase
    was aborted and the worktree restored — tell the user and stop.
 4. **Push.** `git push -u origin "$(git branch --show-current)"`.
-5. **PR.** `lts pr --print --json` → `.url` (the existing PR, or a prefilled compare
+5. **Hand back (optional).** `lts open --ide` (or `--terminal`) opens the worktree for
+   the user to review — the same as clicking it in the LTS TUI.
+6. **PR.** `lts pr --print --json` → `.url` (the existing PR, or a prefilled compare
    page). Share the URL. For a mono group: `lts pr --member <repo>` per repo.
-6. **After merge** (only when the user confirms it merged):
+7. **After merge** (only when the user confirms it merged):
    ```bash
    lts delete --dry-run        # shows state + what will be removed
    lts delete --yes            # state must be merged_cleanable / clean

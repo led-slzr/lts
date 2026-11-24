@@ -30,7 +30,8 @@ A modern terminal UI — and, since v3.2, a scriptable CLI for humans, scripts a
 
 ## Features
 
-- **Scriptable CLI** — `lts ls`, `status`, `create`, `rebase`, `rename`, `delete`, `cleanup-merged`, `pr`, `config` and more, with `--json` everywhere, stable exit codes, `--dry-run` on everything that changes state, suggest-only "did you mean", and no prompts without a terminal ([CLI](#command-line-interface))
+- **Scriptable CLI** — `lts ls`, `status`, `create`, `rebase`, `rename`, `delete`, `cleanup-merged`, `open`, `watch`, `prune`, `pr`, `hibernate`, `config` and more, with `--json` everywhere, stable exit codes, `--dry-run` on everything that changes state, suggest-only "did you mean", and no prompts without a terminal ([CLI](#command-line-interface))
+- **Built for a human and an agent at once** — the TUI and the CLI share per-repo locks, so neither can act on a repo the other is changing; `lts watch` streams events for orchestrators
 - **AI-agent ready** — a Claude Code plugin (skills + session hooks), `lts skill install` for any setup, and `lts help agents`, a single page that teaches an agent the whole contract ([AI agents](#ai-agents))
 - **One-click worktree creation** — Stash, pull, branch, copy `.env`/`.mcp.json`, install deps, and generate workspace in one step (per-repo install toggles included)
 - **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows, each repo using its own basis branch and package manager
@@ -121,13 +122,17 @@ Every TUI capability that matters for day-to-day work is also a command. Command
 | | `lts config [list\|get\|path]` | Every setting with its value, default and source |
 | Change | `lts create <branch> -r repo[,repo]` | Worktree for one repo, or a mono group across several (`--basis`, `--lts-root`, `--no-install`, `--reuse`, `--open`, `--dry-run`) |
 | | `lts refresh [repo...]` | Fetch and fast-forward each repo's basis branch |
-| | `lts rebase [target] [--refresh]` | Rebase onto the basis branch; conflicts abort cleanly (exit 6) |
+| | `lts rebase [target] [--refresh]` | Rebase onto the basis branch — a mono group rebases every member (`--member` for one); conflicts abort cleanly (exit 6) |
+| | `lts open [target] --ide\|--ai\|--terminal` | Open a worktree exactly like clicking it in the TUI (workspace file, AI CLI, shell; tmux sessions when enabled) |
 | | `lts rename [target] <new> [--remote]` | Rename branch, folder, workspace file and tmux session |
 | | `lts pr [target] [--print]` | Open (or print) the existing PR or a prefilled compare page |
 | | `lts config set KEY VALUE [-r repo]` | Validated settings change (same rules as the Settings screen) |
 | Remove | `lts delete [target]` | Guarded delete: `--yes` for safe states, `--force --yes` for unsaved work |
 | | `lts cleanup-merged` | Delete every merged, clean worktree (`--dry-run`, `--yes`, `--remote`) |
 | | `lts clean-modules [target]` | Remove `node_modules` and report the space freed |
+| | `lts prune [repo...]` | Forget worktrees whose folder was deleted by hand (branches kept) |
+| | `lts hibernate <repo>` | The TUI's Hibernate Repo: audit, `.env` backup, delete local copy (`--dry-run`; `--confirm <repo>` without a terminal) |
+| Inspect | `lts watch [--json] [--status]` | Stream events: worktree added/removed, busy/idle, missing, state changes |
 | Agents | `lts help agents` | The contract for AI agents and scripts |
 | | `lts skill install\|print` | Install the agent skills / print them for `AGENTS.md` |
 | | `lts hook <event>` | Claude Code hook handlers |
@@ -190,7 +195,9 @@ LTS is built to be driven by agents that have never seen it: `lts help agents` e
 
 The plugin's `SessionStart` and `SubagentStart` hooks add a short LTS summary to every session and subagent — which worktree it is in, its status, the other worktrees, and the safety rules — so orchestrators and their workers know where they are without being told. Outside LTS workspaces they print nothing.
 
-**Without the marketplace:** `lts skill install` writes the same skills to `~/.claude/skills/lts-*` and adds the hooks to `~/.claude/settings.json` (backed up first; `--no-hooks` for skills only; `lts skill uninstall` reverses it). `lts skill print` emits the skills as Markdown for `AGENTS.md`-style instructions in other agents. `--worktree-hook` additionally routes Claude Code's own isolated worktrees through LTS (env files, dependencies, setup script, LTS layout); it steps aside whenever the repo's main checkout is dirty or off its basis branch.
+**Without the marketplace:** `lts skill install` writes the same skills to `~/.claude/skills/lts-*` and adds the hooks to `~/.claude/settings.json` (backed up first; `--no-hooks` for skills only; `lts skill uninstall` reverses it). `lts skill print` emits the skills as Markdown for `AGENTS.md`-style instructions in other agents. `--worktree-hook` additionally routes Claude Code's own isolated worktrees through LTS (env files, dependencies, setup script, LTS layout) — it steps aside whenever the repo's main checkout is dirty or off its basis branch — and removes them again when Claude Code is done, keeping any that hold unsaved work.
+
+**TUI + agents together:** the TUI and every CLI command take the same per-repo locks, so while you rebase `core` in the TUI an agent's `lts delete` on `core` gets `busy` (and the TUI refuses actions on a repo an agent is working on, naming who holds it).
 
 ## Keyboard Shortcuts
 
@@ -257,7 +264,7 @@ Supported values:
 - **IDE**: `windsurf`, `code`, `cursor`, `zed` (or any custom command)
 - **AI CLI**: `claude`, `opencode` (or any custom command, empty to disable)
 - **Package Manager**: `auto` (default — detect per repo), `pnpm`, `npm`, `yarn`, `bun`
-- **Auto Refresh** (`AUTO_REFRESH`): reserved — the value is saved, but this version does not refresh on a timer; use `r` in the TUI or `lts refresh`
+- **Auto Refresh** (`AUTO_REFRESH`): `OFF` (default), `15M`, `30M`, `1H`, `6H`, `12H`, `24H` — while the TUI runs, each repo whose last refresh is older than this is fetched and its basis branch fast-forwarded in the background (repos busy elsewhere wait for the next check); `lts refresh --due` does the same once, for cron or agents
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
 - **Layout** (`LAYOUT`): `board` (default) or `explorer` — also toggled in-app with `shift+tab` or by clicking the Layout switcher in the header
 - **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.

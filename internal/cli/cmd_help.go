@@ -85,10 +85,13 @@ COMMON WORKFLOWS
   Start a task:  lts create feat/x -r core --dry-run
                  cd "$(lts create feat/x -r core --reuse -q)"
   Multi-repo:    lts create feat/x -r core,erp     mono group (one branch, all repos)
-  Stay current:  lts rebase --refresh              (inside the worktree)
+  Stay current:  lts rebase --refresh              (inside the worktree;
+                                                    a mono group rebases every member)
+  Hand back:     lts open feat/x --ide | --ai | --terminal
   Ship:          git push -u origin feat/x && lts pr --print
   Finish:        lts delete feat/x --dry-run, then --yes once merged
   Tidy:          lts cleanup-merged --dry-run, then --yes
+                 lts prune                         forget worktrees deleted by hand
   Settings:      lts config --json; lts config set KEY VALUE [-r repo]
 
 ORCHESTRATING PARALLEL WORKERS
@@ -101,6 +104,11 @@ ORCHESTRATING PARALLEL WORKERS
     failing on "busy".
   • Fleet view: lts status --all --json (state, ahead/behind, busy,
     dangerous_to_delete per worktree).
+  • React instead of polling: lts watch --json streams NDJSON events —
+    worktree_added / worktree_removed / busy / idle / missing
+    (state_changed with --status).
+  • The TUI and the CLI share the same locks: while a human works a repo in
+    the TUI your commands get "busy" (and vice versa) — use --wait.
   • After merge: lts cleanup-merged --yes removes finished worktrees.
 
 ENVIRONMENT

@@ -36,7 +36,8 @@ outside LTS workspaces and are a no-op when `lts` isn't installed.
 
 **Optional:** route Claude Code's own isolated worktrees through LTS (env files,
 dependency install, setup scripts, LTS layout) with
-`lts skill install --worktree-hook` — off by default.
+`lts skill install --worktree-hook` — off by default. Its WorktreeRemove half
+cleans them up afterwards, keeping any that hold unsaved work.
 
 The skills defer to `lts help agents` for exact flags, so they stay correct as
 the CLI evolves.
