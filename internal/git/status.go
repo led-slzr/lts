@@ -176,3 +176,67 @@ func HasRemoteBranch(status WTStatus) bool {
 		return true
 	}
 }
+
+// Slug returns the stable machine name of a status (CLI JSON output).
+func (s WTStatus) Slug() string {
+	switch s {
+	case StatusClean:
+		return "clean"
+	case StatusChanged:
+		return "changed"
+	case StatusMergedCleanable:
+		return "merged_cleanable"
+	case StatusDiverged:
+		return "diverged"
+	case StatusToPush:
+		return "to_push"
+	case StatusToPull:
+		return "to_pull"
+	case StatusNew:
+		return "new"
+	case StatusNoRemote:
+		return "no_remote"
+	case StatusMissing:
+		return "missing"
+	case StatusMergedDirty:
+		return "merged_dirty"
+	case StatusNewDirty:
+		return "new_dirty"
+	}
+	return "unknown"
+}
+
+// SyncInfo is the raw sync state of a worktree checkout.
+type SyncInfo struct {
+	Branch       string `json:"branch"`
+	ChangedFiles int    `json:"changed_files"`
+	Upstream     string `json:"upstream,omitempty"` // "" = no remote branch
+	Ahead        int    `json:"ahead"`
+	Behind       int    `json:"behind"`
+}
+
+// GetSyncInfo reports changed-file count and ahead/behind against the
+// upstream (or origin/<branch>), mirroring GetWorktreeStatus's rules.
+func GetSyncInfo(wtPath string) SyncInfo {
+	var si SyncInfo
+	if out, err := RunGit(wtPath, "status", "--porcelain"); err == nil {
+		if out = strings.TrimSpace(out); out != "" {
+			si.ChangedFiles = len(strings.Split(out, "\n"))
+		}
+	}
+	si.Branch, _ = RunGit(wtPath, "branch", "--show-current")
+	if up, err := RunGit(wtPath, "rev-parse", "--abbrev-ref", "@{upstream}"); err == nil && up != "" {
+		si.Upstream = up
+	} else if si.Branch != "" {
+		if _, err := RunGit(wtPath, "rev-parse", "--verify", "origin/"+si.Branch); err == nil {
+			si.Upstream = "origin/" + si.Branch
+		}
+	}
+	if si.Upstream != "" {
+		a, _ := RunGit(wtPath, "rev-list", "--count", si.Upstream+"..HEAD")
+		b, _ := RunGit(wtPath, "rev-list", "--count", "HEAD.."+si.Upstream)
+		si.Ahead, _ = strconv.Atoi(a)
+		si.Behind, _ = strconv.Atoi(b)
+	}
+	return si
+}

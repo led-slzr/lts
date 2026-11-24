@@ -36,12 +36,25 @@ func isTerminal(f *os.File) bool {
 	return isatty.IsTerminal(f.Fd()) || isatty.IsCygwinTerminal(f.Fd())
 }
 
+// Process streams; tests swap them.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+	stdin  io.Reader = os.Stdin
+	// forceInteractive lets tests exercise prompt paths (nil = detect).
+	forceInteractive *bool
+)
+
 // newOutput builds the default Output from process state and global flags.
 func newOutput(jsonOut, quiet, verbose, noColor, noInput bool) *Output {
 	stdoutTTY := isTerminal(os.Stdout)
 	interactive := isTerminal(os.Stdin) && isTerminal(os.Stderr) && !noInput && os.Getenv("CI") == ""
+	if forceInteractive != nil {
+		interactive = *forceInteractive && !noInput
+		stdoutTTY = false
+	}
 	return &Output{
-		Out: os.Stdout, Err: os.Stderr, In: os.Stdin,
+		Out: stdout, Err: stderr, In: stdin,
 		JSON: jsonOut, Quiet: quiet, Verbose: verbose,
 		Color:       stdoutTTY && !noColor && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb",
 		Interactive: interactive,

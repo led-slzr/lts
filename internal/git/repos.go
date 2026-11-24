@@ -564,3 +564,34 @@ func lookupCreatedAt(wtPath string) int64 {
 	parent := filepath.Dir(dir)
 	return worktreeCreatedAt(parent, filepath.Base(dir))
 }
+
+// MonoMember is one repo's worktree inside a mono group branch subdir.
+type MonoMember struct {
+	Repo string `json:"repo"`
+	Path string `json:"path"`
+}
+
+// MonoMembers lists the per-repo worktrees inside a mono branch subdir.
+func MonoMembers(branchSubdir string) []MonoMember {
+	entries, err := os.ReadDir(branchSubdir)
+	if err != nil {
+		return nil
+	}
+	var out []MonoMember
+	for _, e := range entries {
+		p := filepath.Join(branchSubdir, e.Name())
+		if !e.IsDir() || !isWorktreeDir(p) {
+			continue
+		}
+		repo := filepath.Base(resolveWorktreeRepo(p))
+		if repo == "." || repo == "/" {
+			repo = ""
+		}
+		out = append(out, MonoMember{Repo: repo, Path: p})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Repo < out[j].Repo })
+	return out
+}
+
+// IsWorktreeDir reports whether path is a linked git worktree checkout.
+func IsWorktreeDir(path string) bool { return isWorktreeDir(path) }

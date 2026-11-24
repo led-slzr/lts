@@ -98,8 +98,12 @@ func DefaultRepoLocal() RepoLocalConfig {
 	}
 }
 
-// GlobalConfigDir returns ~/.config/lts
+// GlobalConfigDir returns ~/.config/lts, or $LTS_CONFIG_DIR when set
+// (sandboxes, CI, and agents that must not touch the user's real config).
 func GlobalConfigDir() string {
+	if d := os.Getenv("LTS_CONFIG_DIR"); d != "" {
+		return d
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "lts")
 }
@@ -403,6 +407,22 @@ func (c *Config) EnsureRepoExists(repoName string) {
 	if _, ok := c.Local[key]; !ok {
 		c.Local[key] = DefaultRepoLocal()
 	}
+}
+
+// RawGlobalFile returns the key/values literally present in the global
+// config file (used to report where an effective value comes from).
+func RawGlobalFile() map[string]string { return readKV(GlobalConfigPath()) }
+
+// RawLocalFile returns the key/values literally present in .lts.conf.
+func RawLocalFile(workDir string) map[string]string { return readKV(LocalConfigPath(workDir)) }
+
+func readKV(path string) map[string]string {
+	f, err := os.Open(path)
+	if err != nil {
+		return map[string]string{}
+	}
+	defer f.Close()
+	return parseKeyValue(f)
 }
 
 // --- Internal loading ---
