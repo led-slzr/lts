@@ -63,6 +63,18 @@ type Repo struct {
 type BasisBranchResolver func(repoName string) string
 
 func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo {
+	return DiscoverReposWith(scriptDir, getBasisBranch, DiscoverOptions{})
+}
+
+// DiscoverOptions tunes discovery cost.
+type DiscoverOptions struct {
+	// SkipStatus leaves Worktree.Status/StatusText unset (StatusText "")
+	// — a fast inventory with no per-worktree status git calls.
+	SkipStatus bool
+}
+
+// DiscoverReposWith is DiscoverRepos with options.
+func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opts DiscoverOptions) []Repo {
 	entries, err := os.ReadDir(scriptDir)
 	if err != nil {
 		return nil
@@ -115,7 +127,7 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 
 		// Only collect worktrees from the repo's own single-repo LTS dir
 		if ltsDir != "" && ltsType == "single" {
-			wts := listWorktrees(ltsRoot, ltsDir, name, repoBasis)
+			wts := listWorktrees(ltsRoot, ltsDir, name, repoBasis, opts)
 			repo.Worktrees = append(repo.Worktrees, wts...)
 		}
 
@@ -162,7 +174,7 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		// Collect all worktrees from this LTS dir, grouped by branch
 		// Use first repo's basis branch for status checking
 		monoBasis := getBasisBranch(sorted[0])
-		allWTs := listAllMonorepoWorktrees(scriptDir, ltsDir, sorted, monoBasis)
+		allWTs := listAllMonorepoWorktrees(scriptDir, ltsDir, sorted, monoBasis, opts)
 		monoRepo.Worktrees = allWTs
 
 		repos = append(repos, monoRepo)
@@ -174,7 +186,7 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 // listAllMonorepoWorktrees collects worktrees from a monorepo LTS dir.
 // For display, we show branch names (not per-repo worktree names).
 // A branch like feat/login that exists across core and erp-ui shows as one entry.
-func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basisBranch string) []Worktree {
+func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basisBranch string, opts DiscoverOptions) []Worktree {
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 	entries, err := os.ReadDir(ltsPath)
 	if err != nil {
@@ -217,7 +229,11 @@ func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basi
 			}
 			seen[branch] = true
 
-			status, statusText := GetWorktreeStatus(wtPath, basisBranch)
+			var status WTStatus
+			var statusText string
+			if !opts.SkipStatus {
+				status, statusText = GetWorktreeStatus(wtPath, basisBranch)
+			}
 
 			// Last activity: newest across the branch's per-repo worktrees
 			var activity int64
@@ -423,7 +439,7 @@ func getMultiRepoLTSDirs(scriptDir, repoName string) []string {
 	return results
 }
 
-func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
+func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string, opts DiscoverOptions) []Worktree {
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 	entries, err := os.ReadDir(ltsPath)
 	if err != nil {
@@ -438,7 +454,7 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
 		dirPath := filepath.Join(ltsPath, e.Name())
 
 		if isWorktreeDir(dirPath) {
-			wt := buildWorktree(dirPath, e.Name(), repoName, ltsDir, basisBranch)
+			wt := buildWorktree(dirPath, e.Name(), repoName, ltsDir, basisBranch, opts)
 			wts = append(wts, wt)
 			continue
 		}
@@ -454,7 +470,7 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
 			}
 			subPath := filepath.Join(dirPath, se.Name())
 			if isWorktreeDir(subPath) {
-				wt := buildWorktree(subPath, se.Name(), repoName, ltsDir, basisBranch)
+				wt := buildWorktree(subPath, se.Name(), repoName, ltsDir, basisBranch, opts)
 				wts = append(wts, wt)
 			}
 		}
@@ -463,7 +479,7 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
 }
 
 func listWorktreesForRepo(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
-	all := listWorktrees(scriptDir, ltsDir, repoName, basisBranch)
+	all := listWorktrees(scriptDir, ltsDir, repoName, basisBranch, DiscoverOptions{})
 	var filtered []Worktree
 	for _, wt := range all {
 		baseName := filepath.Base(wt.Path)
@@ -483,7 +499,7 @@ func isWorktreeDir(path string) bool {
 	return !info.IsDir()
 }
 
-func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string) Worktree {
+func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string, opts DiscoverOptions) Worktree {
 	branch, _ := RunGit(path, "branch", "--show-current")
 	if branch == "" {
 		branch = dirName
@@ -493,7 +509,11 @@ func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string) Worktree
 	// This ensures rename is reflected immediately
 	displayName := branch
 
-	status, statusText := GetWorktreeStatus(path, basisBranch)
+	var status WTStatus
+	var statusText string
+	if !opts.SkipStatus {
+		status, statusText = GetWorktreeStatus(path, basisBranch)
+	}
 
 	return Worktree{
 		Name:         displayName,

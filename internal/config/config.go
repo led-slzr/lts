@@ -152,6 +152,21 @@ func Load(workDir string) Config {
 	return cfg
 }
 
+// LoadReadOnly reads the global and local configs without creating,
+// migrating or rewriting anything on disk — the CLI's loader, so running a
+// command never pre-empts the TUI's first-run setup wizard. Missing files
+// mean defaults.
+func LoadReadOnly(workDir string) Config {
+	cfg := Config{
+		Global:  DefaultGlobal(),
+		Local:   make(map[string]RepoLocalConfig),
+		WorkDir: workDir,
+	}
+	loadGlobal(&cfg.Global)
+	loadLocal(workDir, cfg.Local)
+	return cfg
+}
+
 // InitLocalForRepos ensures all discovered repos have local config entries and saves.
 func (c *Config) InitLocalForRepos(repoNames []string) {
 	changed := false
