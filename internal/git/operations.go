@@ -1367,14 +1367,29 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 
 	log(ctx, "Checking for uncommitted changes...", false)
 	status, _ := RunGit(wtPath, "status", "--porcelain")
-	hasChanges := status != ""
 
-	if hasChanges {
+	// The stash stack is shared by every worktree of a repo, so only ever
+	// restore the exact stash this rebase created (looked up by SHA). A
+	// status that is only untracked files makes `git stash push` save
+	// nothing — popping then would grab someone else's stash.
+	stashSHA := ""
+	if status != "" {
+		before, _ := RunGit(wtPath, "rev-parse", "-q", "--verify", "refs/stash")
 		log(ctx, "Stashing uncommitted changes", false)
 		_, err := RunGit(wtPath, "stash", "push", "-m", "lts-rebase-auto-stash")
 		if err != nil {
 			return fmt.Errorf("failed to stash changes: %w", err)
 		}
+		if after, _ := RunGit(wtPath, "rev-parse", "-q", "--verify", "refs/stash"); after != "" && after != before {
+			stashSHA = after
+		}
+	}
+	restore := func() error {
+		if stashSHA == "" {
+			return nil
+		}
+		log(ctx, "Restoring stashed changes", false)
+		return popStashBySHA(wtPath, stashSHA)
 	}
 
 	log(ctx, "Rebasing onto "+mainBranch+"...", false)
@@ -1383,12 +1398,8 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		log(ctx, "Rebase conflict detected — aborting", true)
 		_, abortErr := RunGit(wtPath, "rebase", "--abort")
 
-		if hasChanges {
-			log(ctx, "Restoring stashed changes", false)
-			_, popErr := RunGit(wtPath, "stash", "pop")
-			if popErr != nil {
-				return fmt.Errorf("rebase conflict — aborted, but failed to restore stashed changes (run 'git stash pop' manually)")
-			}
+		if popErr := restore(); popErr != nil {
+			return fmt.Errorf("rebase conflict — aborted, but failed to restore stashed changes (run 'git stash list' and pop %s manually)", shortSHA(stashSHA))
 		}
 
 		if abortErr != nil {
@@ -1397,12 +1408,8 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		return fmt.Errorf("rebase conflict — aborted, changes restored")
 	}
 
-	if hasChanges {
-		log(ctx, "Restoring stashed changes", false)
-		_, popErr := RunGit(wtPath, "stash", "pop")
-		if popErr != nil {
-			return fmt.Errorf("rebase succeeded but failed to restore stashed changes (run 'git stash pop' manually)")
-		}
+	if popErr := restore(); popErr != nil {
+		return fmt.Errorf("rebase succeeded but failed to restore stashed changes (run 'git stash list' and pop %s manually)", shortSHA(stashSHA))
 	}
 
 	log(ctx, "Rebase complete", false)
@@ -1424,6 +1431,33 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 	}
 
 	return nil
+}
+
+// popStashBySHA pops the stash entry whose commit is sha (wherever it now
+// sits in the shared stack).
+func popStashBySHA(dir, sha string) error {
+	list, err := RunGit(dir, "stash", "list", "--format=%H")
+	if err != nil {
+		return err
+	}
+	for i, l := range strings.Split(list, "\n") {
+		if strings.TrimSpace(l) == sha {
+			_, err := RunGit(dir, "stash", "pop", "--index", fmt.Sprintf("stash@{%d}", i))
+			if err != nil {
+				// --index can fail when staged state no longer applies; retry plain
+				_, err = RunGit(dir, "stash", "pop", fmt.Sprintf("stash@{%d}", i))
+			}
+			return err
+		}
+	}
+	return fmt.Errorf("stash %s not found", shortSHA(sha))
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 10 {
+		return sha[:10]
+	}
+	return sha
 }
 
 // RenameResult holds the outcome of a worktree rename operation.
