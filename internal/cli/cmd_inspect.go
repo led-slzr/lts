@@ -124,10 +124,18 @@ func renderLs(w io.Writer, env *Env, views []repoView) {
 			if wt.TmuxSession {
 				extra = "tmux"
 			}
-			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", wt.Branch, wt.ID, ago(wt.LastActivity), extra)
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\n", branchLabel(wt.Branch), wt.ID, ago(wt.LastActivity), extra)
 		}
 		tw.Flush()
 	}
+}
+
+// branchLabel shows a detached HEAD (no branch) readably.
+func branchLabel(b string) string {
+	if b == "" {
+		return "(detached)"
+	}
+	return b
 }
 
 // ago renders an RFC3339 timestamp as a short relative age.
@@ -276,7 +284,7 @@ func renderStatus(w io.Writer, views []worktreeView) {
 		if v.TmuxSession {
 			notes = append(notes, "tmux")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", v.ID, v.Branch, s.Text, ab, strings.Join(notes, ", "))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", v.ID, branchLabel(v.Branch), s.Text, ab, strings.Join(notes, ", "))
 		for _, m := range s.MemberStatuses {
 			fmt.Fprintf(tw, "  └ %s\t\t%s\t\t\n", m.Repo, m.Text)
 		}

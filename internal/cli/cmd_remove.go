@@ -98,8 +98,9 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 			st := statusOf(env, t)
 			risk, dangerous := deleteDanger(env, t, st, keepBranch)
 			protected := git.IsProtectedBranch(t.WT.Branch)
-			deleteLocal := !keepBranch && !protected
-			deleteRemote := remote && !protected
+			detached := t.WT.Branch == ""
+			deleteLocal := !keepBranch && !protected && !detached
+			deleteRemote := remote && !protected && !detached
 			if remote && !protected && !git.HasRemoteBranch(st) {
 				a.out.Warn("%s was never pushed; there is no remote branch to delete", t.WT.Branch)
 				deleteRemote = false

@@ -544,13 +544,15 @@ func isWorktreeDir(path string) bool {
 
 func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string, opts DiscoverOptions) Worktree {
 	branch, _ := RunGit(path, "branch", "--show-current")
-	if branch == "" {
-		branch = dirName
-	}
 
 	// Use actual git branch name for display (not folder name)
-	// This ensures rename is reflected immediately
+	// This ensures rename is reflected immediately. A detached HEAD has no
+	// branch: Branch stays "" (never the folder name — delete would then
+	// run `branch -D <folder>` on an unrelated branch of that name).
 	displayName := branch
+	if branch == "" {
+		displayName = "(detached) " + dirName
+	}
 
 	var status WTStatus
 	var statusText string

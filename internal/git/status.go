@@ -30,6 +30,19 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 	// Check ahead/behind
 	currentBranch, _ := RunGit(wtPath, "branch", "--show-current")
 
+	// Detached HEAD: no branch to sync or merge. What matters is whether
+	// HEAD's commits are reachable from any branch; if not, deleting the
+	// worktree orphans them.
+	if currentBranch == "" {
+		if refs, _ := RunGit(wtPath, "for-each-ref", "--contains", "HEAD", "--count=1", "refs/heads", "refs/remotes"); strings.TrimSpace(refs) == "" {
+			return StatusUnknown, "detached HEAD with commits on no branch"
+		}
+		if localStatus != "" {
+			return StatusChanged, localStatus + " | detached"
+		}
+		return StatusClean, "detached"
+	}
+
 	var syncStatus string
 	var ahead, behind int
 
