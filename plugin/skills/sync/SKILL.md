@@ -7,8 +7,9 @@ description: Bring an LTS workspace up to date — "sync", "update everything", 
 
 1. `lts refresh --json` — fetch + fast-forward every repo's basis branch.
    Exit 5 lists failed repos in `.results` (usually network/auth): report them.
-2. `lts status --all --json` — pick single-repo worktrees with `behind > 0`
-   relative to their basis (mono groups: rebase members manually, LTS can't yet).
+2. `lts status --all --json` — pick single-repo worktrees (`.group` false) with
+   `.status.behind_basis > 0` (commits on the basis branch they don't have yet;
+   `behind` is about their own remote). Mono groups: rebase members manually.
 3. For each, `lts rebase <id> --no-install` (drop `--no-install` to reinstall deps):
    - exit 0 → rebased (or already up to date: `.changed` false)
    - exit 6 → conflict; the rebase was aborted and changes restored. Record it and

@@ -56,12 +56,14 @@ GitHub origin. GITHUB_INTEGRATION=false disables this command.` + targetHelp + e
 						wtPath, repoName = m.Path, m.Repo
 					}
 				}
-				if member == "" || wtPath == t.WT.Path {
+				if member == "" {
 					e := usageErr("%s is a mono group; pick the member repo with --member", t.ID())
 					e.Available = names
-					if member != "" {
-						e.Suggestions = suggest(member, names, 3)
-					}
+					return e
+				}
+				if wtPath == t.WT.Path {
+					e := notFoundErr("%s has no member %q", t.ID(), member).withSuggestions(suggest(member, names, 3))
+					e.Available = names
 					return e
 				}
 			}

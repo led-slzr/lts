@@ -42,7 +42,7 @@ pull --ff-only when the main checkout is on it, otherwise update the ref
   lts refresh core erp
   lts refresh --json | jq '.results[] | select(.ok|not)'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}
@@ -89,6 +89,10 @@ pull --ff-only when the main checkout is on it, otherwise update the ref
 				results = append(results, res)
 			}
 			payload := map[string]any{"results": results}
+			if a.interrupted.Load() {
+				return &Error{Exit: ExitInterrupted, Code: CodeInterrupted, Data: payload,
+					Message: fmt.Sprintf("interrupted after %d of %d repo(s)", len(results), len(repos))}
+			}
 			if failed > 0 {
 				return &Error{Exit: ExitPartial, Code: CodePartial, Data: payload,
 					Message: fmt.Sprintf("%d of %d repo(s) failed to refresh", failed, len(results))}
@@ -125,7 +129,7 @@ Mono-group worktrees are not supported yet (exit 4).` + targetHelp + exitCodesHe
   lts rebase feat/login -r core --no-install --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}
@@ -244,7 +248,7 @@ renamed.` + targetHelp + exitCodesHelp(ExitNotFound, ExitGuard, ExitExists),
 			if err := git.ValidateBranchName(newBranch); err != nil {
 				return usageErr("invalid branch name %q: %s", newBranch, err.Error())
 			}
-			env, err := a.loadEnv(envOpts{discover: true, withStatus: false, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}
@@ -267,7 +271,7 @@ renamed.` + targetHelp + exitCodesHelp(ExitNotFound, ExitGuard, ExitExists),
 			}
 			st := statusOf(env, t)
 			if remote && !git.HasRemoteBranch(st) {
-				return usageErr("--remote: %s was never pushed, so there is no remote branch to rename", old).
+				return guardErr("--remote: %s was never pushed, so there is no remote branch to rename", old).
 					withHint("drop --remote")
 			}
 			if remote {

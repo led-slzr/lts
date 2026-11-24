@@ -6,7 +6,7 @@ description: Finish work in an LTS worktree — "I'm done", "ship it", "open a P
 # Finish work in an LTS worktree
 
 1. **Check state.** `lts status --json` (inside the worktree) — look at
-   `status.state`, `changed_files`, `ahead`, `behind`.
+   `.worktrees[0].status` — `state`, `changed_files`, `unpushed_commits`, `ahead`, `behind`.
 2. **Commit** any remaining changes the user wants kept (ask if unsure what to include).
 3. **Stay current (optional).** `lts rebase --refresh`. Exit 6 = conflict: the rebase
    was aborted and the worktree restored — tell the user and stop.

@@ -58,6 +58,7 @@ type statusView struct {
 	Upstream        string         `json:"upstream,omitempty"`
 	AheadOfBasis    int            `json:"ahead_of_basis"`   // commits not on the basis branch
 	UnpushedCommits int            `json:"unpushed_commits"` // commits that exist only locally
+	BehindBasis     int            `json:"behind_basis"`     // basis-branch commits not in HEAD (rebase candidates)
 	HasRemoteBranch bool           `json:"has_remote_branch"`
 	DeleteRisk      string         `json:"delete_risk,omitempty"`
 	DangerousDelete bool           `json:"dangerous_to_delete"`
@@ -144,6 +145,7 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 			sv.Behind += si.Behind
 			ab := countCommits(m.Path, e.Cfg.GetRepoBasisBranch(m.Repo)+"..HEAD")
 			sv.AheadOfBasis += ab
+			sv.BehindBasis += countCommits(m.Path, "HEAD.."+e.Cfg.GetRepoBasisBranch(m.Repo))
 			if si.Upstream == "" {
 				sv.UnpushedCommits += ab
 			} else {
@@ -159,6 +161,7 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 		sv.State, sv.Text = st.Slug(), txt
 		sv.ChangedFiles, sv.Ahead, sv.Behind, sv.Upstream = si.ChangedFiles, si.Ahead, si.Behind, si.Upstream
 		sv.AheadOfBasis = countCommits(wt.Path, basis+"..HEAD")
+		sv.BehindBasis = countCommits(wt.Path, "HEAD.."+basis)
 		sv.UnpushedCommits = si.Ahead
 		if si.Upstream == "" {
 			sv.UnpushedCommits = sv.AheadOfBasis

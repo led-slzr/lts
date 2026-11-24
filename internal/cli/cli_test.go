@@ -416,3 +416,24 @@ func TestRemoteOnlyCommitsBlockRemoteDelete(t *testing.T) {
 		t.Fatalf("behind-upstream branch must not be a cleanup candidate: %v", m["candidates"])
 	}
 }
+
+func TestKeepBranchLowersRiskToUncommittedOnly(t *testing.T) {
+	f := newFixture(t, "core")
+	wt := f.addWorktree("core", "feat/k")
+	os.WriteFile(filepath.Join(wt, "c.txt"), []byte("x"), 0644)
+	gitT(t, wt, "add", ".")
+	gitT(t, wt, "commit", "-qm", "unpushed")
+	if _, _, code := f.run("delete", "feat/k", "--yes"); code != ExitGuard {
+		t.Fatalf("unpushed commit without --keep-branch must be refused, got %d", code)
+	}
+	if _, errs, code := f.run("delete", "feat/k", "--yes", "--keep-branch"); code != 0 {
+		t.Fatalf("--keep-branch keeps the commit, so --yes should suffice: %d %s", code, errs)
+	}
+	if out := gitT(t, f.repo("core"), "log", "--oneline", "-1", "feat/k"); !strings.Contains(out, "unpushed") {
+		t.Fatal("kept branch must still hold the commit")
+	}
+	m, _ := f.runJSON("help", "nope")
+	if m["ok"] != false {
+		t.Fatal("help --json on an unknown topic must fail")
+	}
+}

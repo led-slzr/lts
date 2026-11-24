@@ -70,7 +70,13 @@ func Execute(args []string, tui TUIFunc) int {
 		return e.Exit
 	}
 	if a.interrupted.Load() {
-		a.out.Failure(newErr(ExitInterrupted, CodeInterrupted, "interrupted"))
+		// The command finished its work and already printed its one
+		// result; don't add a second JSON document — just the exit code
+		if !a.out.wrote {
+			a.out.Failure(newErr(ExitInterrupted, CodeInterrupted, "interrupted"))
+		} else {
+			fmt.Fprintln(stderr, "interrupted (the command had already finished)")
+		}
 		return ExitInterrupted
 	}
 	return ExitOK
@@ -143,7 +149,7 @@ New here (human or agent)? Start with:
 	root.SuggestionsMinimumDistance = 2
 
 	pf := root.PersistentFlags()
-	pf.StringVar(&a.flags.dir, "dir", "", "workspace folder containing your repos (default: $LTS_DIR, else found from the current directory)")
+	pf.StringVar(&a.flags.dir, "dir", "", "workspace folder containing your repos (commands: default $LTS_DIR, else found from the current directory; the TUI: the current directory)")
 	pf.BoolVar(&a.flags.json, "json", false, "machine-readable JSON on stdout (errors too)")
 	pf.BoolVarP(&a.flags.quiet, "quiet", "q", false, "suppress progress output on stderr")
 	pf.BoolVar(&a.flags.verbose, "verbose", false, "extra diagnostics on stderr")
@@ -276,16 +282,17 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// trapInterrupts makes the first Ctrl+C finish the current git step
-// (never leaving a half-made worktree mid-command) and exit 130 after; a
-// second Ctrl+C exits immediately.
+// trapInterrupts makes the first Ctrl+C stop multi-step commands before
+// their next step and exit 130; a second Ctrl+C exits immediately. A
+// terminal Ctrl+C also reaches the running git/install child, which may
+// cut that one step short — re-running (e.g. create --reuse) completes it.
 func (a *app) trapInterrupts() {
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
 		a.interrupted.Store(true)
-		fmt.Fprintln(os.Stderr, "\ninterrupt received — finishing the current step safely (Ctrl+C again to force quit)")
+		fmt.Fprintln(os.Stderr, "\ninterrupt received — stopping after the current step (Ctrl+C again to force quit)")
 		<-ch
 		os.Exit(ExitInterrupted)
 	}()

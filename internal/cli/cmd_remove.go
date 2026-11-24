@@ -37,7 +37,7 @@ func (a *app) requireConfirm(c confirmation, dangerous bool, question, risk stri
 			return guardErr("not confirmed")
 		}
 		return guardErr("refusing: %s", risk).
-			withHint("this work exists nowhere else — ask the user first. Safer options: push it (git push -u origin <branch>) or keep the branch (--keep-branch). Only with their explicit OK: --force --yes %s", flagsHint)
+			withHint("this work exists nowhere else — ask the user first. Safer options: push it (git push -u origin <branch>), or keep the branch (--keep-branch) when there are no uncommitted files. Only with their explicit OK: --force --yes %s", flagsHint)
 	}
 	if c.yes {
 		return nil
@@ -87,7 +87,7 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 			if keepBranch && remote {
 				return usageErr("--remote deletes the branch on origin; it can't be combined with --keep-branch")
 			}
-			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}
@@ -96,7 +96,7 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 				return err
 			}
 			st := statusOf(env, t)
-			risk, dangerous := git.DeleteRisk(st)
+			risk, dangerous := deleteDanger(env, t, st, keepBranch)
 			protected := git.IsProtectedBranch(t.WT.Branch)
 			deleteLocal := !keepBranch && !protected
 			deleteRemote := remote && !protected
@@ -161,6 +161,19 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 				return err
 			}
 			defer release()
+			// Re-check under the lock: work may have landed while we waited
+			// for confirmation or for the lock
+			if now := statusOf(env, t); now != st {
+				if _, nowDangerous := deleteDanger(env, t, now, keepBranch); nowDangerous && !dangerous && !force {
+					return guardErr("%s changed to %s while waiting — not deleting", t.ID(), now.Slug()).
+						withHint("re-run `lts delete %s --dry-run` to see the new risk", t.ID())
+				}
+			}
+			if deleteRemote {
+				if err := remoteOnlyGuard(env, t, t.WT.Branch, "refs/heads/"+t.WT.Branch); err != nil {
+					return err
+				}
+			}
 			if err := deleteTarget(env, t, deleteLocal, deleteRemote, a.out.Log); err != nil {
 				return newErr(ExitError, CodeError, "delete failed: %s", err.Error())
 			}
@@ -180,6 +193,30 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 	fl.BoolVar(&dryRun, "dry-run", false, "show what would be deleted and the risk; change nothing")
 	fl.StringSliceVarP(&repoFlag, "repo", "r", nil, "disambiguate by repo")
 	root.AddCommand(cmd)
+}
+
+// deleteDanger is git.DeleteRisk adjusted for --keep-branch: keeping the
+// branch preserves its commits, so only uncommitted files can be lost.
+func deleteDanger(env *Env, t Target, st git.WTStatus, keepBranch bool) (string, bool) {
+	risk, dangerous := git.DeleteRisk(st)
+	if !dangerous || !keepBranch || st == git.StatusUnknown {
+		return risk, dangerous
+	}
+	paths := []string{t.WT.Path}
+	if t.Repo.IsMonorepo {
+		paths = nil
+		for _, m := range git.MonoMembers(t.WT.Path) {
+			paths = append(paths, m.Path)
+		}
+	}
+	changed := 0
+	for _, p := range paths {
+		changed += git.GetSyncInfo(p).ChangedFiles
+	}
+	if changed == 0 {
+		return "", false
+	}
+	return fmt.Sprintf("%d uncommitted file(s) will be LOST (commits stay on the kept branch)", changed), true
 }
 
 // remoteOnlyGuard refuses a remote branch delete/replace when origin holds
@@ -227,7 +264,7 @@ Needs --yes (or a y/N prompt on a terminal). --dry-run lists candidates.` + exit
   lts cleanup-merged -r core --yes --remote --json`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := a.loadEnv(envOpts{discover: true, withStatus: true, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, withStatus: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}
@@ -308,6 +345,10 @@ Needs --yes (or a y/N prompt on a terminal). --dry-run lists candidates.` + exit
 				deleted = append(deleted, t.ID())
 			}
 			payload := map[string]any{"candidates": ids, "deleted": deleted, "failed": failed}
+			if a.interrupted.Load() {
+				return &Error{Exit: ExitInterrupted, Code: CodeInterrupted, Data: payload,
+					Message: fmt.Sprintf("interrupted after deleting %d of %d worktree(s)", len(deleted), len(cands))}
+			}
 			if len(failed) > 0 {
 				return &Error{Exit: ExitPartial, Code: CodePartial, Data: payload,
 					Message: fmt.Sprintf("%d of %d worktree(s) could not be deleted", len(failed), len(cands))}
@@ -340,7 +381,7 @@ is needed; --dry-run reports what would be freed.` + targetHelp + exitCodesHelp(
   lts clean-modules --dry-run --json`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun})
+			env, err := a.loadEnv(envOpts{discover: true, dryRun: dryRun, migrate: true})
 			if err != nil {
 				return err
 			}

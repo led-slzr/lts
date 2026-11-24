@@ -21,7 +21,7 @@ var exitMeanings = map[int]string{
 	ExitPartial:     "partial failure — some repos/worktrees failed",
 	ExitConflict:    "rebase conflict — rebase aborted, changes restored",
 	ExitExists:      "already exists (use --reuse to accept the existing one)",
-	ExitInterrupted: "interrupted (Ctrl+C) after finishing the current step",
+	ExitInterrupted: "interrupted (Ctrl+C) — re-run to finish (create --reuse is idempotent)",
 }
 
 // exitCodesHelp renders the exit-code section for a command's help.

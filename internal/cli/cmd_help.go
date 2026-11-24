@@ -67,8 +67,9 @@ SAFETY RULES (follow these)
   • Run destructive commands with --dry-run first and show the result:
       lts delete X --dry-run   lts cleanup-merged --dry-run
     delete --dry-run --json reports .risk, .dangerous and .needs (the flags
-    the real run will require); status reports .status.unpushed_commits,
-    .status.changed_files and .status.dangerous_to_delete.
+    the real run will require); status --json reports per worktree
+    .worktrees[].status.{state, changed_files, unpushed_commits,
+    behind_basis, dangerous_to_delete}.
   • Never pass --force (destroys uncommitted/unpushed work) or --remote
     (deletes branches on origin) unless the user explicitly asked for it.
   • Exit 4 means a human decision is needed — don't escalate flags to get past it.
@@ -178,9 +179,15 @@ exit codes and workflows; ` + "`lts help --json`" + ` dumps every command and fl
 			if a.flags.json {
 				target := root
 				if len(args) > 0 {
-					if c, _, err := root.Find(args); err == nil {
-						target = c
+					c, rest, err := root.Find(args)
+					if err != nil || c == root || len(rest) > 0 {
+						var names []string
+						for _, sc := range root.Commands() {
+							names = append(names, sc.Name())
+						}
+						return usageErr("unknown help topic %q", strings.Join(args, " ")).withSuggestions(suggest(args[0], names, 3))
 					}
+					target = c
 				}
 				spec := specFor(target)
 				exits := map[string]string{}

@@ -15,13 +15,24 @@ import (
 )
 
 func main() {
-	if err := git.CheckPrerequisites(); err != nil {
+	if err := git.CheckPrerequisites(); err != nil && !infoOnly(os.Args[1:]) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	// Subcommands are the scriptable CLI; bare `lts` (and `lts --dir X`)
 	// opens the TUI via runTUI.
 	os.Exit(cli.Execute(os.Args[1:], runTUI))
+}
+
+// infoOnly reports invocations that need no git: version and help.
+func infoOnly(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--version", "-v", "version", "help", "--help", "-h":
+			return true
+		}
+	}
+	return false
 }
 
 // runTUI launches the interactive UI in workDir (first-run wizard included).

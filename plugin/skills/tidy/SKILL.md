@@ -6,7 +6,7 @@ description: Tidy an LTS workspace — "clean up worktrees", "what's stale", "fr
 # Tidy an LTS workspace
 
 1. **Survey.** `lts status --all --fetch --json`. Group worktrees by
-   `status.state`:
+   `.worktrees[].status.state`:
    - `merged_cleanable` — safe to remove
    - `dangerous_to_delete: true` — holds unpushed/uncommitted work; never remove
    - old `last_activity` — stale; ask the user

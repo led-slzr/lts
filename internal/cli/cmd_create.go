@@ -170,7 +170,7 @@ func (a *app) runCreate(cmd *cobra.Command, branch string, repoArgs []string, f 
 	if err := git.ValidateBranchName(branch); err != nil {
 		return usageErr("invalid branch name %q: %s", branch, err.Error())
 	}
-	env, err := a.loadEnv(envOpts{discover: true, dryRun: f.dryRun})
+	env, err := a.loadEnv(envOpts{discover: true, dryRun: f.dryRun, migrate: true})
 	if err != nil {
 		return err
 	}

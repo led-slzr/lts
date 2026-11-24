@@ -30,6 +30,8 @@ type Output struct {
 	Interactive bool
 
 	mu sync.Mutex
+	// wrote is set once a result or failure reached stdout/stderr
+	wrote bool
 }
 
 func isTerminal(f *os.File) bool {
@@ -63,6 +65,7 @@ func newOutput(jsonOut, quiet, verbose, noColor, noInput bool) *Output {
 
 // Result writes a successful result: JSON envelope or the text renderer.
 func (o *Output) Result(payload any, text func(w io.Writer)) {
+	o.wrote = true
 	if o.JSON {
 		o.writeJSON(true, payload, nil)
 		return

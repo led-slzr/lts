@@ -8,6 +8,7 @@ import (
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/core"
 	"lts-revamp/internal/git"
+	"lts-revamp/internal/lock"
 )
 
 // Env is the per-invocation context: the resolved workspace dir (the
@@ -25,6 +26,10 @@ type envOpts struct {
 	discover   bool // run repo discovery
 	withStatus bool // compute per-worktree git status during discovery
 	dryRun     bool // never perform layout migration
+	// migrate: this command changes things, so it may run the automatic
+	// layout upgrade (under every repo's lock). Read-only commands never
+	// rename folders — they only note that an upgrade is pending.
+	migrate bool
 }
 
 // resolveWorkDir picks the workspace dir: --dir, then $LTS_DIR, then a
@@ -95,6 +100,20 @@ func findWorkspaceRoot(dir string) (string, string) {
 	return dir, "cwd"
 }
 
+// repoDirNames lists the git repo folders directly inside dir (lock names).
+func repoDirNames(dir string) []string {
+	entries, _ := os.ReadDir(dir)
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasSuffix(e.Name(), "-lts") {
+			if info, err := os.Stat(filepath.Join(dir, e.Name(), ".git")); err == nil && info.IsDir() {
+				out = append(out, e.Name())
+			}
+		}
+	}
+	return out
+}
+
 func looksLikeWorkspace(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -136,10 +155,13 @@ func (a *app) loadEnv(o envOpts) (*Env, error) {
 	}
 	// Same automatic layout upgrade the TUI runs at startup (all-or-nothing)
 	if git.NeedsMigration(dir) || git.NeedsWorkspaceRepair(dir) {
-		if o.dryRun {
-			a.out.Notice("note: this workspace has an old LTS layout; the next non-dry-run command will upgrade it")
+		if o.dryRun || !o.migrate {
+			a.out.Notice("note: this workspace has an old LTS layout; the next command that changes something (or the TUI) will upgrade it")
+		} else if h, lerr := lock.TryAcquire(dir, repoDirNames(dir), "lts layout upgrade"); lerr != nil {
+			a.out.Notice("note: old LTS layout detected but another lts process is busy; skipping the upgrade for now")
 		} else {
 			n := git.MigrateDirectoryStructure(dir) + git.RepairWorkspaceContents(dir)
+			h.Release()
 			a.out.Notice("Upgraded LTS directory layout (%d item(s)) — same automatic migration the TUI performs", n)
 		}
 	}
