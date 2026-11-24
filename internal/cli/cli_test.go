@@ -154,3 +154,26 @@ func toStrings(v any) []string {
 	}
 	return out
 }
+
+func TestConfigSet(t *testing.T) {
+	f := newFixture(t, "core")
+	if _, _, code := f.run("config", "set", "COPY_MCP_JSON", "yes"); code != 0 {
+		t.Fatalf("set global: %d", code)
+	}
+	out, _, _ := f.run("config", "get", "COPY_MCP_JSON")
+	if strings.TrimSpace(out) != "true" {
+		t.Fatalf("get after set = %q", out)
+	}
+	if _, _, code := f.run("config", "set", "PACKAGE_MANAGER", "pip"); code != ExitUsage {
+		t.Fatalf("invalid enum should be usage error, got %d", code)
+	}
+	_, errs, code := f.run("config", "set", "BASIS_BRANCH", "mian", "-r", "core")
+	if code != ExitNotFound || !strings.Contains(errs, "main") {
+		t.Fatalf("missing basis branch: code=%d stderr=%s", code, errs)
+	}
+	f.addWorktree("core", "feat/a")
+	root := t.TempDir()
+	if _, _, code := f.run("config", "set", "LTS_ROOT", root, "-r", "core"); code != ExitGuard {
+		t.Fatalf("LTS_ROOT change with live worktrees must be refused, got %d", code)
+	}
+}
