@@ -47,7 +47,8 @@ settings.json.lts-backup; re-running is a no-op.
 Hooks added: SessionStart + SubagentStart (lts hook session-start /
 subagent-start — a short LTS summary in every session; silent outside LTS
 workspaces). --worktree-hook also adds WorktreeCreate so Claude Code's
-isolated worktrees become LTS worktrees. --no-hooks installs skills only.` + exitCodesHelp(),
+isolated worktrees become LTS worktrees (and WorktreeRemove cleans them
+up, keeping any with unsaved work). --no-hooks installs skills only.` + exitCodesHelp(),
 		Example: `  lts skill install
   lts skill install --no-hooks
   lts skill install --worktree-hook --dry-run --json`,
@@ -62,7 +63,7 @@ isolated worktrees become LTS worktrees. --no-hooks installs skills only.` + exi
 		},
 	}
 	install.Flags().BoolVar(&noHooks, "no-hooks", false, "skills only; don't touch settings.json")
-	install.Flags().BoolVar(&worktreeHook, "worktree-hook", false, "also route Claude Code's WorktreeCreate through LTS")
+	install.Flags().BoolVar(&worktreeHook, "worktree-hook", false, "also route Claude Code's WorktreeCreate/WorktreeRemove through LTS")
 	install.Flags().BoolVar(&dryRun, "dry-run", false, "show what would be written")
 	install.Flags().StringVar(&dir, "claude-dir", "", "Claude config dir (default $CLAUDE_CONFIG_DIR or ~/.claude)")
 	skill.AddCommand(install)

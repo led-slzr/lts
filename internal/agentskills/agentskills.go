@@ -136,7 +136,7 @@ func Install(o Options) (Result, error) {
 		events = append(events, "SessionStart", "SubagentStart")
 	}
 	if o.WorktreeHook {
-		events = append(events, "WorktreeCreate")
+		events = append(events, "WorktreeCreate", "WorktreeRemove")
 	}
 	if len(events) == 0 {
 		return res, nil
@@ -175,7 +175,7 @@ func Uninstall(o Options) (Result, error) {
 	}
 	var removed []string
 	edit := func(hooks map[string]any) {
-		for _, ev := range []string{"SessionStart", "SubagentStart", "WorktreeCreate"} {
+		for _, ev := range []string{"SessionStart", "SubagentStart", "WorktreeCreate", "WorktreeRemove"} {
 			if removeHook(hooks, ev, "lts hook ") {
 				removed = append(removed, ev)
 			}
@@ -206,6 +206,8 @@ func eventArg(ev string) string {
 		return "subagent-start"
 	case "WorktreeCreate":
 		return "worktree-create"
+	case "WorktreeRemove":
+		return "worktree-remove"
 	}
 	return strings.ToLower(ev)
 }

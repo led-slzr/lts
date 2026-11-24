@@ -23,7 +23,8 @@ type hookInput struct {
 	HookEventName string `json:"hook_event_name"`
 	Cwd           string `json:"cwd"`
 	Source        string `json:"source"`
-	Name          string `json:"name"` // WorktreeCreate
+	Name          string `json:"name"`          // WorktreeCreate
+	WorktreePath  string `json:"worktree_path"` // WorktreeRemove
 	AgentType     string `json:"agent_type"`
 }
 
@@ -42,7 +43,7 @@ func addHook(a *app, root *cobra.Command) {
 		Args:    cobra.ArbitraryArgs,
 		RunE:    unknownSubcommand,
 		Use:     "hook <event>",
-		Short:   "Claude Code hook handlers (session-start, subagent-start, worktree-create)",
+		Short:   "Claude Code hook handlers (session-start, subagent-start, worktree-create/-remove)",
 		GroupID: groupAgents,
 		Long: `Handlers for Claude Code hooks, installed by the LTS plugin or
 ` + "`lts skill install`" + `. Each reads the hook's JSON from stdin and prints the
@@ -57,7 +58,11 @@ and exit 0, so they are safe to enable globally.
                    worktrees (env files, deps, setup script, LTS layout).
                    Steps aside — and lets Claude Code create its own — when
                    the repo's main checkout is dirty or off its basis branch,
-                   because LTS create would stash/switch it.`,
+                   because LTS create would stash/switch it.
+  worktree-remove  (opt-in, pairs with worktree-create) removes an LTS
+                   worktree Claude Code is done with — only if that loses
+                   nothing (same rule as lts delete --yes); otherwise keeps
+                   it and says why on stderr.`,
 	}
 	for _, ev := range []struct{ name, event string }{
 		{"session-start", "SessionStart"}, {"subagent-start", "SubagentStart"},
@@ -92,7 +97,53 @@ and exit 0, so they are safe to enable globally.
 				"hookEventName": "WorktreeCreate", "worktreePath": path}})
 		},
 	})
+	hook.AddCommand(&cobra.Command{
+		Use:   "worktree-remove",
+		Short: "Remove an LTS worktree for Claude Code's WorktreeRemove hook (keeps unsaved work)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a.hookWorktreeRemove(readHookInput(stdin))
+			return nil // never fail the session; outcomes go to stderr
+		},
+	})
 	root.AddCommand(hook)
+}
+
+// hookWorktreeRemove deletes an LTS worktree Claude Code is done with —
+// only when that loses nothing (same rule as \`lts delete --yes\`);
+// otherwise it is kept and the reason goes to stderr.
+func (a *app) hookWorktreeRemove(in hookInput) {
+	if in.WorktreePath == "" {
+		return
+	}
+	env := a.hookEnv(in.WorktreePath)
+	if env == nil {
+		return
+	}
+	t, err := env.resolveTarget(in.WorktreePath, nil)
+	if err != nil || filepath.Clean(t.WT.Path) != filepath.Clean(in.WorktreePath) && !t.Repo.IsMonorepo {
+		return // not an LTS worktree — Claude Code handles its own
+	}
+	st := statusOf(env, t)
+	if _, dangerous := git.DeleteRisk(st); dangerous {
+		fmt.Fprintf(stderr, "lts: kept %s (%s) — it holds work that exists nowhere else; delete it with `lts delete %s` when done\n", t.ID(), st.Slug(), t.ID())
+		return
+	}
+	names := []string{t.Repo.Name}
+	if t.Repo.IsMonorepo {
+		names = t.Repo.RepoNames
+	}
+	release, err := a.lockRepos(env, names)
+	if err != nil {
+		fmt.Fprintf(stderr, "lts: kept %s — %v\n", t.ID(), err)
+		return
+	}
+	defer release()
+	protected := git.IsProtectedBranch(t.WT.Branch)
+	log := func(ctx, msg string, isErr bool) { fmt.Fprintf(stderr, "[%s] %s\n", ctx, msg) }
+	if err := deleteTarget(env, t, !protected && t.WT.Branch != "", false, log); err != nil {
+		fmt.Fprintf(stderr, "lts: could not remove %s: %v\n", t.ID(), err)
+	}
 }
 
 func writeHookJSON(v any) error {

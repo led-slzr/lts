@@ -494,3 +494,29 @@ func TestWatchEmitsAddedAndRemoved(t *testing.T) {
 		t.Fatalf("events = %s", joined)
 	}
 }
+
+func TestHookWorktreeRemoveKeepsUnsavedWork(t *testing.T) {
+	f := newFixture(t, "core")
+	run := func(input string) {
+		stdin = strings.NewReader(input)
+		var out, errb bytes.Buffer
+		stdout, stderr = &out, &errb
+		defer func() { stdout, stderr, stdin = os.Stdout, os.Stderr, os.Stdin }()
+		Execute([]string{"hook", "worktree-remove"}, nil)
+	}
+	clean := f.addWorktree("core", "agent-clean")
+	dirty := f.addWorktree("core", "agent-dirty")
+	os.WriteFile(filepath.Join(dirty, "work.txt"), []byte("x"), 0644)
+	run(`{"worktree_path":"` + clean + `"}`)
+	run(`{"worktree_path":"` + dirty + `"}`)
+	if fileExists(clean) {
+		t.Fatal("a clean, new worktree should be removed")
+	}
+	if !fileExists(filepath.Join(dirty, "work.txt")) {
+		t.Fatal("a worktree with unsaved work must be kept")
+	}
+	run(`{"worktree_path":"` + f.repo("core") + `"}`) // main checkout: never touched
+	if !fileExists(filepath.Join(f.repo("core"), "README.md")) {
+		t.Fatal("main checkout touched")
+	}
+}
