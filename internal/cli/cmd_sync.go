@@ -111,6 +111,7 @@ pull --ff-only when the main checkout is on it, otherwise update the ref
 func addRebase(a *app, root *cobra.Command) {
 	var noInstall, refresh, dryRun bool
 	var repoFlag []string
+	var member string
 	cmd := &cobra.Command{
 		Use:     "rebase [target]",
 		Short:   "Rebase a worktree onto its repo's basis branch",
@@ -123,7 +124,13 @@ aborted, changes are restored, and the command exits 6 — the worktree is
 left exactly as it was. After a successful rebase, dependencies are
 reinstalled when the worktree has a package.json (skip with --no-install).
 
-Mono-group worktrees are not supported yet (exit 4).` + targetHelp + exitCodesHelp(ExitNotFound, ExitGuard, ExitConflict),
+Mono groups: every member is rebased onto its own repo's basis branch,
+one after another (--member <repo> for just one). The group must be
+consistent first — every member on the group branch, none mid-rebase
+(exit 4 otherwise). If a member conflicts, its rebase is aborted and
+restored, the remaining members are skipped, and the command exits 6;
+JSON .members lists each one as rebased / up_to_date / conflict /
+failed / skipped.` + targetHelp + exitCodesHelp(ExitNotFound, ExitGuard, ExitConflict),
 		Example: `  lts rebase                     # the worktree you're in
   lts rebase feat/login --refresh
   lts rebase feat/login -r core --no-install --json`,
@@ -138,8 +145,10 @@ Mono-group worktrees are not supported yet (exit 4).` + targetHelp + exitCodesHe
 				return err
 			}
 			if t.Repo.IsMonorepo {
-				return guardErr("rebase isn't supported for mono-group worktrees yet (%s)", t.ID()).
-					withHint("rebase each member with git: cd \"$(lts path %s --member <repo>)\" && git rebase <basis>", t.ID())
+				return a.rebaseGroup(env, t, member, noInstall, refresh, dryRun)
+			}
+			if member != "" {
+				return usageErr("--member only applies to mono-group worktrees; %s is a single-repo worktree", t.ID())
 			}
 			if err := git.CheckOngoingOperations(t.WT.Path); err != nil {
 				return guardErr("%s", err.Error()).withHint("finish or abort it yourself in %s (git rebase --continue / --abort)", t.WT.Path)
@@ -205,6 +214,7 @@ Mono-group worktrees are not supported yet (exit 4).` + targetHelp + exitCodesHe
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&member, "member", "", "mono group: rebase only this member repo")
 	cmd.Flags().BoolVar(&noInstall, "no-install", false, "skip reinstalling dependencies")
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "fetch and fast-forward the basis branch first")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the plan; change nothing")
@@ -340,4 +350,106 @@ func statusOf(env *Env, t Target) git.WTStatus {
 	}
 	st, _, _ := git.MonoGroupStatus(git.MonoMembers(t.WT.Path), t.WT.Branch, env.Cfg.GetRepoBasisBranch)
 	return st
+}
+
+// rebaseGroup rebases a mono group (all members, or one with --member).
+func (a *app) rebaseGroup(env *Env, t Target, member string, noInstall, refresh, dryRun bool) error {
+	members := git.MonoMembers(t.WT.Path)
+	var names []string
+	for _, m := range members {
+		names = append(names, m.Repo)
+	}
+	if member != "" && !contains(names, member) {
+		e := notFoundErr("%s has no member %q", t.ID(), member).withSuggestions(suggest(member, names, 3))
+		e.Available = names
+		return e
+	}
+	pkgFor := func(repo string) string {
+		if noInstall {
+			return ""
+		}
+		return core.ResolvePM(&env.Cfg, repo)
+	}
+	if dryRun {
+		var plan []string
+		for _, m := range members {
+			if member != "" && m.Repo != member {
+				continue
+			}
+			basis := env.Cfg.GetRepoBasisBranch(m.Repo)
+			plan = append(plan, fmt.Sprintf("%s: rebase onto %s (%d new commit(s) there)", m.Repo, basis, countCommits(m.Path, "HEAD.."+basis)))
+		}
+		a.out.Result(map[string]any{"dry_run": true, "id": t.ID(), "plan": plan}, func(w io.Writer) {
+			fmt.Fprintf(w, "Would rebase %s:\n", t.ID())
+			for _, p := range plan {
+				fmt.Fprintf(w, "  - %s\n", p)
+			}
+		})
+		return nil
+	}
+	lockNames := t.Repo.RepoNames
+	release, err := a.lockRepos(env, lockNames)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if refresh {
+		for _, n := range lockNames {
+			if member != "" && n != member {
+				continue
+			}
+			if r, ferr := env.findRepo(n); ferr == nil {
+				if err := git.RefreshRepo(r.Path, env.Cfg.GetRepoBasisBranch(n), a.out.Log); err != nil {
+					return newErr(ExitError, CodeError, "refresh %s failed: %s", n, err.Error())
+				}
+			}
+		}
+	}
+	var results []git.MemberRebase
+	if member != "" {
+		for _, m := range members {
+			if m.Repo != member {
+				continue
+			}
+			if err := git.CheckOngoingOperations(m.Path); err != nil {
+				return guardErr("%s", err.Error())
+			}
+			basis := env.Cfg.GetRepoBasisBranch(m.Repo)
+			before, _ := git.RunGit(m.Path, "rev-parse", "HEAD")
+			rerr := git.RebaseWorktree(m.Path, basis, pkgFor(m.Repo), git.WithContext(a.out.Log, m.Repo))
+			after, _ := git.RunGit(m.Path, "rev-parse", "HEAD")
+			r := git.MemberRebase{Repo: m.Repo, Path: m.Path, Onto: basis, Result: "rebased"}
+			if rerr != nil {
+				r.Result, r.Error = "failed", rerr.Error()
+				if strings.HasPrefix(rerr.Error(), "rebase conflict") {
+					r.Result = "conflict"
+				}
+				err = rerr
+			} else if before == after {
+				r.Result = "up_to_date"
+			}
+			results = append(results, r)
+		}
+	} else {
+		results, err = git.RebaseMonoGroup(t.WT.Path, t.WT.Branch, env.Cfg.GetRepoBasisBranch, pkgFor, a.out.Log)
+	}
+	payload := map[string]any{"id": t.ID(), "members": results}
+	if err != nil {
+		for _, r := range results {
+			if r.Result == "conflict" {
+				return &Error{Exit: ExitConflict, Code: CodeConflict, Data: payload, Message: err.Error(),
+					Hint: fmt.Sprintf("resolve it manually: cd %q && git rebase %s", r.Path, r.Onto)}
+			}
+		}
+		if results == nil {
+			return guardErr("%s", err.Error()) // preflight refused (member off-branch / mid-rebase)
+		}
+		return &Error{Exit: ExitError, Code: CodeError, Data: payload, Message: err.Error()}
+	}
+	a.out.Result(payload, func(w io.Writer) {
+		for _, r := range results {
+			fmt.Fprintf(w, "%s: %s (onto %s)\n", r.Repo, strings.ReplaceAll(r.Result, "_", " "), r.Onto)
+		}
+	})
+	return nil
 }

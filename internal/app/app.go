@@ -3135,6 +3135,23 @@ func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string,
 	}
 }
 
+// monoRebaseCmd rebases every member of a mono group (git.RebaseMonoGroup).
+func monoRebaseCmd(logFn git.LogFunc, branchSubdir, branch string, cfg *config.Config, locked []string) tea.Cmd {
+	basis := basisResolver(cfg)
+	pkg := pkgResolver(cfg)
+	return func() tea.Msg {
+		results, err := git.RebaseMonoGroup(branchSubdir, branch, basis, pkg, logFn)
+		if err == nil {
+			var parts []string
+			for _, r := range results {
+				parts = append(parts, r.Repo+" "+strings.ReplaceAll(r.Result, "_", " "))
+			}
+			logFn(branch, "Rebased group: "+strings.Join(parts, ", "), false)
+		}
+		return RebaseDoneMsg{Branch: branch, Locked: locked, Err: err}
+	}
+}
+
 func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)

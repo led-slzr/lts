@@ -69,17 +69,13 @@ func RepoContextItems(isMonorepo, canHibernate, canManualHibernate, canHide, hid
 }
 
 // WorktreeContextItems returns context menu items for a worktree.
-// Monorepo worktree paths are branch subdirectories (containers of per-repo
-// worktrees, not git worktrees themselves), so Rebase can't run there —
-// per-repo monorepo rebase is a future feature. hasSession adds the tmux
-// session kill entry.
+// Rebase on a mono group rebases every member (git.RebaseMonoGroup).
+// hasSession adds the tmux session kill entry.
 // canConvert offers promoting a single-repo worktree into a mono group
 // (other plain repos must exist); mono worktrees offer the reverse split.
 func WorktreeContextItems(isMonorepo, hasSession, canPR, canConvert bool) []ContextMenuItem {
 	items := []ContextMenuItem{}
-	if !isMonorepo {
-		items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
-	}
+	items = append(items, ContextMenuItem{Label: "Rebase", Action: BtnRebase})
 	if canPR {
 		items = append(items, ContextMenuItem{Label: "Create PR", Action: BtnCreatePR})
 	}

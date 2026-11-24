@@ -237,8 +237,12 @@ func TestCreateReuseRenameRebase(t *testing.T) {
 	if !fileExists(filepath.Join(wt, "notes.txt")) {
 		t.Fatal("untracked file lost")
 	}
-	if _, _, code := f.run("rebase", "feat/m"); code != ExitGuard {
-		t.Fatalf("mono rebase should exit 4, got %d", code)
+	m, code = f.runJSON("rebase", "feat/m", "--no-install")
+	if code != 0 || len(m["members"].([]any)) != 2 {
+		t.Fatalf("mono rebase: code=%d %v", code, m)
+	}
+	if _, _, code := f.run("rebase", "feat/m", "--member", "nope"); code != ExitNotFound {
+		t.Fatalf("unknown --member should exit 3, got %d", code)
 	}
 }
 
