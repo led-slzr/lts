@@ -210,11 +210,15 @@ func (a *app) translateCobraError(cmd *cobra.Command, err error) *Error {
 		var names []string
 		for _, c := range a.root.Commands() {
 			if c.IsAvailableCommand() || c.Name() == "help" {
-				names = append(names, c.Name())
-				names = append(names, c.Aliases...)
+				names = append(names, c.Name()) // canonical names only
 			}
 		}
-		sugg := a.root.SuggestionsFor(bad)
+		var sugg []string
+		for _, s := range a.root.SuggestionsFor(bad) {
+			if c, _, err := a.root.Find([]string{s}); err == nil && !contains(sugg, c.Name()) {
+				sugg = append(sugg, c.Name())
+			}
+		}
 		for _, s := range suggest(bad, names, 3) {
 			if !contains(sugg, s) {
 				sugg = append(sugg, s)
@@ -225,13 +229,25 @@ func (a *app) translateCobraError(cmd *cobra.Command, err error) *Error {
 	}
 	if strings.HasPrefix(msg, "accepts ") || strings.HasPrefix(msg, "requires ") ||
 		strings.HasPrefix(msg, "unknown shorthand") || strings.HasPrefix(msg, "invalid argument") {
-		name := "lts"
+		name, use := "lts", ""
 		if cmd != nil {
-			name = cmd.CommandPath()
+			name, use = cmd.CommandPath(), cmd.UseLine()
 		}
-		return usageErr("%s", msg).withHint("run `%s --help` for usage", name)
+		if strings.HasPrefix(msg, "requires at least") || (strings.HasPrefix(msg, "accepts ") && strings.Contains(msg, "received 0")) {
+			if args := missingArgNames(use); args != "" {
+				msg = "missing " + args
+			}
+		}
+		return usageErr("%s", msg).withHint("usage: %s — run `%s --help` for details", use, name)
 	}
 	return asCLIError(err)
+}
+
+var argNameRe = regexp.MustCompile(`<[^>]+>`)
+
+// missingArgNames lists the required <args> of a usage line.
+func missingArgNames(use string) string {
+	return strings.Join(argNameRe.FindAllString(use, -1), " ")
 }
 
 var unknownFlagRe = regexp.MustCompile(`unknown flag: --([^\s]+)`)

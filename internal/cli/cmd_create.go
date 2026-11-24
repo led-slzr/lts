@@ -466,10 +466,11 @@ func createPlan(env *Env, repos []git.Repo, branch string, basisFor func(string)
 		}
 		add(mode+" at "+path, false)
 		if opts.CopyEnv {
-			add("copy .env* files from the main checkout", false)
+			envs, _ := filepath.Glob(filepath.Join(r.Path, ".env*"))
+			add(fmt.Sprintf("copy .env* files from the main checkout, nested ones included (%d at the repo root; COPY_ENV_FILES, --no-copy-env to skip)", len(envs)), false)
 		}
-		if opts.CopyMCP {
-			add("copy .mcp.json files", false)
+		if opts.CopyMCP && fileExists(filepath.Join(r.Path, ".mcp.json")) {
+			add("copy .mcp.json (COPY_MCP_JSON; --no-copy-mcp to skip)", false)
 		}
 		if install && fileExists(filepath.Join(r.Path, "package.json")) {
 			add("install dependencies with "+opts.PkgManager(r.Name), false)

@@ -249,7 +249,7 @@ func renderStatus(w io.Writer, views []worktreeView) {
 		}
 		var notes []string
 		if s.DangerousDelete {
-			notes = append(notes, "unsaved work")
+			notes = append(notes, riskNote(s))
 		}
 		if s.State == "merged_cleanable" {
 			notes = append(notes, "safe to clean up")

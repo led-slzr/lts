@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"lts-revamp/internal/core"
@@ -54,6 +56,8 @@ type statusView struct {
 	Ahead           int            `json:"ahead"`
 	Behind          int            `json:"behind"`
 	Upstream        string         `json:"upstream,omitempty"`
+	AheadOfBasis    int            `json:"ahead_of_basis"`   // commits not on the basis branch
+	UnpushedCommits int            `json:"unpushed_commits"` // commits that exist only locally
 	HasRemoteBranch bool           `json:"has_remote_branch"`
 	DeleteRisk      string         `json:"delete_risk,omitempty"`
 	DangerousDelete bool           `json:"dangerous_to_delete"`
@@ -138,6 +142,13 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 			sv.ChangedFiles += si.ChangedFiles
 			sv.Ahead += si.Ahead
 			sv.Behind += si.Behind
+			ab := countCommits(m.Path, e.Cfg.GetRepoBasisBranch(m.Repo)+"..HEAD")
+			sv.AheadOfBasis += ab
+			if si.Upstream == "" {
+				sv.UnpushedCommits += ab
+			} else {
+				sv.UnpushedCommits += si.Ahead
+			}
 		}
 		worst, worstText := git.AggregateStatus(sts, txts)
 		sv.State, sv.Text = worst.Slug(), worstText
@@ -148,11 +159,41 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 		si := git.GetSyncInfo(wt.Path)
 		sv.State, sv.Text = st.Slug(), txt
 		sv.ChangedFiles, sv.Ahead, sv.Behind, sv.Upstream = si.ChangedFiles, si.Ahead, si.Behind, si.Upstream
+		sv.AheadOfBasis = countCommits(wt.Path, basis+"..HEAD")
+		sv.UnpushedCommits = si.Ahead
+		if si.Upstream == "" {
+			sv.UnpushedCommits = sv.AheadOfBasis
+		}
 		sv.HasRemoteBranch = git.HasRemoteBranch(st)
 		sv.DeleteRisk, sv.DangerousDelete = git.DeleteRisk(st)
 	}
 	sv.ProtectedBranch = git.IsProtectedBranch(wt.Branch)
 	w.Status = sv
+}
+
+func countCommits(dir, rangeSpec string) int {
+	out, err := git.RunGit(dir, "rev-list", "--count", rangeSpec)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	fmt.Sscanf(strings.TrimSpace(out), "%d", &n)
+	return n
+}
+
+// riskNote explains in a few words what deleting would lose.
+func riskNote(s *statusView) string {
+	var parts []string
+	if s.ChangedFiles > 0 {
+		parts = append(parts, fmt.Sprintf("%d uncommitted file(s)", s.ChangedFiles))
+	}
+	if s.UnpushedCommits > 0 {
+		parts = append(parts, fmt.Sprintf("%d unpushed commit(s)", s.UnpushedCommits))
+	}
+	if len(parts) == 0 {
+		return "unsaved work"
+	}
+	return strings.Join(parts, " + ")
 }
 
 // relToWorkspace shortens p for text output when it sits under the workspace.

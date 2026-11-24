@@ -158,6 +158,13 @@ func (e *Env) resolveTarget(arg string, repoFilter []string) (Target, error) {
 			cands = append(cands, t.WT.Branch, t.ID())
 		}
 		err := notFoundErr("no worktree matches %q", arg).withSuggestions(suggest(arg, cands, 4))
+		if len(err.Suggestions) == 0 {
+			for _, t := range pool {
+				if len(err.Available) < 20 {
+					err.Available = append(err.Available, t.ID())
+				}
+			}
+		}
 		if len(pool) == 0 {
 			err.withHint("there are no LTS worktrees yet — create one with `lts create <branch> -r <repo>`")
 		} else {

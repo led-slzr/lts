@@ -115,6 +115,13 @@ func (o *Output) writeJSON(ok bool, payload any, e *Error) {
 		}
 	}
 	if e != nil {
+		// suggestions/available are always arrays (documented contract)
+		if e.Suggestions == nil {
+			e.Suggestions = []string{}
+		}
+		if e.Available == nil {
+			e.Available = []string{}
+		}
 		env["error"] = e
 	}
 	enc := json.NewEncoder(o.Out)

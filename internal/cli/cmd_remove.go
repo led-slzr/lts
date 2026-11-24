@@ -37,7 +37,7 @@ func (a *app) requireConfirm(c confirmation, dangerous bool, question, risk stri
 			return guardErr("not confirmed")
 		}
 		return guardErr("refusing: %s", risk).
-			withHint("this destroys work that exists nowhere else; re-run with --force --yes %sonly if that is intended", flagsHint)
+			withHint("this work exists nowhere else — ask the user first. Safer options: push it (git push -u origin <branch>) or keep the branch (--keep-branch). Only with their explicit OK: --force --yes %s", flagsHint)
 	}
 	if c.yes {
 		return nil
@@ -123,6 +123,11 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 				"dangerous": dangerous, "risk": risk, "protected_branch": protected,
 				"delete_local_branch": deleteLocal, "delete_remote_branch": deleteRemote, "plan": plan,
 			}
+			needs := []string{"--yes"}
+			if dangerous {
+				needs = []string{"--force", "--yes"}
+			}
+			res["needs"] = needs
 			if dryRun {
 				res["dry_run"] = true
 				a.out.Result(res, func(w io.Writer) {

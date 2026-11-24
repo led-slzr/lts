@@ -39,9 +39,9 @@ type Error struct {
 	Code        string   `json:"code"`
 	Message     string   `json:"message"`
 	Hint        string   `json:"hint,omitempty"`
-	Suggestions []string `json:"suggestions,omitempty"`
+	Suggestions []string `json:"suggestions"`
 	// Available lists valid choices when the input was missing entirely
-	Available []string `json:"available,omitempty"`
+	Available []string `json:"available"`
 	// Data optionally carries a partial result (e.g. per-repo outcomes)
 	Data any `json:"-"`
 }

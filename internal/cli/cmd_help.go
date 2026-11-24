@@ -66,6 +66,9 @@ PROMPTS
 SAFETY RULES (follow these)
   • Run destructive commands with --dry-run first and show the result:
       lts delete X --dry-run   lts cleanup-merged --dry-run
+    delete --dry-run --json reports .risk, .dangerous and .needs (the flags
+    the real run will require); status reports .status.unpushed_commits,
+    .status.changed_files and .status.dangerous_to_delete.
   • Never pass --force (destroys uncommitted/unpushed work) or --remote
     (deletes branches on origin) unless the user explicitly asked for it.
   • Exit 4 means a human decision is needed — don't escalate flags to get past it.
