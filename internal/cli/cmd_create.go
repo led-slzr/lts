@@ -239,6 +239,9 @@ func (a *app) runCreate(cmd *cobra.Command, branch string, repoArgs []string, f 
 			return usageErr("--lts-root applies to single-repo worktrees; mono groups always live in %s", env.WorkDir)
 		}
 		abs, _ := filepath.Abs(expandHome(f.ltsRoot))
+		if err := env.validateLTSRoot(abs); err != nil {
+			return err
+		}
 		r := repos[0]
 		cur := git.LTSRootFor(env.WorkDir, r.Name)
 		if filepath.Clean(abs) != filepath.Clean(cur) && len(r.Worktrees) > 0 {
@@ -260,7 +263,9 @@ func (a *app) runCreate(cmd *cobra.Command, branch string, repoArgs []string, f 
 	// Branch checked out elsewhere (main checkout, or a single worktree when
 	// asking for a mono group)? git would refuse — explain it up front.
 	for _, r := range repos {
-		if where := checkedOutAt(r.Path, branch); where != "" {
+		// A registration whose folder was deleted by hand is stale: create
+		// runs `git worktree prune` first, so it won't block
+		if where := checkedOutAt(r.Path, branch); where != "" && fileExists(where) {
 			msg := fmt.Sprintf("branch %s is already checked out in %s at %s", branch, r.Name, where)
 			if filepath.Clean(where) == filepath.Clean(r.Path) {
 				return guardErr("%s", msg).withHint("that is the repo's main checkout — open the TUI and use \"Migrate to LTS\", or switch it back to %s", basisFor(r.Name))

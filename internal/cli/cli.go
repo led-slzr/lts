@@ -198,6 +198,22 @@ New here (human or agent)? Start with:
 	return root
 }
 
+// unknownSubcommand is the RunE of command groups (hook, skill): bare →
+// help; anything else → usage error with suggestions (cobra would print
+// help and exit 0).
+func unknownSubcommand(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return cmd.Help()
+	}
+	var names []string
+	for _, c := range cmd.Commands() {
+		names = append(names, c.Name())
+	}
+	e := usageErr("unknown %s subcommand %q", cmd.Name(), args[0]).withSuggestions(suggest(args[0], names, 3))
+	e.Available = names
+	return e
+}
+
 // commandRegistry is filled by each command file's init().
 var commandRegistry []func(a *app, root *cobra.Command)
 

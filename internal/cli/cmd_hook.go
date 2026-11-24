@@ -39,6 +39,8 @@ func readHookInput(r io.Reader) hookInput {
 
 func addHook(a *app, root *cobra.Command) {
 	hook := &cobra.Command{
+		Args:    cobra.ArbitraryArgs,
+		RunE:    unknownSubcommand,
 		Use:     "hook <event>",
 		Short:   "Claude Code hook handlers (session-start, subagent-start, worktree-create)",
 		GroupID: groupAgents,

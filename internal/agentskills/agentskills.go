@@ -111,6 +111,12 @@ func (o *Options) dir() string {
 func Install(o Options) (Result, error) {
 	root := o.dir()
 	res := Result{SkillsDir: filepath.Join(root, "skills"), DryRun: o.DryRun}
+	// Validate settings.json before writing anything (no half installs)
+	if o.Hooks || o.WorktreeHook {
+		if _, err := readSettings(filepath.Join(root, "settings.json")); err != nil {
+			return res, err
+		}
+	}
 	all := Names()
 	for _, s := range Skills() {
 		dir := filepath.Join(res.SkillsDir, Prefix+s.Name)
@@ -183,7 +189,8 @@ func Uninstall(o Options) (Result, error) {
 	} else {
 		b, err := editSettings(res.SettingsPath, edit)
 		if err != nil {
-			return res, err
+			// skills are already removed; report the hooks we couldn't
+			return res, fmt.Errorf("removed the skills, but could not edit hooks: %w", err)
 		}
 		res.Backup = b
 	}
@@ -215,8 +222,15 @@ func readSettings(path string) (map[string]any, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return m, nil
 	}
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("%s is not valid JSON (%v) — fix it or add the hooks by hand", path, err)
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber() // keep large integers exact on rewrite
+	if err := dec.Decode(&m); err != nil {
+		return nil, fmt.Errorf("%s is not a JSON object (%v) — fix it or add the hooks by hand", path, err)
+	}
+	if h, ok := m["hooks"]; ok {
+		if _, isObj := h.(map[string]any); !isObj {
+			return nil, fmt.Errorf("%s: \"hooks\" is not an object — fix it or add the hooks by hand", path)
+		}
 	}
 	return m, nil
 }

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -121,7 +122,28 @@ func ValidateBranchName(branch string) error {
 			return fmt.Errorf("'%s' is a protected branch", branch)
 		}
 	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch name cannot start with '-'")
+	}
+	if branch == "HEAD" || branch == "@" || strings.Contains(branch, "@{") {
+		return fmt.Errorf("'%s' is reserved by git", branch)
+	}
+	// git's own rules (.., .lock, ~^:?*[, trailing /, ...)
+	if _, err := RunGit("", "check-ref-format", "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("'%s' is not a valid git branch name (see git check-ref-format)", branch)
+	}
 	return nil
+}
+
+// GitErr renders a RunGit error with git's own stderr message.
+func GitErr(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	return err
 }
 
 // ExtractSuffix gets the part after the last "/" in a branch name.
@@ -710,7 +732,7 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 		}
 		log.Add("Checking out existing local branch " + branch)
 		_, err := RunGit(repoPath, "worktree", "add", wtPath, branch)
-		return err
+		return GitErr(err)
 	}
 
 	// Check if branch exists on remote
@@ -722,13 +744,13 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 			// Fallback: maybe local branch was created between check and add
 			_, err = RunGit(repoPath, "worktree", "add", wtPath, branch)
 		}
-		return err
+		return GitErr(err)
 	}
 
 	// New branch from main
 	log.Add("Creating new branch " + branch + " from " + mainBranch)
 	_, err := RunGit(repoPath, "worktree", "add", "-b", branch, wtPath, mainBranch)
-	return err
+	return GitErr(err)
 }
 
 // findExactEnvFiles returns relative paths of files named exactly ".env" under root,

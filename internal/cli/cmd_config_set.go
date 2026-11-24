@@ -123,6 +123,9 @@ func (a *app) configSetRepo(repo, key, value string, dryRun bool) error {
 			if info, err := os.Stat(value); err != nil || !info.IsDir() {
 				return usageErr("LTS_ROOT %s is not an existing directory", value).withHint("create it first (mkdir -p %s)", value)
 			}
+			if err := env.validateLTSRoot(value); err != nil {
+				return err
+			}
 		}
 		if len(r.Worktrees) > 0 {
 			return guardErr("%s has %d worktree(s) under %s; moving LTS_ROOT would hide them", r.Name, len(r.Worktrees), r.LTSPath).

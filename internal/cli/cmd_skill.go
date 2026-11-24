@@ -14,6 +14,8 @@ func init() { register(addSkill) }
 
 func addSkill(a *app, root *cobra.Command) {
 	skill := &cobra.Command{
+		Args:    cobra.ArbitraryArgs,
+		RunE:    unknownSubcommand,
 		Use:     "skill",
 		Short:   "Install / print the LTS agent skills (Claude Code, AGENTS.md)",
 		GroupID: groupAgents,

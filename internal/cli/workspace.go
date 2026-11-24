@@ -100,6 +100,25 @@ func findWorkspaceRoot(dir string) (string, string) {
 	return dir, "cwd"
 }
 
+// validateLTSRoot refuses roots that would nest LTS dirs inside a git
+// checkout (polluting it with untracked folders) or inside another LTS dir
+// (where discovery would misattribute the worktrees).
+func (e *Env) validateLTSRoot(abs string) error {
+	abs = filepath.Clean(abs)
+	if abs == filepath.Clean(e.WorkDir) {
+		return nil
+	}
+	for p := abs; p != filepath.Dir(p); p = filepath.Dir(p) {
+		if strings.HasSuffix(filepath.Base(p), "-lts") {
+			return usageErr("LTS_ROOT %s is inside the LTS folder %s", abs, p).withHint("pick a directory outside any *-lts folder")
+		}
+	}
+	if top, err := git.RunGit(abs, "rev-parse", "--show-toplevel"); err == nil && top != "" {
+		return usageErr("LTS_ROOT %s is inside the git checkout %s", abs, top).withHint("pick a directory outside any repo, e.g. ~/worktrees")
+	}
+	return nil
+}
+
 // repoDirNames lists the git repo folders directly inside dir (lock names).
 func repoDirNames(dir string) []string {
 	entries, _ := os.ReadDir(dir)
