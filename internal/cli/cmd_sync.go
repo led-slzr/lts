@@ -267,6 +267,11 @@ renamed.` + targetHelp + exitCodesHelp(ExitNotFound, ExitGuard, ExitExists),
 				return usageErr("--remote: %s was never pushed, so there is no remote branch to rename", old).
 					withHint("drop --remote")
 			}
+			if remote {
+				if err := remoteOnlyGuard(env, t, old, "refs/heads/"+old); err != nil {
+					return err
+				}
+			}
 			newDir := git.BranchToDirName(newBranch)
 			if dryRun {
 				steps := []string{"rename branch " + old + " → " + newBranch, "move folder " + filepath.Base(t.WT.Path) + " → " + newDir, "rewrite the workspace file", "rename the tmux session (if any)"}

@@ -1213,12 +1213,18 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 		// Delete the branch in this repo
 		if repoPath != "" && branch != "" && !IsProtectedBranch(branch) {
+			remoteOnly := 0
+			if deleteRemote {
+				remoteOnly = RemoteOnlyCommits(repoPath, branch, "refs/heads/"+branch)
+			}
 			if deleteLocal {
 				log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
 				RunGit(repoPath, "branch", "-D", branch)
 			}
 
-			if deleteRemote {
+			if deleteRemote && remoteOnly > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s in %s: it has %d commit(s) that exist only on the remote", branch, filepath.Base(repoPath), remoteOnly), true)
+			} else if deleteRemote {
 				log(ctx, "Deleting remote branch in "+filepath.Base(repoPath), false)
 				RunGit(repoPath, "push", "origin", "--delete", branch)
 			}
@@ -1285,14 +1291,24 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 		}
 	}
 
+	// Decide about the remote before the local ref goes away
+	remoteOnly := 0
+	if deleteRemote && branch != "" {
+		remoteOnly = RemoteOnlyCommits(repoPath, branch, "refs/heads/"+branch)
+	}
+
 	if deleteLocal && branch != "" && !IsProtectedBranch(branch) {
 		log(ctx, "Deleting local branch", false)
 		RunGit(repoPath, "branch", "-D", branch)
 	}
 
 	if deleteRemote && branch != "" && !IsProtectedBranch(branch) {
-		log(ctx, "Deleting remote branch", false)
-		RunGit(repoPath, "push", "origin", "--delete", branch)
+		if remoteOnly > 0 {
+			log(ctx, fmt.Sprintf("Kept origin/%s: it has %d commit(s) that exist only on the remote", branch, remoteOnly), true)
+		} else {
+			log(ctx, "Deleting remote branch", false)
+			RunGit(repoPath, "push", "origin", "--delete", branch)
+		}
 	}
 
 	// Clean up empty parent directories inside -lts structure
@@ -1538,9 +1554,13 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 			// Set upstream tracking to the new remote branch
 			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
 
-			log(ctx, "Deleting old remote branch", false)
-			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
-				log(ctx, "Delete old remote branch failed: "+err.Error(), true)
+			if n := RemoteOnlyCommits(newWtPath, oldBranch, "refs/heads/"+newBranch); n > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s: it has %d commit(s) that exist only on the remote", oldBranch, n), true)
+			} else {
+				log(ctx, "Deleting old remote branch", false)
+				if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
+					log(ctx, "Delete old remote branch failed: "+err.Error(), true)
+				}
 			}
 		}
 	}
@@ -1693,6 +1713,10 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 			}
 			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
 
+			if n := RemoteOnlyCommits(newWtPath, oldBranch, "refs/heads/"+newBranch); n > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s for %s: it has %d commit(s) that exist only on the remote", oldBranch, wt.repoName, n), true)
+				continue
+			}
 			log(ctx, "Deleting old remote branch for "+wt.repoName, false)
 			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
 				log(ctx, "Delete old remote failed for "+wt.repoName+": "+err.Error(), true)

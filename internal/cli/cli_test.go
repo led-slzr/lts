@@ -390,3 +390,29 @@ func TestHooks(t *testing.T) {
 		t.Fatalf("dirty main checkout must fall back, got %q", out)
 	}
 }
+
+func TestRemoteOnlyCommitsBlockRemoteDelete(t *testing.T) {
+	f := newFixture(t, "core")
+	wt := f.addWorktree("core", "feat/shared")
+	gitT(t, wt, "push", "-q", "-u", "origin", "feat/shared")
+	origin := gitT(t, f.repo("core"), "remote", "get-url", "origin")
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, filepath.Dir(other), "clone", "-q", origin, other)
+	gitT(t, other, "checkout", "-q", "feat/shared")
+	os.WriteFile(filepath.Join(other, "theirs.txt"), []byte("x"), 0644)
+	gitT(t, other, "add", ".")
+	gitT(t, other, "commit", "-qm", "colleague")
+	gitT(t, other, "push", "-q", "origin", "feat/shared")
+	gitT(t, wt, "fetch", "-q", "origin")
+
+	if _, _, code := f.run("delete", "feat/shared", "--yes", "--remote"); code != ExitGuard {
+		t.Fatalf("delete --remote over remote-only commits should exit 4, got %d", code)
+	}
+	if _, _, code := f.run("rename", "feat/shared", "feat/shared2", "--remote"); code != ExitGuard {
+		t.Fatalf("rename --remote over remote-only commits should exit 4, got %d", code)
+	}
+	m, _ := f.runJSON("cleanup-merged", "--dry-run")
+	if len(toStrings(m["candidates"])) != 0 {
+		t.Fatalf("behind-upstream branch must not be a cleanup candidate: %v", m["candidates"])
+	}
+}

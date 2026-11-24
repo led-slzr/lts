@@ -104,6 +104,11 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 				a.out.Warn("%s was never pushed; there is no remote branch to delete", t.WT.Branch)
 				deleteRemote = false
 			}
+			if deleteRemote {
+				if err := remoteOnlyGuard(env, t, t.WT.Branch, "refs/heads/"+t.WT.Branch); err != nil {
+					return err
+				}
+			}
 			if protected && (remote || !keepBranch) {
 				a.out.Notice("%s is a protected branch — only the worktree will be removed", t.WT.Branch)
 			}
@@ -175,6 +180,18 @@ Run with --dry-run first to see the risk without changing anything.` + targetHel
 	fl.BoolVar(&dryRun, "dry-run", false, "show what would be deleted and the risk; change nothing")
 	fl.StringSliceVarP(&repoFlag, "repo", "r", nil, "disambiguate by repo")
 	root.AddCommand(cmd)
+}
+
+// remoteOnlyGuard refuses a remote branch delete/replace when origin holds
+// commits found nowhere locally (someone else's pushed work).
+func remoteOnlyGuard(env *Env, t Target, branch, localRef string) error {
+	for _, p := range repoPathsOf(env, t.Repo) {
+		if n := git.RemoteOnlyCommits(p, branch, localRef); n > 0 {
+			return guardErr("origin/%s in %s has %d commit(s) that exist only on the remote", branch, filepathBase(p), n).
+				withHint("pull them first (git pull in the worktree) or drop --remote; deleting the remote branch would destroy them")
+		}
+	}
+	return nil
 }
 
 func deleteTarget(env *Env, t Target, deleteLocal, deleteRemote bool, log git.LogFunc) error {

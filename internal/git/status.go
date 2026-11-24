@@ -105,6 +105,14 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 				isMerged = true
 			}
 		}
+		// Merged locally isn't enough: commits that exist only on the
+		// branch's remote (pushed by someone else, not pulled) are work a
+		// cleanup with --remote would destroy.
+		if isMerged && remoteRef != "" && behind > 0 {
+			if n, _ := strconv.Atoi(strings.TrimSpace(mustGit(wtPath, "rev-list", "--count", remoteRef, "^HEAD", "^"+mainBranch))); n > 0 {
+				isMerged = false
+			}
+		}
 	}
 
 	// Build final status
@@ -287,4 +295,26 @@ func AggregateStatus(statuses []WTStatus, texts []string) (WTStatus, string) {
 		return StatusMergedCleanable, "merged · cleanable"
 	}
 	return worstSt, worstText
+}
+
+func mustGit(dir string, args ...string) string {
+	out, _ := RunGit(dir, args...)
+	return out
+}
+
+// RemoteOnlyCommits counts commits on origin/<branch> that are neither in
+// localRef nor in the repo's main branch — work that exists only on the
+// remote. Deleting or replacing origin/<branch> would destroy it. Returns
+// 0 when the remote branch doesn't exist.
+func RemoteOnlyCommits(repoPath, branch, localRef string) int {
+	remote := "refs/remotes/origin/" + branch
+	if _, err := RunGit(repoPath, "show-ref", "--verify", "--quiet", remote); err != nil {
+		return 0
+	}
+	args := []string{"rev-list", "--count", remote, "^" + localRef}
+	if main := detectMainBranch(repoPath, "main"); main != "" {
+		args = append(args, "^"+main)
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(mustGit(repoPath, args...)))
+	return n
 }
