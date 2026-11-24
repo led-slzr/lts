@@ -56,6 +56,9 @@ func Execute(args []string, tui TUIFunc) int {
 	root := a.newRoot()
 	a.root = root
 	root.SetArgs(args)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetIn(stdin)
 
 	// Early output so errors raised before flag parsing still honour --json
 	a.out = newOutput(hasFlag(args, "--json"), false, false, hasFlag(args, "--no-color"), hasFlag(args, "--no-input"))
@@ -185,6 +188,7 @@ New here (human or agent)? Start with:
 	for _, add := range commandRegistry {
 		add(a, root)
 	}
+	addCompletions(a, root) // after every command exists
 	return root
 }
 

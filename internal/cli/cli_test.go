@@ -324,3 +324,31 @@ func TestCleanupMerged(t *testing.T) {
 		t.Fatal("cleanup must remove only the merged worktree")
 	}
 }
+
+func TestHelpSurfaces(t *testing.T) {
+	f := newFixture(t, "core")
+	m, code := f.runJSON("help")
+	cmdSpec := m["command"].(map[string]any)
+	var names []string
+	for _, c := range cmdSpec["commands"].([]any) {
+		names = append(names, c.(map[string]any)["name"].(string))
+	}
+	for _, want := range []string{"ls", "status", "create", "delete", "cleanup-merged", "config", "agents", "path", "pr"} {
+		if !contains(names, want) {
+			t.Errorf("help --json missing %q (have %v)", want, names)
+		}
+	}
+	if code != 0 || m["exit_codes"].(map[string]any)["4"] == nil {
+		t.Fatalf("help --json: code=%d", code)
+	}
+	out, _, code := f.run("help", "agents")
+	if code != 0 || !strings.Contains(out, "EXIT CODES") || !strings.Contains(out, "--dry-run") {
+		t.Fatalf("help agents: code=%d", code)
+	}
+	for _, c := range []string{"create", "delete", "status"} {
+		out, _, _ := f.run(c, "--help")
+		if !strings.Contains(out, "Exit codes:") || !strings.Contains(out, "Examples:") {
+			t.Errorf("%s --help lacks exit codes or examples", c)
+		}
+	}
+}
