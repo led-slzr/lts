@@ -520,3 +520,27 @@ func TestHookWorktreeRemoveKeepsUnsavedWork(t *testing.T) {
 		t.Fatal("main checkout touched")
 	}
 }
+
+func TestHibernateGuards(t *testing.T) {
+	f := newFixture(t, "core", "old")
+	if _, _, code := f.run("hibernate", "old", "--manual", "--dry-run"); code != ExitGuard {
+		t.Fatalf("disabled hibernate must exit 4, got %d", code)
+	}
+	f.run("config", "set", "ENABLE_HIBERNATE", "true")
+	if _, _, code := f.run("hibernate", "old"); code != ExitGuard {
+		t.Fatalf("strict mode without GitHub must exit 4, got %d", code)
+	}
+	if _, _, code := f.run("hibernate", "old", "--manual"); code != ExitGuard {
+		t.Fatalf("no confirmation must exit 4, got %d", code)
+	}
+	if _, _, code := f.run("hibernate", "old", "--manual", "--confirm", "ol"); code != ExitGuard || !fileExists(f.repo("old")) {
+		t.Fatalf("wrong confirmation must refuse, got %d", code)
+	}
+	if _, errs, code := f.run("hibernate", "old", "--manual", "--confirm", "old"); code != 0 || fileExists(f.repo("old")) {
+		t.Fatalf("confirmed manual hibernate should remove the repo: %d %s", code, errs)
+	}
+	f.addWorktree("core", "feat/x")
+	if _, _, code := f.run("hibernate", "core", "--manual", "--confirm", "core"); code != ExitGuard || !fileExists(f.repo("core")) {
+		t.Fatalf("manual mode with live worktrees must refuse, got %d", code)
+	}
+}
