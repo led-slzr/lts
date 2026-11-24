@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"lts-revamp/internal/core"
 	"math/rand/v2"
 	"os"
 	"sort"
@@ -11,7 +12,6 @@ import (
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
-	"lts-revamp/internal/tools"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 	"lts-revamp/internal/version"
@@ -2640,36 +2640,11 @@ func (m Model) renderOpenPromptDialog() string {
 }
 
 // deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
-func deleteWarning(status git.WTStatus) (warning string, dangerous bool) {
-	switch status {
-	case git.StatusChanged:
-		return "Uncommitted changes will be LOST", true
-	case git.StatusDiverged:
-		return "CRITICAL: Unpushed commits will be permanently lost", true
-	case git.StatusToPush:
-		return "Unpushed commits will be LOST", true
-	case git.StatusNoRemote:
-		return "Branch was never pushed — ALL work will be LOST", true
-	case git.StatusMergedDirty:
-		return "Uncommitted changes will be LOST (branch is merged)", true
-	case git.StatusNewDirty:
-		return "Uncommitted changes will be LOST (new branch)", true
-	case git.StatusMissing:
-		return "Worktree directory is missing — will clean up git references", false
-	default:
-		return "", false
-	}
-}
-
-// deleteHasRemote returns true if the worktree status implies a remote branch exists.
-func deleteHasRemote(status git.WTStatus) bool {
-	switch status {
-	case git.StatusNew, git.StatusNewDirty, git.StatusNoRemote:
-		return false
-	default:
-		return true
-	}
-}
+// Delete-risk rules live in git (shared with the CLI's delete guards).
+var (
+	deleteWarning   = git.DeleteRisk
+	deleteHasRemote = git.HasRemoteBranch
+)
 
 func (m Model) renderDeleteConfirmDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
@@ -2813,68 +2788,15 @@ func paintBlack(content string, width, height int) string {
 
 // Commands
 
-// basisResolver creates a BasisBranchResolver over a snapshot of the per-repo
-// config, taken on the caller's (Update) thread. Command goroutines must never
-// read cfg.Local directly: settings can write that map while an operation
-// runs, and concurrent map access panics. Call this (and pkgResolver /
-// workspaceOpts) when constructing a command, not inside its goroutine.
-func basisResolver(cfg *config.Config) git.BasisBranchResolver {
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.BasisBranch
-	}
-	return func(repoName string) string {
-		if b, ok := snap[strings.ToUpper(repoName)]; ok && b != "" {
-			return b
-		}
-		return "main"
-	}
-}
-
-// hiddenResolver snapshots which repos are hidden (see basisResolver) —
-// all-repo operations must leave hidden repos untouched, network included.
-func hiddenResolver(cfg *config.Config) git.SkipResolver {
-	snap := make(map[string]bool, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.Hidden
-	}
-	return func(repoName string) bool {
-		return snap[strings.ToUpper(repoName)]
-	}
-}
-
-// pkgResolver snapshots the per-repo package-manager config (see
-// basisResolver). "auto" resolves per repo via lockfile/corepack detection
-// — inside the returned closure, so goroutines detect against the repo's
-// files without touching live config.
-func pkgResolver(cfg *config.Config) func(string) string {
-	def := cfg.Global.PackageManager
-	workDir := cfg.WorkDir
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.PackageManager
-	}
-	return func(repoName string) string {
-		pm, ok := snap[strings.ToUpper(repoName)]
-		if !ok || pm == "" {
-			pm = def
-		}
-		if pm == "auto" {
-			return tools.DetectPM(filepath.Join(workDir, repoName))
-		}
-		return pm
-	}
-}
-
-// resolvePM resolves a repo's package manager to a concrete tool on the
-// Update thread (rebase, rename, modal display) — never returns "auto".
-func resolvePMWith(cfg *config.Config, repoName string) string {
-	pm := cfg.GetRepoPackageManager(repoName)
-	if pm == "auto" {
-		return tools.DetectPM(filepath.Join(cfg.WorkDir, repoName))
-	}
-	return pm
-}
+// Shared resolvers live in internal/core (also used by the CLI).
+var (
+	basisResolver  = core.BasisResolver
+	hiddenResolver = core.HiddenResolver
+	pkgResolver    = core.PkgResolver
+	resolvePMWith  = core.ResolvePM
+	setupResolver  = core.SetupResolver
+	workspaceOpts  = core.WorkspaceOpts
+)
 
 func (m *Model) resolvePM(repoName string) string {
 	return resolvePMWith(&m.config, repoName)
@@ -3150,31 +3072,6 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 			opener.KillSession(branchSubdir) // best-effort tmux cleanup
 		}
 		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
-	}
-}
-
-// workspaceOpts assembles the create-time options from config, snapshotting
-// everything on the caller's (Update) thread — see basisResolver.
-// setupResolver snapshots per-repo setup scripts (see basisResolver).
-func setupResolver(cfg *config.Config) func(string) string {
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.SetupScript
-	}
-	return func(repoName string) string {
-		return snap[strings.ToUpper(repoName)]
-	}
-}
-
-func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
-	return git.WorkspaceOptions{
-		PkgManager:   pkgResolver(cfg),
-		SetupScript:  setupResolver(cfg),
-		AICliCommand: cfg.Global.AICliCommand,
-		IDECommand:   cfg.Global.IDECommand,
-		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
-		CopyEnv:      cfg.Global.CopyEnvFiles,
-		CopyMCP:      cfg.Global.CopyMCPJson,
 	}
 }
 

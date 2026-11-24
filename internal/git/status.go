@@ -141,3 +141,38 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 
 	return StatusClean, syncStatus
 }
+
+// DeleteRisk describes what deleting a worktree in this status would lose.
+// dangerous = true means the deletion destroys work that exists nowhere
+// else, so callers must demand an explicit, typed / forced confirmation.
+func DeleteRisk(status WTStatus) (warning string, dangerous bool) {
+	switch status {
+	case StatusChanged:
+		return "Uncommitted changes will be LOST", true
+	case StatusDiverged:
+		return "CRITICAL: Unpushed commits will be permanently lost", true
+	case StatusToPush:
+		return "Unpushed commits will be LOST", true
+	case StatusNoRemote:
+		return "Branch was never pushed — ALL work will be LOST", true
+	case StatusMergedDirty:
+		return "Uncommitted changes will be LOST (branch is merged)", true
+	case StatusNewDirty:
+		return "Uncommitted changes will be LOST (new branch)", true
+	case StatusMissing:
+		return "Worktree directory is missing — will clean up git references", false
+	default:
+		return "", false
+	}
+}
+
+// HasRemoteBranch reports whether a worktree status implies its branch
+// exists on the remote (so deleting / renaming the remote is meaningful).
+func HasRemoteBranch(status WTStatus) bool {
+	switch status {
+	case StatusNew, StatusNewDirty, StatusNoRemote:
+		return false
+	default:
+		return true
+	}
+}
