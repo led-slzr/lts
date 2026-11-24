@@ -1,8 +1,8 @@
 # LTS — Led's Tree Script
 
-A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and Lip Gloss.
+A modern terminal UI — and, since v3.2, a scriptable CLI for humans, scripts and AI agents — for managing git worktrees. Built with Go, Bubble Tea, Lip Gloss and Cobra.
 
-![LTS v3.1.1](https://img.shields.io/badge/version-3.1.1-green)
+![LTS v3.2.0](https://img.shields.io/badge/version-3.2.0-green)
 
 ```
 ██╗     ████████╗███████╗
@@ -30,6 +30,8 @@ A modern terminal UI for managing git worktrees. Built with Go, Bubble Tea, and 
 
 ## Features
 
+- **Scriptable CLI** — `lts ls`, `status`, `create`, `rebase`, `rename`, `delete`, `cleanup-merged`, `pr`, `config` and more, with `--json` everywhere, stable exit codes, `--dry-run` on everything that changes state, suggest-only "did you mean", and no prompts without a terminal ([CLI](#command-line-interface))
+- **AI-agent ready** — a Claude Code plugin (skills + session hooks), `lts skill install` for any setup, and `lts help agents`, a single page that teaches an agent the whole contract ([AI agents](#ai-agents))
 - **One-click worktree creation** — Stash, pull, branch, copy `.env`/`.mcp.json`, install deps, and generate workspace in one step (per-repo install toggles included)
 - **Multi-repo worktrees** — Create worktrees across multiple repos at once for monorepo-like workflows, each repo using its own basis branch and package manager
 - **Click to open** — Open any worktree directly in your IDE, AI CLI, or terminal
@@ -88,21 +90,107 @@ go build -o ~/.local/bin/lts .
 ## Uninstall
 
 ```bash
+lts skill uninstall             # Remove agent skills/hooks (if installed)
 rm -f ~/.local/bin/lts          # Remove binary
 rm -rf ~/.config/lts            # Remove global config
 ```
 
-To also remove per-project config, delete `.lts.conf` from each project directory where LTS was used.
+To also remove per-workspace state, delete `.lts.conf` and `.lts-locks/` from each workspace directory where LTS was used.
 
 ## Usage
 
 ```bash
-lts                    # Run in current directory
-lts --dir ~/projects   # Run in specific directory
-lts --version          # Print version
+lts                    # open the TUI in the current directory
+lts --dir ~/projects   # open the TUI in a specific workspace
+lts <command> [flags]  # run a CLI command (see below)
+lts help               # list commands; lts help <command> for details
+lts --version          # print version
 ```
 
-On first run, LTS will launch a setup wizard to configure your preferences. You can change these anytime via the Settings UI (`s`).
+On first run, the TUI launches a setup wizard to configure your preferences. You can change these anytime via the Settings UI (`s`) or `lts config set`.
+
+## Command-line interface
+
+Every TUI capability that matters for day-to-day work is also a command. Commands find the workspace (the folder that contains your repos) from `--dir`, then `$LTS_DIR`, then the current directory — running from inside any repo or worktree works.
+
+| Group | Command | What it does |
+|---|---|---|
+| Inspect | `lts ls [repo...]` | Repos and their worktrees (fast — no git status) |
+| | `lts status [target] [--all] [--fetch]` | State, ahead/behind, changed files, delete risk |
+| | `lts path <target> [--member repo]` | Print only the worktree path — `cd "$(lts path feat/x)"` |
+| | `lts config [list\|get\|path]` | Every setting with its value, default and source |
+| Change | `lts create <branch> -r repo[,repo]` | Worktree for one repo, or a mono group across several (`--basis`, `--lts-root`, `--no-install`, `--reuse`, `--open`, `--dry-run`) |
+| | `lts refresh [repo...]` | Fetch and fast-forward each repo's basis branch |
+| | `lts rebase [target] [--refresh]` | Rebase onto the basis branch; conflicts abort cleanly (exit 6) |
+| | `lts rename [target] <new> [--remote]` | Rename branch, folder, workspace file and tmux session |
+| | `lts pr [target] [--print]` | Open (or print) the existing PR or a prefilled compare page |
+| | `lts config set KEY VALUE [-r repo]` | Validated settings change (same rules as the Settings screen) |
+| Remove | `lts delete [target]` | Guarded delete: `--yes` for safe states, `--force --yes` for unsaved work |
+| | `lts cleanup-merged` | Delete every merged, clean worktree (`--dry-run`, `--yes`, `--remote`) |
+| | `lts clean-modules [target]` | Remove `node_modules` and report the space freed |
+| Agents | `lts help agents` | The contract for AI agents and scripts |
+| | `lts skill install\|print` | Install the agent skills / print them for `AGENTS.md` |
+| | `lts hook <event>` | Claude Code hook handlers |
+
+**Targets.** A worktree can be named by branch (`feat/login`), folder (`feat-login`), id (`core-lts/feat-login`, shown by `lts ls`) or path; omit it to use the worktree you are in. Add `-r <repo>` when a branch exists in several repos.
+
+**Contract for scripts.**
+
+- Results go to **stdout**, progress to **stderr**. `--json` prints one object: `{"schema_version":1,"ok":true,...}` or `{"ok":false,"error":{"code","message","hint","suggestions"}}`.
+- Nothing prompts when stdin isn't a terminal (or with `--no-input` / `CI`): a missing confirmation exits 4 and the hint names the flag.
+- Typos produce suggestions (`lts craete` → `create`, `-r apii` → `api`) and are never auto-applied.
+- Repos are locked per process: if the TUI or another command is busy with a repo, commands fail with code `busy` — or wait with `--wait=2m`.
+
+| Exit | Meaning |
+|---|---|
+| 0 | success |
+| 1 | error (including `busy`) |
+| 2 | usage error |
+| 3 | not found / ambiguous (with suggestions) |
+| 4 | refused by a safety guard — needs `--yes` / `--force` |
+| 5 | partial failure |
+| 6 | rebase conflict (aborted, changes restored) |
+| 7 | already exists (`create --reuse` returns it instead) |
+| 130 | interrupted |
+
+```bash
+# start a task, preview first
+lts create feat/login -r core --dry-run
+cd "$(lts create feat/login -r core --reuse -q)"
+
+# one branch across two repos
+lts create feat/integration -r core,erp --basis erp=dev
+
+# what needs attention?
+lts status --all --fetch --json | jq '.worktrees[] | select(.status.dangerous_to_delete)'
+
+# ship and clean up
+git push -u origin feat/login && lts pr --print
+lts cleanup-merged --dry-run && lts cleanup-merged --yes
+```
+
+## AI agents
+
+LTS is built to be driven by agents that have never seen it: `lts help agents` explains the layout, the output contract, exit codes, safety rules and orchestration patterns in one page, and every command's `--help` lists examples and exit codes. `lts help --json` dumps the full command spec.
+
+**Claude Code plugin** (skills + hooks, updates with the repo):
+
+```
+/plugin marketplace add led-slzr/lts
+/plugin install lts@lts
+```
+
+| Skill | For |
+|---|---|
+| `lts:context` | Auto-loaded in LTS workspaces: layout, contract, safety rules |
+| `lts:start` | Start a task in a new worktree (single repo or mono group) |
+| `lts:finish` | Push, open the PR, delete the worktree after merge |
+| `lts:tidy` | Find merged / stale worktrees and clean up — dry-run first |
+| `lts:sync` | Refresh repos and rebase worktrees, reporting conflicts |
+
+The plugin's `SessionStart` and `SubagentStart` hooks add a short LTS summary to every session and subagent — which worktree it is in, its status, the other worktrees, and the safety rules — so orchestrators and their workers know where they are without being told. Outside LTS workspaces they print nothing.
+
+**Without the marketplace:** `lts skill install` writes the same skills to `~/.claude/skills/lts-*` and adds the hooks to `~/.claude/settings.json` (backed up first; `--no-hooks` for skills only; `lts skill uninstall` reverses it). `lts skill print` emits the skills as Markdown for `AGENTS.md`-style instructions in other agents. `--worktree-hook` additionally routes Claude Code's own isolated worktrees through LTS (env files, dependencies, setup script, LTS layout); it steps aside whenever the repo's main checkout is dirty or off its basis branch.
 
 ## Keyboard Shortcuts
 
@@ -138,13 +226,12 @@ On first run, LTS will launch a setup wizard to configure your preferences. You 
 
 ## Config
 
-**Global** (`~/.config/lts/config`) — applies everywhere:
+**Global** (`~/.config/lts/config`, or `$LTS_CONFIG_DIR/config`) — applies everywhere. Defaults:
 
 ```
 IDE_COMMAND="windsurf"
 AI_CLI_COMMAND="claude"
-PACKAGE_MANAGER="pnpm"
-AUTO_REFRESH="24H"
+PACKAGE_MANAGER="auto"
 TERMINAL="terminal"
 TERMINAL_MULTIPLEXER="none"
 TMUX_AI_PANE_WIDTH="50"
@@ -155,18 +242,22 @@ DONE_SOUND="off"
 AUTO_CLEAN_MODULES="OFF"
 AUTO_KILL_TMUX="OFF"
 DAILY_CHECK_FOR_UPDATES="true"
-AUTO_UPDATE_NEW_RELEASE="true"
+AUTO_UPDATE_NEW_RELEASE="false"
 OPEN_ENV_IDE="true"
 NEW_WT_PACKAGE_INSTALL="true"
 COPY_ENV_FILES="true"
 COPY_MCP_JSON="false"
+GITHUB_INTEGRATION="true"
+ENABLE_HIBERNATE="false"
 ```
+
+`lts config` lists every key with its current value and source; `lts config set KEY VALUE` changes one with validation.
 
 Supported values:
 - **IDE**: `windsurf`, `code`, `cursor`, `zed` (or any custom command)
 - **AI CLI**: `claude`, `opencode` (or any custom command, empty to disable)
-- **Package Manager**: `pnpm`, `npm`, `yarn`, `bun`
-- **Auto Refresh**: `15M`, `30M`, `1H`, `6H`, `12H`, `24H`
+- **Package Manager**: `auto` (default — detect per repo), `pnpm`, `npm`, `yarn`, `bun`
+- **Auto Refresh** (`AUTO_REFRESH`): reserved — the value is saved, but this version does not refresh on a timer; use `r` in the TUI or `lts refresh`
 - **Terminal**: `ghostty`, `iterm`, `terminal`, `wezterm`, `alacritty`, `kitty` (or any custom command)
 - **Layout** (`LAYOUT`): `board` (default) or `explorer` — also toggled in-app with `shift+tab` or by clicking the Layout switcher in the header
 - **Multiplexer**: `none`, `tmux` — with `tmux` (requires [tmux](https://github.com/tmux/tmux) installed), AI CLI and Terminal clicks share one tmux session per worktree (left pane: AI CLI, right pane: shell). Reopening a worktree reattaches to the same session, so your AI CLI conversation survives closing the terminal. Sessions are killed/renamed when the worktree is deleted/renamed.
@@ -177,16 +268,22 @@ Supported values:
 - **Auto Clean Modules By Age** (`AUTO_CLEAN_MODULES`): `OFF` (default), `1D`, `3D`, `7D`, `14D`, `30D` — on startup, remove `node_modules` from worktrees idle longer than the threshold (by last git activity; worktrees with an attached tmux session are skipped)
 - **Auto Kill Tmux By Age** (`AUTO_KILL_TMUX`): `OFF` (default), `8H`, `1D`, `3D`, `7D` — on startup, kill unattached LTS tmux sessions idle longer than the threshold (by tmux's own activity clock; attached sessions are never killed)
 - **Check for Updates**: `true` / `false` — daily check for new releases on startup
-- **Auto Update**: `true` / `false` — silently download and install new releases in the background
+- **Auto Update**: `true` / `false` (default) — silently download and install new releases in the background
 
-**Local** (`.lts.conf` in your project directory) — per-repo:
+**Local** (`.lts.conf` in your workspace directory) — per-repo:
 
 ```
 CORE_BASIS_BRANCH="main"
+CORE_PACKAGE_MANAGER="pnpm"
+CORE_SETUP_SCRIPT="pnpm --filter @acme/shared build"
+CORE_LTS_ROOT="/Volumes/fast/worktrees"
 CORE_LAST_REFRESH="1711612800"
 ERP_BASIS_BRANCH="dev"
-ERP_LAST_REFRESH="1711612800"
 ```
+
+`<REPO>_LTS_ROOT` keeps that repo's `<repo>-lts` folder somewhere other than next to the repos (set it with `lts create --lts-root DIR` or `lts config set LTS_ROOT DIR -r repo`); every command and the TUI follow it. Mono groups always live next to the repos.
+
+**Environment:** `LTS_DIR` (default workspace for CLI commands), `LTS_CONFIG_DIR` (global config directory — handy for sandboxes and CI), `NO_COLOR`, `CI` (disables prompts).
 
 Both configs are editable from the Settings UI inside LTS. Changes save immediately and reflect in the running app.
 
