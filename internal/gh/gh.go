@@ -157,3 +157,43 @@ func RemoteIsGitHub(repoPath string) bool {
 	}
 	return strings.Contains(string(out), "github.com")
 }
+
+// ExistingPRURL returns the URL of an open PR for the branch checked out
+// in wtPath ("" when there is none or gh can't tell).
+func ExistingPRURL(wtPath string) string {
+	cmd := exec.Command("gh", "pr", "view", "--json", "url,state", "-q", `select(.state=="OPEN") | .url`)
+	cmd.Dir = wtPath
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// CompareURL builds the GitHub "open a pull request" URL for branch
+// against base from the repo's origin URL (no gh needed).
+func CompareURL(repoPath, base, branch string) (string, error) {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return "", fmt.Errorf("no origin remote")
+	}
+	slug := GitHubSlug(strings.TrimSpace(string(out)))
+	if slug == "" {
+		return "", fmt.Errorf("origin is not a GitHub remote")
+	}
+	return "https://github.com/" + slug + "/compare/" + base + "..." + branch + "?expand=1", nil
+}
+
+// GitHubSlug extracts owner/repo from a GitHub remote URL ("" if not GitHub).
+func GitHubSlug(remote string) string {
+	r := strings.TrimSuffix(strings.TrimSpace(remote), ".git")
+	for _, p := range []string{"git@github.com:", "ssh://git@github.com/", "https://github.com/", "http://github.com/", "git://github.com/"} {
+		if strings.HasPrefix(r, p) {
+			return strings.Trim(strings.TrimPrefix(r, p), "/")
+		}
+	}
+	if i := strings.Index(r, "github.com/"); i >= 0 && strings.HasPrefix(r, "https://") {
+		return strings.Trim(r[i+len("github.com/"):], "/")
+	}
+	return ""
+}

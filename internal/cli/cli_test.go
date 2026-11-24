@@ -264,3 +264,63 @@ func TestBusyRepoFailsFastOrWaits(t *testing.T) {
 		t.Fatalf("--wait should succeed after release: code=%d %s", code, errs)
 	}
 }
+
+func TestDeleteGuards(t *testing.T) {
+	f := newFixture(t, "core")
+	wt := f.addWorktree("core", "feat/dirty")
+	os.WriteFile(filepath.Join(wt, "wip.txt"), []byte("x"), 0644)
+
+	// dangerous: --yes alone is refused, nothing deleted
+	if _, _, code := f.run("delete", "feat/dirty", "--yes"); code != ExitGuard {
+		t.Fatalf("dirty delete with --yes only should exit 4, got %d", code)
+	}
+	if !fileExists(wt) {
+		t.Fatal("guard must leave the worktree intact")
+	}
+	// --force without --yes still needs confirmation (no TTY)
+	if _, _, code := f.run("delete", "feat/dirty", "--force"); code != ExitGuard {
+		t.Fatalf("--force without --yes should exit 4, got %d", code)
+	}
+	if _, _, code := f.run("delete", "feat/dirty", "--force", "--yes"); code != 0 {
+		t.Fatalf("--force --yes should delete, got %d", code)
+	}
+	if fileExists(wt) {
+		t.Fatal("worktree should be gone")
+	}
+
+	// protected branch: worktree removed, branch kept
+	gitT(t, f.repo("core"), "branch", "develop")
+	p := filepath.Join(f.ws, "core-lts", "develop")
+	gitT(t, f.repo("core"), "worktree", "add", "-q", p, "develop")
+	if _, _, code := f.run("delete", "develop", "--yes", "--remote"); code != 0 {
+		t.Fatalf("protected delete: %d", code)
+	}
+	if out := gitT(t, f.repo("core"), "branch", "--list", "develop"); !strings.Contains(out, "develop") {
+		t.Fatal("protected branch must never be deleted")
+	}
+}
+
+func TestCleanupMerged(t *testing.T) {
+	f := newFixture(t, "core")
+	merged := f.addWorktree("core", "feat/merged")
+	gitT(t, merged, "push", "-q", "-u", "origin", "feat/merged")
+	open := f.addWorktree("core", "feat/open")
+	os.WriteFile(filepath.Join(open, "f.txt"), []byte("x"), 0644)
+	gitT(t, open, "add", ".")
+	gitT(t, open, "commit", "-qm", "work")
+
+	m, code := f.runJSON("cleanup-merged", "--dry-run")
+	c := toStrings(m["candidates"])
+	if code != 0 || len(c) != 1 || c[0] != "core-lts/feat-merged" {
+		t.Fatalf("candidates = %v (code %d)", c, code)
+	}
+	if _, _, code := f.run("cleanup-merged"); code != ExitGuard {
+		t.Fatalf("cleanup without --yes should exit 4, got %d", code)
+	}
+	if _, _, code := f.run("cleanup-merged", "--yes"); code != 0 {
+		t.Fatalf("cleanup --yes: %d", code)
+	}
+	if fileExists(merged) || !fileExists(open) {
+		t.Fatal("cleanup must remove only the merged worktree")
+	}
+}

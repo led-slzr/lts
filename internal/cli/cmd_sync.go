@@ -326,12 +326,11 @@ func statusOf(env *Env, t Target) git.WTStatus {
 		st, _ := git.GetWorktreeStatus(t.WT.Path, env.Cfg.GetRepoBasisBranch(t.Repo.Name))
 		return st
 	}
-	worst := git.StatusClean
+	var sts []git.WTStatus
 	for _, m := range git.MonoMembers(t.WT.Path) {
 		st, _ := git.GetWorktreeStatus(m.Path, env.Cfg.GetRepoBasisBranch(m.Repo))
-		if statusSeverity(st) > statusSeverity(worst) {
-			worst = st
-		}
+		sts = append(sts, st)
 	}
-	return worst
+	st, _ := git.AggregateStatus(sts, nil)
+	return st
 }

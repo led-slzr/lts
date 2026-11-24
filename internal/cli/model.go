@@ -127,21 +127,19 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 	}
 	sv := &statusView{}
 	if r.IsMonorepo {
-		// Group status = worst member status; report each member too
-		worst := git.StatusClean
-		worstText := "clean"
-		first := true
+		// Group status aggregates every member (git.AggregateStatus)
+		var sts []git.WTStatus
+		var txts []string
 		for _, m := range w.Members {
 			st, txt := git.GetWorktreeStatus(m.Path, e.Cfg.GetRepoBasisBranch(m.Repo))
 			sv.MemberStatuses = append(sv.MemberStatuses, memberStatus{Repo: m.Repo, State: st.Slug(), Text: txt})
-			if first || statusSeverity(st) > statusSeverity(worst) {
-				worst, worstText, first = st, txt, false
-			}
+			sts, txts = append(sts, st), append(txts, txt)
 			si := git.GetSyncInfo(m.Path)
 			sv.ChangedFiles += si.ChangedFiles
 			sv.Ahead += si.Ahead
 			sv.Behind += si.Behind
 		}
+		worst, worstText := git.AggregateStatus(sts, txts)
 		sv.State, sv.Text = worst.Slug(), worstText
 		sv.HasRemoteBranch = git.HasRemoteBranch(worst)
 		sv.DeleteRisk, sv.DangerousDelete = git.DeleteRisk(worst)
@@ -155,23 +153,6 @@ func (e *Env) fillStatus(r git.Repo, wt git.Worktree, w *worktreeView) {
 	}
 	sv.ProtectedBranch = git.IsProtectedBranch(wt.Branch)
 	w.Status = sv
-}
-
-// statusSeverity orders statuses by how much unrecoverable work they hold.
-func statusSeverity(s git.WTStatus) int {
-	switch s {
-	case git.StatusMergedCleanable, git.StatusClean:
-		return 0
-	case git.StatusNew, git.StatusToPull, git.StatusMissing:
-		return 1
-	case git.StatusMergedDirty, git.StatusNewDirty, git.StatusChanged:
-		return 3
-	case git.StatusToPush, git.StatusNoRemote:
-		return 4
-	case git.StatusDiverged:
-		return 5
-	}
-	return 2
 }
 
 // relToWorkspace shortens p for text output when it sits under the workspace.
