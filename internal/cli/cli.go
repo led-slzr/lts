@@ -40,6 +40,8 @@ type app struct {
 	tui         TUIFunc
 	root        *cobra.Command
 	interrupted atomic.Bool
+	// streaming commands (watch) end normally on Ctrl+C
+	streaming bool
 }
 
 const (
@@ -68,6 +70,9 @@ func Execute(args []string, tui TUIFunc) int {
 		e := a.translateCobraError(cmd, err)
 		a.out.Failure(e)
 		return e.Exit
+	}
+	if a.interrupted.Load() && a.streaming {
+		return ExitOK
 	}
 	if a.interrupted.Load() {
 		// The command finished its work and already printed its one
@@ -308,7 +313,9 @@ func (a *app) trapInterrupts() {
 	go func() {
 		<-ch
 		a.interrupted.Store(true)
-		fmt.Fprintln(os.Stderr, "\ninterrupt received — stopping after the current step (Ctrl+C again to force quit)")
+		if !a.streaming {
+			fmt.Fprintln(os.Stderr, "\ninterrupt received — stopping after the current step (Ctrl+C again to force quit)")
+		}
 		<-ch
 		os.Exit(ExitInterrupted)
 	}()

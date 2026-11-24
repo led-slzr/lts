@@ -188,6 +188,13 @@ func (a *app) loadEnv(o envOpts) (*Env, error) {
 	return env, nil
 }
 
+// reloadCfg re-reads config from disk (long-running commands like watch).
+func reloadCfg(e *Env) config.Config {
+	cfg := config.LoadReadOnly(e.WorkDir)
+	core.ApplyLTSRoots(&cfg)
+	return cfg
+}
+
 // discover (re)loads repos, marks hidden ones, and applies the sort order.
 func (e *Env) discover(withStatus bool) {
 	e.discoverWith(git.DiscoverOptions{SkipStatus: !withStatus})

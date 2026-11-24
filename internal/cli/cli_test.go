@@ -468,3 +468,29 @@ func TestOpenUsesWorkspaceFile(t *testing.T) {
 		t.Fatalf("two modes should be a usage error, got %d", code)
 	}
 }
+
+func TestWatchEmitsAddedAndRemoved(t *testing.T) {
+	f := newFixture(t, "core")
+	done := make(chan string)
+	go func() {
+		out, _, _ := f.run("watch", "--json", "--interval", "500ms", "--max-polls", "8")
+		done <- out
+	}()
+	time.Sleep(700 * time.Millisecond)
+	wt := f.addWorktree("core", "feat/w")
+	time.Sleep(1200 * time.Millisecond)
+	gitT(t, f.repo("core"), "worktree", "remove", "--force", wt)
+	out := <-done
+	var types []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("not NDJSON: %q", line)
+		}
+		types = append(types, ev["type"].(string))
+	}
+	joined := strings.Join(types, ",")
+	if !strings.HasPrefix(joined, "ready") || !strings.Contains(joined, "worktree_added") || !strings.Contains(joined, "worktree_removed") {
+		t.Fatalf("events = %s", joined)
+	}
+}
