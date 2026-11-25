@@ -161,7 +161,7 @@ func specFor(c *cobra.Command) cmdSpec {
 	s := cmdSpec{Name: c.Name(), Path: c.CommandPath(), Aliases: c.Aliases, Group: c.GroupID,
 		Usage: c.UseLine(), Short: c.Short, Long: c.Long, Example: c.Example, Flags: []flagSpec{}}
 	c.LocalFlags().VisitAll(func(f *pflag.Flag) {
-		if f.Name == "help" {
+		if f.Name == "help" || f.Hidden {
 			return
 		}
 		s.Flags = append(s.Flags, flagSpec{Name: f.Name, Shorthand: f.Shorthand, Type: f.Value.Type(), Default: f.DefValue, Usage: f.Usage})
