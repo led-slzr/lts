@@ -575,7 +575,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	sorted := make([]string, len(repoNames))
 	copy(sorted, repoNames)
 	sort.Strings(sorted)
-	ltsDir := strings.Join(sorted, "-") + "-lts"
+	ltsDir := MonoGroupDirName(sorted)
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 
 	if err := checkLTSDirOwnership(ltsPath, sorted); err != nil {
@@ -701,6 +701,17 @@ func checkLTSDirOwnership(ltsPath string, repos []string) error {
 	}
 	data, err := os.ReadFile(filepath.Join(ltsPath, ".lts-repos"))
 	if err != nil {
+		// No group metadata: a group must not move into a single repo's
+		// LTS dir (a repo literally named "core+erp" owns "core+erp-lts")
+		if len(repos) > 1 {
+			if entries, rerr := os.ReadDir(ltsPath); rerr == nil {
+				for _, e := range entries {
+					if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+						return fmt.Errorf("%s already holds worktrees of another repo — rename that repo to create this group", filepath.Base(ltsPath))
+					}
+				}
+			}
+		}
 		return nil
 	}
 	var existing []string
@@ -710,7 +721,7 @@ func checkLTSDirOwnership(ltsPath string, repos []string) error {
 		}
 	}
 	if len(existing) > 0 && !sameRepoSet(existing, repos) {
-		return fmt.Errorf("%s already belongs to the group %s — repo names joined with \"-\" collide; rename a repo to create this group", filepath.Base(ltsPath), strings.Join(existing, " + "))
+		return fmt.Errorf("%s already belongs to the group %s — rename a repo to create this group", filepath.Base(ltsPath), strings.Join(existing, " + "))
 	}
 	return nil
 }
@@ -2168,6 +2179,9 @@ func IsProtectedBranch(branch string) bool {
 // NeedsMigration checks if any LTS directories use the old naming convention.
 // Fast: only does stat checks and reads a single branch per LTS dir.
 func NeedsMigration(scriptDir string) bool {
+	if NeedsGroupRename(scriptDir) {
+		return true
+	}
 	for _, d := range allLTSDirs(scriptDir) {
 		ltsPath := filepath.Join(d.root, d.name)
 		ltsType := getLTSType(d.root, d.name)
@@ -2266,7 +2280,14 @@ func planLegacyGroup(ltsPath, subdirName string, repoNames []string) legacyGroup
 	if err != nil {
 		return legacyGroupPlan{}
 	}
+	// Legacy subdir names were built from the pre-v3.2 "-"-joined group
+	// name — derive it from the repo set, not the (possibly renamed) dir
 	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
+	if len(repoNames) > 1 {
+		sorted := append([]string(nil), repoNames...)
+		sort.Strings(sorted)
+		ltsPrefix = strings.Join(sorted, "-")
+	}
 
 	var plan legacyGroupPlan
 	needs := false
@@ -2327,8 +2348,9 @@ func matchRepoPrefix(name string, repoNames []string) string {
 // MigrateDirectoryStructure renames old-style LTS directories to the new convention.
 // Returns the number of directories migrated.
 func MigrateDirectoryStructure(scriptDir string) int {
+	renamed := len(MigrateGroupDirNames(scriptDir))
 
-	migrated := 0
+	migrated := renamed
 	for _, d := range allLTSDirs(scriptDir) {
 		ltsPath := filepath.Join(d.root, d.name)
 		ltsType := getLTSType(d.root, d.name)

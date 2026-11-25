@@ -45,7 +45,7 @@ func TestConvertToMonoCreatesPartnerAndMovesInitiator(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	group := filepath.Join(scriptDir, "core-erp-lts", "feat-login")
+	group := filepath.Join(scriptDir, "core+erp-lts", "feat-login")
 	if res.BranchSubdir != group {
 		t.Fatalf("group at %s, want %s", res.BranchSubdir, group)
 	}
@@ -68,7 +68,7 @@ func TestConvertToMonoCreatesPartnerAndMovesInitiator(t *testing.T) {
 		t.Fatal("emptied single-repo LTS dir should dissolve")
 	}
 	// Group metadata + workspace in place.
-	if data, _ := os.ReadFile(filepath.Join(scriptDir, "core-erp-lts", ".lts-repos")); !strings.Contains(string(data), "core") || !strings.Contains(string(data), "erp") {
+	if data, _ := os.ReadFile(filepath.Join(scriptDir, "core+erp-lts", ".lts-repos")); !strings.Contains(string(data), "core") || !strings.Contains(string(data), "erp") {
 		t.Fatalf(".lts-repos = %q", data)
 	}
 	if _, err := os.Stat(filepath.Join(group, "monorepo-feat-login.code-workspace")); err != nil {
@@ -77,7 +77,7 @@ func TestConvertToMonoCreatesPartnerAndMovesInitiator(t *testing.T) {
 	// Discovery sees the new group card.
 	foundGroup := false
 	for _, r := range DiscoverRepos(scriptDir, mainBasis) {
-		if r.IsMonorepo && r.Name == "core-erp" && len(r.Worktrees) == 1 {
+		if r.IsMonorepo && r.Name == "core+erp" && len(r.Worktrees) == 1 {
 			foundGroup = true
 		}
 	}
@@ -104,7 +104,7 @@ func TestConvertToMonoAdoptsExistingSameBranchWorktree(t *testing.T) {
 	if len(res.Adopted) != 1 || res.Adopted[0] != "erp" {
 		t.Fatalf("adopted = %v", res.Adopted)
 	}
-	moved := filepath.Join(scriptDir, "core-erp-lts", "feat-x", "erp-feat-x")
+	moved := filepath.Join(scriptDir, "core+erp-lts", "feat-x", "erp-feat-x")
 	if data, _ := os.ReadFile(filepath.Join(moved, "erp-wip.txt")); !strings.Contains(string(data), "adopted") {
 		t.Fatal("adopted worktree's work must survive")
 	}
@@ -164,7 +164,7 @@ func TestReduceMonoKeepAndDelete(t *testing.T) {
 	if out := gitRun(t, filepath.Join(scriptDir, "erp"), "branch", "--list", "feat/z"); strings.TrimSpace(out) != "" {
 		t.Fatal("deleted constituent's local branch should be gone")
 	}
-	if _, err := os.Stat(filepath.Join(scriptDir, "core-erp-lts")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(scriptDir, "core+erp-lts")); !os.IsNotExist(err) {
 		t.Fatal("emptied group dir should dissolve")
 	}
 	// Discovery: core has its single worktree back, no ghost group.
@@ -207,7 +207,7 @@ func TestConvertRollsBackWhenAllPartnersFail(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(scriptDir, "core-lts", "core-feat-r.code-workspace")); err != nil {
 		t.Fatal("individual workspace should be regenerated on rollback")
 	}
-	if _, err := os.Stat(filepath.Join(scriptDir, "core-erp-lts")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(scriptDir, "core+erp-lts")); !os.IsNotExist(err) {
 		t.Fatal("the half-born group dir must dissolve")
 	}
 }
@@ -218,7 +218,7 @@ func TestConvertRefusesExistingGroupBranch(t *testing.T) {
 	core := filepath.Join(scriptDir, "core")
 	wtPath := filepath.Join(scriptDir, "core-lts", "core-feat-dup")
 	gitRun(t, core, "worktree", "add", "-b", "feat/dup", wtPath)
-	if err := os.MkdirAll(filepath.Join(scriptDir, "core-erp-lts", "feat-dup"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(scriptDir, "core+erp-lts", "feat-dup"), 0755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -252,7 +252,7 @@ func TestReduceMonoAllDeleteDissolvesGroup(t *testing.T) {
 	if err != nil || kept != 0 || deleted != 2 {
 		t.Fatalf("kept=%d deleted=%d err=%v", kept, deleted, err)
 	}
-	if _, err := os.Stat(filepath.Join(scriptDir, "core-erp-lts")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(scriptDir, "core+erp-lts")); !os.IsNotExist(err) {
 		t.Fatal("group dir must dissolve after all-delete")
 	}
 	for _, r := range DiscoverRepos(scriptDir, mainBasis) {
@@ -270,9 +270,9 @@ func TestConvertRefusesGroupDirOwnedByDifferentRepoSet(t *testing.T) {
 	wtPath := filepath.Join(scriptDir, "core-lts", "core-feat-amb")
 	gitRun(t, core, "worktree", "add", "-b", "feat/amb", wtPath)
 
-	// "core-erp-lts" already belongs to a DIFFERENT set (core-e + rp — contrived,
+	// "core+erp-lts" already belongs to a DIFFERENT set (core-e + rp — contrived,
 	// but exactly the ambiguity hyphenated names create).
-	writeFileT(t, filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), "core-e\nrp\n")
+	writeFileT(t, filepath.Join(scriptDir, "core+erp-lts", ".lts-repos"), "core-e\nrp\n")
 
 	_, err := ConvertToMono(scriptDir, "core", wtPath, "feat/amb",
 		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false)
@@ -283,7 +283,7 @@ func TestConvertRefusesGroupDirOwnedByDifferentRepoSet(t *testing.T) {
 		t.Fatal("refusal must leave the initiator untouched")
 	}
 	// A pre-existing group with the SAME set converts fine.
-	os.WriteFile(filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), []byte("core\nerp\n"), 0644)
+	os.WriteFile(filepath.Join(scriptDir, "core+erp-lts", ".lts-repos"), []byte("core\nerp\n"), 0644)
 	if _, err := ConvertToMono(scriptDir, "core", wtPath, "feat/amb",
 		[]ConvertPartner{{Name: "erp"}}, mainBasis, WorkspaceOptions{}, false); err != nil {
 		t.Fatalf("same-set group should accept a new branch: %v", err)

@@ -3,8 +3,11 @@
 package core
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
+
+	"lts-revamp/internal/opener"
 
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/git"
@@ -103,4 +106,28 @@ func WorkspaceOpts(cfg *config.Config) git.WorkspaceOptions {
 // layer. Call after every config load or LTS_ROOT change.
 func ApplyLTSRoots(cfg *config.Config) {
 	git.SetLTSRoots(cfg.LTSRoots())
+}
+
+// MigrateLayout runs the automatic LTS layout upgrade: group dirs are
+// renamed to the collision-proof "+" naming first (tmux sessions, which
+// are keyed by path, follow them), then the per-worktree migrations and
+// workspace repairs. Returns the number of items changed.
+func MigrateLayout(workDir string) int {
+	renames := git.MigrateGroupDirNames(workDir)
+	for _, g := range renames {
+		subs, _ := os.ReadDir(g.New)
+		for _, s := range subs {
+			if !s.IsDir() || strings.HasPrefix(s.Name(), ".") {
+				continue
+			}
+			opener.RenameSession(filepath.Join(g.Old, s.Name()), filepath.Join(g.New, s.Name()))
+			members, _ := os.ReadDir(filepath.Join(g.New, s.Name()))
+			for _, m := range members {
+				if m.IsDir() {
+					opener.RenameSession(filepath.Join(g.Old, s.Name(), m.Name()), filepath.Join(g.New, s.Name(), m.Name()))
+				}
+			}
+		}
+	}
+	return len(renames) + git.MigrateDirectoryStructure(workDir) + git.RepairWorkspaceContents(workDir)
 }

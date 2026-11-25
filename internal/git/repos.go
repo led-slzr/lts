@@ -177,7 +177,7 @@ func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opt
 		sorted := make([]string, len(repoNames))
 		copy(sorted, repoNames)
 		sort.Strings(sorted)
-		cardName := strings.Join(sorted, "-")
+		cardName := MonoGroupName(sorted)
 
 		monoRepo := Repo{
 			Name:       cardName,

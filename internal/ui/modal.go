@@ -392,7 +392,7 @@ func (m *ModalModel) computePlan() {
 		sorted := make([]string, len(selectedNames))
 		copy(sorted, selectedNames)
 		sort.Strings(sorted)
-		ltsPrefix := strings.Join(sorted, "-")
+		ltsPrefix := git.MonoGroupName(sorted)
 		// The branch subdir is common to every worktree — show it as part of
 		// the directory so the per-repo rows stay short (they carry toggles).
 		m.PlanLTSDir = ltsPrefix + "-lts/" + branchDir

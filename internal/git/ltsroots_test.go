@@ -91,12 +91,12 @@ func TestHibernateAllowsCustomRootWorktrees(t *testing.T) {
 func TestCreateRefusesCollidingLTSDirs(t *testing.T) {
 	scriptDir := twoRepoFixture(t) // core, erp
 	// A mono group core+erp exists; a single-repo LTS dir can't reuse its name
-	os.MkdirAll(filepath.Join(scriptDir, "core-erp-lts"), 0755)
-	writeFileT(t, filepath.Join(scriptDir, "core-erp-lts", ".lts-repos"), "core\nerp\n")
-	if err := checkLTSDirOwnership(filepath.Join(scriptDir, "core-erp-lts"), []string{"core-erp"}); err == nil {
+	os.MkdirAll(filepath.Join(scriptDir, "core+erp-lts"), 0755)
+	writeFileT(t, filepath.Join(scriptDir, "core+erp-lts", ".lts-repos"), "core\nerp\n")
+	if err := checkLTSDirOwnership(filepath.Join(scriptDir, "core+erp-lts"), []string{"core-erp"}); err == nil {
 		t.Fatal("a different repo set must not reuse a group dir")
 	}
-	if err := checkLTSDirOwnership(filepath.Join(scriptDir, "core-erp-lts"), []string{"erp", "core"}); err != nil {
+	if err := checkLTSDirOwnership(filepath.Join(scriptDir, "core+erp-lts"), []string{"erp", "core"}); err != nil {
 		t.Fatalf("the same set must be allowed: %v", err)
 	}
 	// A real repo named like an LTS dir

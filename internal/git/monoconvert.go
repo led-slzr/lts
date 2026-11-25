@@ -68,7 +68,7 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	}
 	sort.Strings(names)
 
-	groupDir := strings.Join(names, "-") + "-lts"
+	groupDir := MonoGroupDirName(names)
 	ltsPath := filepath.Join(scriptDir, groupDir)
 	branchDirName := BranchToDirName(branch)
 	branchSubdirPath := filepath.Join(ltsPath, branchDirName)

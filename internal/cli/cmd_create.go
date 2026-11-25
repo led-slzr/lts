@@ -352,7 +352,7 @@ func (a *app) runCreate(cmd *cobra.Command, branch string, repoArgs []string, f 
 	for _, r := range results {
 		id := ""
 		if mono {
-			id = strings.Join(names, "-") + "-lts/" + filepath.Base(filepath.Dir(r.WorktreePath))
+			id = git.MonoGroupDirName(names) + "/" + filepath.Base(filepath.Dir(r.WorktreePath))
 		} else if repo, err := env.findRepo(r.RepoName); err == nil {
 			id = repo.LTSDir + "/" + filepath.Base(r.WorktreePath)
 		}
@@ -477,7 +477,7 @@ func createPlan(env *Env, repos []git.Repo, branch string, basisFor func(string)
 		}
 		var path string
 		if len(repos) > 1 {
-			path = filepath.Join(env.WorkDir, strings.Join(names, "-")+"-lts", dir, r.Name+"-"+dir)
+			path = filepath.Join(env.WorkDir, git.MonoGroupDirName(names), dir, r.Name+"-"+dir)
 		} else {
 			root := git.LTSRootFor(env.WorkDir, r.Name)
 			if ltsRoot != "" {

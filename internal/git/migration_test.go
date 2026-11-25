@@ -163,7 +163,7 @@ func setupMonorepo(t *testing.T, root, subdir, branch string, wtNames map[string
 	for _, r := range []string{"core", "erp-ui"} {
 		initRepo(t, root, r)
 	}
-	ltsPath = filepath.Join(root, "core-erp-ui-lts")
+	ltsPath = filepath.Join(root, MonoGroupDirName([]string{"core", "erp-ui"}))
 	os.MkdirAll(ltsPath, 0755)
 	os.WriteFile(filepath.Join(ltsPath, ".lts-type"), []byte("monorepo\n"), 0644)
 	os.WriteFile(filepath.Join(ltsPath, ".lts-repos"), []byte("core\nerp-ui\n"), 0644)

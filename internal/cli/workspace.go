@@ -179,7 +179,7 @@ func (a *app) loadEnv(o envOpts) (*Env, error) {
 		} else if h, lerr := lock.TryAcquire(dir, repoDirNames(dir), "lts layout upgrade"); lerr != nil {
 			a.out.Notice("note: old LTS layout detected but another lts process is busy; skipping the upgrade for now")
 		} else {
-			n := git.MigrateDirectoryStructure(dir) + git.RepairWorkspaceContents(dir)
+			n := core.MigrateLayout(dir)
 			h.Release()
 			a.out.Notice("Upgraded LTS directory layout (%d item(s)) — same automatic migration the TUI performs", n)
 		}

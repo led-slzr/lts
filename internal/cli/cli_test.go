@@ -210,7 +210,7 @@ func TestCreateReuseRenameRebase(t *testing.T) {
 
 	// mono group
 	m, code = f.runJSON("create", "feat/m", "-r", "core,erp", "--no-install")
-	if code != 0 || m["group"] != true || m["path"] != filepath.Join(f.ws, "core-erp-lts", "feat-m") {
+	if code != 0 || m["group"] != true || m["path"] != filepath.Join(f.ws, "core+erp-lts", "feat-m") {
 		t.Fatalf("mono create: code=%d %v", code, m)
 	}
 

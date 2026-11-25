@@ -2788,9 +2788,8 @@ func checkMigrationCmd(cfg *config.Config) tea.Cmd {
 
 func doMigrationCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		count := git.MigrateDirectoryStructure(cfg.WorkDir)
-		// Also repair workspace file contents that may have been left stale
-		count += git.RepairWorkspaceContents(cfg.WorkDir)
+		// Group renames (+ tmux sessions), worktree migrations, workspace repairs
+		count := core.MigrateLayout(cfg.WorkDir)
 		return MigrationDoneMsg{Count: count}
 	}
 }
