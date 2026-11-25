@@ -48,6 +48,7 @@ type RepoLocalConfig struct {
 	PackageManager string // per-repo override; empty = use global default
 	SetupScript    string // optional post-create command, run in the new worktree ("" = none)
 	Hidden         bool   // hide this repo from the main view (unwanted folders like .nvm)
+	LTSRoot        string // dir holding <repo>-lts when not next to the repos ("" = workDir)
 	LastRefresh    int64  // unix timestamp
 }
 
@@ -97,8 +98,12 @@ func DefaultRepoLocal() RepoLocalConfig {
 	}
 }
 
-// GlobalConfigDir returns ~/.config/lts
+// GlobalConfigDir returns ~/.config/lts, or $LTS_CONFIG_DIR when set
+// (sandboxes, CI, and agents that must not touch the user's real config).
 func GlobalConfigDir() string {
+	if d := os.Getenv("LTS_CONFIG_DIR"); d != "" {
+		return d
+	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "lts")
 }
@@ -151,8 +156,24 @@ func Load(workDir string) Config {
 	return cfg
 }
 
+// LoadReadOnly reads the global and local configs without creating,
+// migrating or rewriting anything on disk — the CLI's loader, so running a
+// command never pre-empts the TUI's first-run setup wizard. Missing files
+// mean defaults.
+func LoadReadOnly(workDir string) Config {
+	cfg := Config{
+		Global:  DefaultGlobal(),
+		Local:   make(map[string]RepoLocalConfig),
+		WorkDir: workDir,
+	}
+	loadGlobal(&cfg.Global)
+	loadLocal(workDir, cfg.Local)
+	return cfg
+}
+
 // InitLocalForRepos ensures all discovered repos have local config entries and saves.
 func (c *Config) InitLocalForRepos(repoNames []string) {
+	c.ReloadLocal()
 	changed := false
 	for _, name := range repoNames {
 		key := strings.ToUpper(name)
@@ -186,23 +207,12 @@ func (c *Config) GetRepoLastRefresh(repoName string) int64 {
 
 // SetRepoLastRefresh updates the last refresh timestamp for a repo and saves.
 func (c *Config) SetRepoLastRefresh(repoName string, ts int64) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.LastRefresh = ts
-	if rc.BasisBranch == "" {
-		rc.BasisBranch = "main"
-	}
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.LastRefresh = ts })
 }
 
 // SetRepoBasisBranch updates the basis branch for a repo and saves.
 func (c *Config) SetRepoBasisBranch(repoName, branch string) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.BasisBranch = branch
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.BasisBranch = branch })
 }
 
 // GetRepoPackageManager returns the repo's package manager override,
@@ -218,26 +228,12 @@ func (c *Config) GetRepoPackageManager(repoName string) string {
 // SetRepoPackageManager updates a repo's package manager override and saves.
 // Empty means "use the global default".
 func (c *Config) SetRepoPackageManager(repoName, pm string) error {
-	key := strings.ToUpper(repoName)
-	rc := c.Local[key]
-	rc.PackageManager = pm
-	if rc.BasisBranch == "" {
-		rc.BasisBranch = "main"
-	}
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.PackageManager = pm })
 }
 
 // SetRepoHidden marks a repo hidden from (or restored to) the main view.
 func (c *Config) SetRepoHidden(repoName string, hidden bool) error {
-	key := strings.ToUpper(repoName)
-	rc, ok := c.Local[key]
-	if !ok {
-		rc = DefaultRepoLocal()
-	}
-	rc.Hidden = hidden
-	c.Local[key] = rc
-	return c.SaveLocal()
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.Hidden = hidden })
 }
 
 // IsRepoHidden reports whether a repo is marked hidden.
@@ -248,20 +244,73 @@ func (c *Config) IsRepoHidden(repoName string) bool {
 
 // SetRepoSetupScript persists a per-repo post-create command ("" clears it).
 func (c *Config) SetRepoSetupScript(repoName, script string) error {
+	return c.UpdateRepo(repoName, func(rc *RepoLocalConfig) { rc.SetupScript = script })
+}
+
+// ReloadLocal re-reads .lts.conf so values written by another lts process
+// (the CLI while the TUI runs, or the reverse) are picked up. Entries only
+// held in memory are kept.
+func (c *Config) ReloadLocal() {
+	if c.WorkDir == "" {
+		return
+	}
+	fresh := make(map[string]RepoLocalConfig)
+	loadLocal(c.WorkDir, fresh)
+	for k, v := range c.Local {
+		if _, onDisk := fresh[k]; !onDisk {
+			fresh[k] = v
+		}
+	}
+	c.Local = fresh
+}
+
+// UpdateRepo applies fn to one repo's settings on a fresh read of
+// .lts.conf and saves — a write never reverts what another process saved.
+func (c *Config) UpdateRepo(repoName string, fn func(rc *RepoLocalConfig)) error {
+	c.ReloadLocal()
+	if c.Local == nil {
+		c.Local = make(map[string]RepoLocalConfig)
+	}
 	key := strings.ToUpper(repoName)
 	rc, ok := c.Local[key]
 	if !ok {
 		rc = DefaultRepoLocal()
 	}
-	rc.SetupScript = script
+	fn(&rc)
+	if rc.BasisBranch == "" {
+		rc.BasisBranch = "main"
+	}
 	c.Local[key] = rc
 	return c.SaveLocal()
 }
 
+// UpdateGlobal applies fn on a fresh read of the global config and saves,
+// so a TUI toggle never reverts a value \`lts config set\` just wrote.
+// fn's error aborts without saving.
+func (c *Config) UpdateGlobal(fn func(g *GlobalConfig) error) error {
+	fresh := c.Global
+	loadGlobal(&fresh)
+	if err := fn(&fresh); err != nil {
+		return err
+	}
+	c.Global = fresh
+	return c.SaveGlobal()
+}
+
+// LTSRoots returns the per-repo custom LTS roots (upper-cased repo keys).
+func (c *Config) LTSRoots() map[string]string {
+	roots := make(map[string]string)
+	for key, rc := range c.Local {
+		if rc.LTSRoot != "" {
+			roots[key] = rc.LTSRoot
+		}
+	}
+	return roots
+}
+
 // SetLastUpdateCheck records when we last checked for updates and saves.
 func (c *Config) SetLastUpdateCheck(ts int64) error {
-	c.Global.LastUpdateCheck = ts
-	return c.SaveGlobal()
+	return c.UpdateGlobal(func(g *GlobalConfig) error { g.LastUpdateCheck = ts; return nil })
 }
 
 // commandLabel derives a display label from a command string: first word
@@ -362,6 +411,9 @@ func (c *Config) SaveLocal() error {
 		if rc.Hidden {
 			lines = append(lines, fmt.Sprintf("%s_HIDDEN=\"true\"", key))
 		}
+		if rc.LTSRoot != "" {
+			lines = append(lines, fmt.Sprintf("%s_LTS_ROOT=\"%s\"", key, rc.LTSRoot))
+		}
 		lines = append(lines, fmt.Sprintf("%s_LAST_REFRESH=\"%d\"", key, rc.LastRefresh))
 	}
 	return os.WriteFile(LocalConfigPath(c.WorkDir), []byte(strings.Join(lines, "\n")+"\n"), 0644)
@@ -373,6 +425,22 @@ func (c *Config) EnsureRepoExists(repoName string) {
 	if _, ok := c.Local[key]; !ok {
 		c.Local[key] = DefaultRepoLocal()
 	}
+}
+
+// RawGlobalFile returns the key/values literally present in the global
+// config file (used to report where an effective value comes from).
+func RawGlobalFile() map[string]string { return readKV(GlobalConfigPath()) }
+
+// RawLocalFile returns the key/values literally present in .lts.conf.
+func RawLocalFile(workDir string) map[string]string { return readKV(LocalConfigPath(workDir)) }
+
+func readKV(path string) map[string]string {
+	f, err := os.Open(path)
+	if err != nil {
+		return map[string]string{}
+	}
+	defer f.Close()
+	return parseKeyValue(f)
 }
 
 // --- Internal loading ---
@@ -498,6 +566,11 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 			rc := local[repo]
 			rc.SetupScript = v
 			local[repo] = rc
+		} else if strings.HasSuffix(k, "_LTS_ROOT") {
+			repo := strings.TrimSuffix(k, "_LTS_ROOT")
+			rc := local[repo]
+			rc.LTSRoot = v
+			local[repo] = rc
 		} else if strings.HasSuffix(k, "_HIDDEN") {
 			repo := strings.TrimSuffix(k, "_HIDDEN")
 			rc := local[repo]
@@ -517,6 +590,9 @@ func loadLocal(workDir string, local map[string]RepoLocalConfig) {
 func parseKeyValue(f *os.File) map[string]string {
 	kv := make(map[string]string)
 	scanner := bufio.NewScanner(f)
+	// Default 64KB token limit silently stopped parsing at a long line and
+	// the next save dropped every key after it
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

@@ -68,7 +68,7 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 	}
 	sort.Strings(names)
 
-	groupDir := strings.Join(names, "-") + "-lts"
+	groupDir := MonoGroupDirName(names)
 	ltsPath := filepath.Join(scriptDir, groupDir)
 	branchDirName := BranchToDirName(branch)
 	branchSubdirPath := filepath.Join(ltsPath, branchDirName)
@@ -131,7 +131,7 @@ func ConvertToMono(scriptDir, repoName, wtPath, branch string, partners []Conver
 		}
 
 		basis := getBasis(p.Name)
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(scriptDir, repoPath)
 		if err := EnsureCleanMain(repoPath, basis, log); err != nil {
 			log.AddError("Skipping: " + err.Error())
 			continue
@@ -272,7 +272,7 @@ func ReduceMono(scriptDir, branchSubdirPath string, decisions []ReduceDecision,
 			continue
 		}
 
-		singleLts := filepath.Join(scriptDir, d.Name+"-lts")
+		singleLts := SingleLTSPath(scriptDir, d.Name)
 		if err := os.MkdirAll(singleLts, 0755); err != nil {
 			if firstErr == nil {
 				firstErr = err

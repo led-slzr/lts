@@ -126,7 +126,7 @@ func AuditHibernate(scriptDir string, repo Repo, basisBranch string, logFn ...Lo
 	// already covered by the branch loop; this catches uncommitted work,
 	// detached commits, and checkouts living outside the working dir.
 	wts := gitWorktrees(repo.Path)
-	total, violations = auditWorktrees(scriptDir, wts, remoteBase)
+	total, violations = auditWorktrees(scriptDir, SingleLTSPath(scriptDir, repo.Name), wts, remoteBase)
 	if len(violations) > 0 {
 		add(HibernateCheck{Label: fmt.Sprintf("%d/%d worktrees clean", total-len(violations), total),
 			State: CheckFail, Details: violations})
@@ -142,7 +142,7 @@ func AuditHibernate(scriptDir string, repo Repo, basisBranch string, logFn ...Lo
 	// Freed estimate: repo dir + the whole LTS dir (worktrees, modules, meta).
 	audit.FreedBytes = dirSize(repo.Path)
 	if repo.LTSDir != "" {
-		audit.FreedBytes += dirSize(filepath.Join(scriptDir, repo.LTSDir))
+		audit.FreedBytes += dirSize(SingleLTSPath(scriptDir, repo.Name))
 	}
 	log(ctx, fmt.Sprintf("Audit complete — %d blocker(s), %d .env file(s), ~%s",
 		audit.Blockers(), len(audit.EnvFiles), HumanBytes(audit.FreedBytes)), false)
@@ -279,13 +279,19 @@ func gitWorktrees(repoPath string) []Worktree {
 // stranded detached commits. Checkouts outside the working dir are hard
 // blockers: hibernate wouldn't delete them, but deleting the main .git
 // orphans them.
-func auditWorktrees(scriptDir string, wts []Worktree, remoteBase string) (total int, violations []string) {
+func auditWorktrees(scriptDir, ltsPath string, wts []Worktree, remoteBase string) (total int, violations []string) {
 	for _, wt := range wts {
 		if _, err := os.Stat(wt.Path); err != nil {
 			continue // directory already gone — nothing to lose
 		}
 		total++
-		if rel, err := filepath.Rel(canonPath(scriptDir), wt.Path); err != nil || strings.HasPrefix(rel, "..") {
+		// Inside the workspace, or inside this repo's own LTS dir under a
+		// custom LTS_ROOT (hibernate removes that dir too)
+		inWorkspace := func(dir string) bool {
+			rel, err := filepath.Rel(canonPath(dir), wt.Path)
+			return err == nil && !strings.HasPrefix(rel, "..")
+		}
+		if !inWorkspace(scriptDir) && !inWorkspace(ltsPath) {
 			violations = append(violations, wt.Name+" — checkout outside "+scriptDir+" (git worktree remove it first)")
 			continue
 		}
@@ -507,7 +513,7 @@ func HibernateRepo(scriptDir string, repo Repo, logFn ...LogFunc) error {
 		return fmt.Errorf("refusing to remove %q — not directly inside %q", repo.Path, scriptDir)
 	}
 	if repo.LTSDir != "" {
-		ltsPath := filepath.Join(scriptDir, repo.LTSDir)
+		ltsPath := SingleLTSPath(scriptDir, repo.Name)
 		log(ctx, "Removing "+ltsPath, false)
 		if err := os.RemoveAll(ltsPath); err != nil {
 			return fmt.Errorf("remove LTS dir: %w", err)

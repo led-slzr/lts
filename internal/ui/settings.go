@@ -9,7 +9,6 @@ import (
 	"lts-revamp/internal/tools"
 	"lts-revamp/internal/version"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -620,79 +619,21 @@ func (s *SettingsModel) applyChange(item SettingsItem) tea.Cmd {
 
 	var saveErr error
 	if item.RepoName == "" {
-		switch item.Key {
-		case "IDE_COMMAND":
-			s.Config.Global.IDECommand = item.Value
-		case "AI_CLI_COMMAND":
-			s.Config.Global.AICliCommand = item.Value
-		case "PACKAGE_MANAGER":
-			s.Config.Global.PackageManager = item.Value
-		case "AUTO_REFRESH":
-			s.Config.Global.AutoRefresh = item.Value
-		case "TERMINAL":
-			s.Config.Global.Terminal = item.Value
-		case "TERMINAL_MULTIPLEXER":
-			s.Config.Global.Multiplexer = item.Value
-		case "TMUX_AI_PANE_WIDTH":
-			n, err := strconv.Atoi(strings.TrimSpace(item.Value))
-			if err != nil || n < 20 || n > 90 {
-				s.SaveError = "AI pane width must be a number between 20 and 90"
-				s.Items[s.CursorIdx].Value = s.previousValue(item)
-				return nil
-			}
-			s.Config.Global.TmuxAIPaneWidth = n
-		case "TMUX_RIGHT_PANES":
-			if n, err := strconv.Atoi(item.Value); err == nil {
-				s.Config.Global.TmuxRightPanes = n
-			}
-		case "SORT_ORDER":
-			s.Config.Global.SortOrder = item.Value
-		case "DONE_SOUND":
-			s.Config.Global.DoneSound = item.Value
+		// Validation and assignment live in config (shared with `lts config set`)
+		probe := s.Config.Global
+		if err := probe.Set(item.Key, item.Value); err != nil {
+			s.SaveError = strings.Replace(err.Error(), item.Key, item.Label, 1)
+			s.Items[s.CursorIdx].Value = s.previousValue(item)
+			return nil
+		}
+		if item.Key == "DONE_SOUND" {
 			opener.PlayDoneSound(item.Value) // preview on change
-		case "AUTO_CLEAN_MODULES":
-			s.Config.Global.AutoCleanModules = item.Value
-		case "AUTO_KILL_TMUX":
-			s.Config.Global.AutoKillTmux = item.Value
-		case "DAILY_CHECK_FOR_UPDATES":
-			s.Config.Global.CheckForUpdates = item.Value == "true"
-		case "AUTO_UPDATE_NEW_RELEASE":
-			s.Config.Global.AutoUpdate = item.Value == "true"
-		case "OPEN_ENV_IDE":
-			s.Config.Global.OpenEnvInIDE = item.Value == "true"
-		case "NEW_WT_PACKAGE_INSTALL":
-			s.Config.Global.InstallOnCreate = item.Value == "true"
-		case "COPY_ENV_FILES":
-			s.Config.Global.CopyEnvFiles = item.Value == "true"
-		case "COPY_MCP_JSON":
-			s.Config.Global.CopyMCPJson = item.Value == "true"
-		case "ENABLE_HIBERNATE":
-			s.Config.Global.EnableHibernate = item.Value == "true"
-		case "SHOW_HIDDEN_REPOS":
-			s.Config.Global.ShowHiddenRepos = item.Value == "true"
-		case "GITHUB_INTEGRATION":
-			s.Config.Global.GithubIntegration = item.Value == "true"
-		case "LAYOUT":
-			s.Config.Global.Layout = item.Value
-		case "LAUNCH_GREETING":
-			s.Config.Global.LaunchGreeting = item.Value == "true"
-		case "SIZE_SCANNING":
-			s.Config.Global.SizeScanning = item.Value == "true"
 		}
-		saveErr = s.Config.SaveGlobal()
+		// Merge-on-write: never revert values another lts process saved
+		saveErr = s.Config.UpdateGlobal(func(g *config.GlobalConfig) error { return g.Set(item.Key, item.Value) })
 	} else {
-		switch item.Key {
-		case "BASIS_BRANCH":
-			saveErr = s.Config.SetRepoBasisBranch(item.RepoName, item.Value)
-		case "REPO_PACKAGE_MANAGER":
-			pm := item.Value
-			if pm == "default" {
-				pm = ""
-			}
-			saveErr = s.Config.SetRepoPackageManager(item.RepoName, pm)
-		case "REPO_SETUP_SCRIPT":
-			saveErr = s.Config.SetRepoSetupScript(item.RepoName, item.Value)
-		}
+		repoKey := strings.TrimPrefix(item.Key, "REPO_")
+		saveErr = s.Config.SetRepoKey(item.RepoName, repoKey, item.Value)
 	}
 	if saveErr != nil {
 		s.SaveError = "Failed to save: " + saveErr.Error()

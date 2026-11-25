@@ -1,6 +1,7 @@
 package git
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -121,7 +122,28 @@ func ValidateBranchName(branch string) error {
 			return fmt.Errorf("'%s' is a protected branch", branch)
 		}
 	}
+	if strings.HasPrefix(branch, "-") {
+		return fmt.Errorf("branch name cannot start with '-'")
+	}
+	if branch == "HEAD" || branch == "@" || strings.Contains(branch, "@{") {
+		return fmt.Errorf("'%s' is reserved by git", branch)
+	}
+	// git's own rules (.., .lock, ~^:?*[, trailing /, ...)
+	if _, err := RunGit("", "check-ref-format", "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("'%s' is not a valid git branch name (see git check-ref-format)", branch)
+	}
 	return nil
+}
+
+// GitErr renders a RunGit error with git's own stderr message.
+func GitErr(err error) error {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		if msg := strings.TrimSpace(string(ee.Stderr)); msg != "" {
+			return fmt.Errorf("%s", msg)
+		}
+	}
+	return err
 }
 
 // ExtractSuffix gets the part after the last "/" in a branch name.
@@ -450,8 +472,10 @@ func CheckOngoingOperations(repoPath string) error {
 func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, opts WorkspaceOptions, installDeps bool, log *CreateLog) (*CreateResult, error) {
 	repoName := filepath.Base(repoPath)
 	pkgManager := opts.pkgFor(repoName)
-	ltsDir := repoName + "-lts"
-	ltsPath := filepath.Join(scriptDir, ltsDir)
+	ltsPath := SingleLTSPath(scriptDir, repoName)
+	if err := checkLTSDirOwnership(ltsPath, []string{repoName}); err != nil {
+		return nil, err
+	}
 
 	// Create LTS directory
 	if err := os.MkdirAll(ltsPath, 0755); err != nil {
@@ -464,7 +488,7 @@ func CreateSingleRepoWorktree(repoPath, scriptDir, branch, basisBranch string, o
 	}
 
 	// Prune orphaned worktree entries
-	RunGit(repoPath, "worktree", "prune")
+	pruneWorktrees(scriptDir, repoPath)
 
 	// Ensure clean main
 	if err := EnsureCleanMain(repoPath, basisBranch, log); err != nil {
@@ -551,8 +575,12 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	sorted := make([]string, len(repoNames))
 	copy(sorted, repoNames)
 	sort.Strings(sorted)
-	ltsDir := strings.Join(sorted, "-") + "-lts"
+	ltsDir := MonoGroupDirName(sorted)
 	ltsPath := filepath.Join(scriptDir, ltsDir)
+
+	if err := checkLTSDirOwnership(ltsPath, sorted); err != nil {
+		return nil, err
+	}
 
 	// Branch subdirectory: feat/integration → feat-integration
 	branchSubdir := branchDirName
@@ -583,7 +611,7 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 		}
 
 		// Prune and prepare
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(scriptDir, repoPath)
 
 		if err := EnsureCleanMain(repoPath, basisBranch, log); err != nil {
 			log.AddError("Skipping: " + err.Error())
@@ -663,6 +691,41 @@ func CreateMonorepoWorktrees(repoNames []string, scriptDir, branch string, getBa
 	return results, nil
 }
 
+// checkLTSDirOwnership refuses to use an existing *-lts dir that belongs to
+// something else: a real git repo that happens to be named "<x>-lts", or a
+// mono group of a different repo set whose joined name collides
+// ("x" + "y-z" and "x-y" + "z" both make "x-y-z-lts").
+func checkLTSDirOwnership(ltsPath string, repos []string) error {
+	if info, err := os.Stat(filepath.Join(ltsPath, ".git")); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a git repository, not an LTS folder — rename that repo or move it out of the workspace", filepath.Base(ltsPath))
+	}
+	data, err := os.ReadFile(filepath.Join(ltsPath, ".lts-repos"))
+	if err != nil {
+		// No group metadata: a group must not move into a single repo's
+		// LTS dir (a repo literally named "core+erp" owns "core+erp-lts")
+		if len(repos) > 1 {
+			if entries, rerr := os.ReadDir(ltsPath); rerr == nil {
+				for _, e := range entries {
+					if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+						return fmt.Errorf("%s already holds worktrees of another repo — rename that repo to create this group", filepath.Base(ltsPath))
+					}
+				}
+			}
+		}
+		return nil
+	}
+	var existing []string
+	for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			existing = append(existing, l)
+		}
+	}
+	if len(existing) > 0 && !sameRepoSet(existing, repos) {
+		return fmt.Errorf("%s already belongs to the group %s — rename a repo to create this group", filepath.Base(ltsPath), strings.Join(existing, " + "))
+	}
+	return nil
+}
+
 // createWorktreeWithBranchHandling creates a worktree, handling the three cases:
 // 1. Branch exists locally
 // 2. Branch exists on remote only
@@ -680,7 +743,7 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 		}
 		log.Add("Checking out existing local branch " + branch)
 		_, err := RunGit(repoPath, "worktree", "add", wtPath, branch)
-		return err
+		return GitErr(err)
 	}
 
 	// Check if branch exists on remote
@@ -692,13 +755,13 @@ func createWorktreeWithBranchHandling(repoPath, wtPath, branch, mainBranch strin
 			// Fallback: maybe local branch was created between check and add
 			_, err = RunGit(repoPath, "worktree", "add", wtPath, branch)
 		}
-		return err
+		return GitErr(err)
 	}
 
 	// New branch from main
 	log.Add("Creating new branch " + branch + " from " + mainBranch)
 	_, err := RunGit(repoPath, "worktree", "add", "-b", branch, wtPath, mainBranch)
-	return err
+	return GitErr(err)
 }
 
 // findExactEnvFiles returns relative paths of files named exactly ".env" under root,
@@ -1205,7 +1268,7 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 			if gitErr != nil {
 				log(ctx, "Git remove failed for "+e.Name()+", removing manually", true)
 				os.RemoveAll(wtPath)
-				RunGit(repoPath, "worktree", "prune")
+				pruneWorktrees(scriptDir, repoPath)
 			}
 		} else {
 			log(ctx, "Could not resolve repo for "+e.Name()+", removing manually", true)
@@ -1214,12 +1277,18 @@ func DeleteMonorepoWorktree(scriptDir, branchSubdir, branch string, repoNames []
 
 		// Delete the branch in this repo
 		if repoPath != "" && branch != "" && !IsProtectedBranch(branch) {
+			remoteOnly := 0
+			if deleteRemote {
+				remoteOnly = RemoteOnlyCommits(repoPath, branch, "refs/heads/"+branch)
+			}
 			if deleteLocal {
 				log(ctx, "Deleting local branch in "+filepath.Base(repoPath), false)
 				RunGit(repoPath, "branch", "-D", branch)
 			}
 
-			if deleteRemote {
+			if deleteRemote && remoteOnly > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s in %s: it has %d commit(s) that exist only on the remote", branch, filepath.Base(repoPath), remoteOnly), true)
+			} else if deleteRemote {
 				log(ctx, "Deleting remote branch in "+filepath.Base(repoPath), false)
 				RunGit(repoPath, "push", "origin", "--delete", branch)
 			}
@@ -1273,7 +1342,7 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 
 	if _, err := os.Stat(wtPath); os.IsNotExist(err) {
 		log(ctx, "Worktree directory missing — pruning git refs", false)
-		RunGit(repoPath, "worktree", "prune")
+		pruneWorktrees(filepath.Dir(repoPath), repoPath)
 	} else {
 		log(ctx, "Removing worktree directory", false)
 		_, err := RunGit(repoPath, "worktree", "remove", "--force", wtPath)
@@ -1282,8 +1351,14 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 			if isWorktreeDir(wtPath) {
 				os.RemoveAll(wtPath)
 			}
-			RunGit(repoPath, "worktree", "prune")
+			pruneWorktrees(filepath.Dir(repoPath), repoPath)
 		}
+	}
+
+	// Decide about the remote before the local ref goes away
+	remoteOnly := 0
+	if deleteRemote && branch != "" {
+		remoteOnly = RemoteOnlyCommits(repoPath, branch, "refs/heads/"+branch)
 	}
 
 	if deleteLocal && branch != "" && !IsProtectedBranch(branch) {
@@ -1292,8 +1367,12 @@ func DeleteWorktree(repoPath, wtPath, branch string, deleteLocal, deleteRemote b
 	}
 
 	if deleteRemote && branch != "" && !IsProtectedBranch(branch) {
-		log(ctx, "Deleting remote branch", false)
-		RunGit(repoPath, "push", "origin", "--delete", branch)
+		if remoteOnly > 0 {
+			log(ctx, fmt.Sprintf("Kept origin/%s: it has %d commit(s) that exist only on the remote", branch, remoteOnly), true)
+		} else {
+			log(ctx, "Deleting remote branch", false)
+			RunGit(repoPath, "push", "origin", "--delete", branch)
+		}
 	}
 
 	// Clean up empty parent directories inside -lts structure
@@ -1366,16 +1445,37 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		ctx = filepath.Base(wtPath)
 	}
 
+	// A rebase/merge/cherry-pick the user is in the middle of must never be
+	// aborted by us (the abort below would discard their progress)
+	if err := CheckOngoingOperations(wtPath); err != nil {
+		return err
+	}
+
 	log(ctx, "Checking for uncommitted changes...", false)
 	status, _ := RunGit(wtPath, "status", "--porcelain")
-	hasChanges := status != ""
 
-	if hasChanges {
+	// The stash stack is shared by every worktree of a repo, so only ever
+	// restore the exact stash this rebase created (looked up by SHA). A
+	// status that is only untracked files makes `git stash push` save
+	// nothing — popping then would grab someone else's stash.
+	stashSHA := ""
+	if status != "" {
+		before, _ := RunGit(wtPath, "rev-parse", "-q", "--verify", "refs/stash")
 		log(ctx, "Stashing uncommitted changes", false)
 		_, err := RunGit(wtPath, "stash", "push", "-m", "lts-rebase-auto-stash")
 		if err != nil {
 			return fmt.Errorf("failed to stash changes: %w", err)
 		}
+		if after, _ := RunGit(wtPath, "rev-parse", "-q", "--verify", "refs/stash"); after != "" && after != before {
+			stashSHA = after
+		}
+	}
+	restore := func() error {
+		if stashSHA == "" {
+			return nil
+		}
+		log(ctx, "Restoring stashed changes", false)
+		return popStashBySHA(wtPath, stashSHA)
 	}
 
 	log(ctx, "Rebasing onto "+mainBranch+"...", false)
@@ -1384,12 +1484,8 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		log(ctx, "Rebase conflict detected — aborting", true)
 		_, abortErr := RunGit(wtPath, "rebase", "--abort")
 
-		if hasChanges {
-			log(ctx, "Restoring stashed changes", false)
-			_, popErr := RunGit(wtPath, "stash", "pop")
-			if popErr != nil {
-				return fmt.Errorf("rebase conflict — aborted, but failed to restore stashed changes (run 'git stash pop' manually)")
-			}
+		if popErr := restore(); popErr != nil {
+			return fmt.Errorf("rebase conflict — aborted, but failed to restore stashed changes (run 'git stash list' and pop %s manually)", shortSHA(stashSHA))
 		}
 
 		if abortErr != nil {
@@ -1398,12 +1494,8 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 		return fmt.Errorf("rebase conflict — aborted, changes restored")
 	}
 
-	if hasChanges {
-		log(ctx, "Restoring stashed changes", false)
-		_, popErr := RunGit(wtPath, "stash", "pop")
-		if popErr != nil {
-			return fmt.Errorf("rebase succeeded but failed to restore stashed changes (run 'git stash pop' manually)")
-		}
+	if popErr := restore(); popErr != nil {
+		return fmt.Errorf("rebase succeeded but failed to restore stashed changes (run 'git stash list' and pop %s manually)", shortSHA(stashSHA))
 	}
 
 	log(ctx, "Rebase complete", false)
@@ -1425,6 +1517,33 @@ func RebaseWorktree(wtPath, mainBranch, pkgManager string, logFn ...LogFunc) err
 	}
 
 	return nil
+}
+
+// popStashBySHA pops the stash entry whose commit is sha (wherever it now
+// sits in the shared stack).
+func popStashBySHA(dir, sha string) error {
+	list, err := RunGit(dir, "stash", "list", "--format=%H")
+	if err != nil {
+		return err
+	}
+	for i, l := range strings.Split(list, "\n") {
+		if strings.TrimSpace(l) == sha {
+			_, err := RunGit(dir, "stash", "pop", "--index", fmt.Sprintf("stash@{%d}", i))
+			if err != nil {
+				// --index can fail when staged state no longer applies; retry plain
+				_, err = RunGit(dir, "stash", "pop", fmt.Sprintf("stash@{%d}", i))
+			}
+			return err
+		}
+	}
+	return fmt.Errorf("stash %s not found", shortSHA(sha))
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 10 {
+		return sha[:10]
+	}
+	return sha
 }
 
 // RenameResult holds the outcome of a worktree rename operation.
@@ -1474,7 +1593,9 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 				RunGit(wtPath, "branch", "-m", oldBranch)
 				return nil, fmt.Errorf("move worktree directory failed: %w", err2)
 			}
-			RunGit(repoPath, "worktree", "repair")
+			// repair needs the NEW path, or git keeps the old one and a later
+			// prune unregisters this worktree
+			RunGit(repoPath, "worktree", "repair", newWtPath)
 		}
 	}
 
@@ -1505,9 +1626,13 @@ func RenameWorktree(repoPath, wtPath, oldBranch, newBranch string, renameRemote 
 			// Set upstream tracking to the new remote branch
 			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
 
-			log(ctx, "Deleting old remote branch", false)
-			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
-				log(ctx, "Delete old remote branch failed: "+err.Error(), true)
+			if n := RemoteOnlyCommits(newWtPath, oldBranch, "refs/heads/"+newBranch); n > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s: it has %d commit(s) that exist only on the remote", oldBranch, n), true)
+			} else {
+				log(ctx, "Deleting old remote branch", false)
+				if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
+					log(ctx, "Delete old remote branch failed: "+err.Error(), true)
+				}
 			}
 		}
 	}
@@ -1601,7 +1726,7 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 					log(ctx, "Move failed for "+wt.repoName+": "+err2.Error(), true)
 					continue
 				}
-				RunGit(wt.repoPath, "worktree", "repair")
+				RunGit(wt.repoPath, "worktree", "repair", newWtPath)
 			}
 			worktrees[i].path = newWtPath
 		}
@@ -1639,9 +1764,11 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 		} else {
 			renameWorktreeMeta(ltsPath, filepath.Base(branchSubdirPath), newBranchDirName)
 		}
-		// Repair all worktrees after moving the parent directory
+		// Repair every worktree at its NEW path after moving the parent
+		// directory (a bare `repair` can't find moved worktrees; git would
+		// keep the old paths and the next prune would unregister them)
 		for _, wt := range worktrees {
-			RunGit(wt.repoPath, "worktree", "repair")
+			RunGit(wt.repoPath, "worktree", "repair", filepath.Join(newBranchSubdirPath, filepath.Base(wt.path)))
 		}
 	}
 
@@ -1660,6 +1787,10 @@ func RenameMonorepoWorktrees(scriptDir, branchSubdirPath string, repoNames []str
 			}
 			RunGit(newWtPath, "branch", "--set-upstream-to", "origin/"+newBranch)
 
+			if n := RemoteOnlyCommits(newWtPath, oldBranch, "refs/heads/"+newBranch); n > 0 {
+				log(ctx, fmt.Sprintf("Kept origin/%s for %s: it has %d commit(s) that exist only on the remote", oldBranch, wt.repoName, n), true)
+				continue
+			}
 			log(ctx, "Deleting old remote branch for "+wt.repoName, false)
 			if _, err := RunGit(newWtPath, "push", "origin", "--delete", oldBranch); err != nil {
 				log(ctx, "Delete old remote failed for "+wt.repoName+": "+err.Error(), true)
@@ -1934,8 +2065,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	}
 
 	// Setup LTS directory
-	ltsDir := repoName + "-lts"
-	ltsPath := filepath.Join(scriptDir, ltsDir)
+	ltsPath := SingleLTSPath(scriptDir, repoName)
 	if err := os.MkdirAll(ltsPath, 0755); err != nil {
 		// Try to restore the original state: switch back then pop
 		_, coErr := RunGit(repoPath, "checkout", currentBranch)
@@ -1948,7 +2078,7 @@ func MigrateToWorktree(repoPath, scriptDir, basisBranch string, opts WorkspaceOp
 	}
 
 	// Prune orphaned worktree entries
-	RunGit(repoPath, "worktree", "prune")
+	pruneWorktrees(scriptDir, repoPath)
 
 	// Generate worktree name: feat/login → feat-login
 	wtName := generateUniqueName(BranchToDirName(currentBranch), ltsPath)
@@ -2049,24 +2179,20 @@ func IsProtectedBranch(branch string) bool {
 // NeedsMigration checks if any LTS directories use the old naming convention.
 // Fast: only does stat checks and reads a single branch per LTS dir.
 func NeedsMigration(scriptDir string) bool {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return false
+	if NeedsGroupRename(scriptDir) {
+		return true
 	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
-			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			repoName := strings.TrimSuffix(d.name, "-lts")
 			if hasMismatchedSingleDirs(ltsPath, repoName) {
 				return true
 			}
 		} else {
-			if hasMismatchedMonorepoDirs(ltsPath, scriptDir, e.Name()) {
+			if hasMismatchedMonorepoDirs(ltsPath, scriptDir, d.name) {
 				return true
 			}
 		}
@@ -2154,7 +2280,14 @@ func planLegacyGroup(ltsPath, subdirName string, repoNames []string) legacyGroup
 	if err != nil {
 		return legacyGroupPlan{}
 	}
+	// Legacy subdir names were built from the pre-v3.2 "-"-joined group
+	// name — derive it from the repo set, not the (possibly renamed) dir
 	ltsPrefix := strings.TrimSuffix(filepath.Base(ltsPath), "-lts")
+	if len(repoNames) > 1 {
+		sorted := append([]string(nil), repoNames...)
+		sort.Strings(sorted)
+		ltsPrefix = strings.Join(sorted, "-")
+	}
 
 	var plan legacyGroupPlan
 	needs := false
@@ -2215,25 +2348,19 @@ func matchRepoPrefix(name string, repoNames []string) string {
 // MigrateDirectoryStructure renames old-style LTS directories to the new convention.
 // Returns the number of directories migrated.
 func MigrateDirectoryStructure(scriptDir string) int {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return 0
-	}
+	renamed := len(MigrateGroupDirNames(scriptDir))
 
-	migrated := 0
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	migrated := renamed
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
-			repoName := strings.TrimSuffix(e.Name(), "-lts")
+			repoName := strings.TrimSuffix(d.name, "-lts")
 			repoPath := filepath.Join(scriptDir, repoName)
 			migrated += migrateSingleLTS(ltsPath, repoPath, repoName)
 		} else {
-			repoNames := getLTSRepos(scriptDir, e.Name())
+			repoNames := getLTSRepos(scriptDir, d.name)
 			migrated += migrateMonorepoLTS(ltsPath, scriptDir, repoNames)
 		}
 	}
@@ -2277,7 +2404,7 @@ func migrateSingleLTS(ltsPath, repoPath, repoName string) int {
 			if err2 := os.Rename(dirPath, newPath); err2 != nil {
 				continue
 			}
-			RunGit(repoPath, "worktree", "repair")
+			RunGit(repoPath, "worktree", "repair", newPath)
 		}
 
 		renameWorktreeMeta(ltsPath, e.Name(), expectedName)
@@ -2359,7 +2486,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 					allWorktreesMigrated = false
 					continue
 				}
-				RunGit(repoPath, "worktree", "repair")
+				RunGit(repoPath, "worktree", "repair", newWtPath)
 			}
 
 			// Rename individual workspace and update its contents
@@ -2388,7 +2515,7 @@ func migrateMonorepoLTS(ltsPath, scriptDir string, repoNames []string) int {
 					subdirRenamed = true
 					// Repair all worktrees after parent move
 					for _, rn := range repoNames {
-						RunGit(filepath.Join(scriptDir, rn), "worktree", "repair")
+						RepairLinks(scriptDir, filepath.Join(scriptDir, rn))
 					}
 					migrated++
 				}
@@ -2460,16 +2587,9 @@ func replaceDisplaySuffix(content, oldSuffix, newSuffix string) string {
 
 // NeedsWorkspaceRepair quickly checks if any .code-workspace files have stale paths.
 func NeedsWorkspaceRepair(scriptDir string) bool {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
 			if hasStaleWorkspaces(ltsPath) {
@@ -2655,18 +2775,11 @@ var wsFolderNameRe = regexp.MustCompile(`"name":\s*"([^"]+?) - ([A-Za-z0-9_.-]+)
 // by a previous migration that renamed directories without updating file contents.
 // Returns the number of workspace files repaired.
 func RepairWorkspaceContents(scriptDir string) int {
-	entries, err := os.ReadDir(scriptDir)
-	if err != nil {
-		return 0
-	}
 
 	repaired := 0
-	for _, e := range entries {
-		if !e.IsDir() || !strings.HasSuffix(e.Name(), "-lts") {
-			continue
-		}
-		ltsPath := filepath.Join(scriptDir, e.Name())
-		ltsType := getLTSType(scriptDir, e.Name())
+	for _, d := range allLTSDirs(scriptDir) {
+		ltsPath := filepath.Join(d.root, d.name)
+		ltsType := getLTSType(d.root, d.name)
 
 		if ltsType == "single" {
 			repaired += repairSingleWorkspaces(ltsPath)

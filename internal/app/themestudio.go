@@ -1,6 +1,7 @@
 package app
 
 import (
+	"lts-revamp/internal/config"
 	"lts-revamp/internal/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -47,8 +48,9 @@ func handleThemeStudioKey(m Model, msg tea.KeyMsg) (Model, tea.Cmd) {
 		t := ui.Themes[m.themeStudio.Cursor]
 		ui.ApplyTheme(t)
 		m.themeStudio.Active = false
-		m.config.Global.Theme = t.Key
-		m.config.SaveGlobal()
+		key := t.Key
+		m.config.Global.Theme = key
+		m.config.UpdateGlobal(func(g *config.GlobalConfig) error { g.Theme = key; return nil })
 		m = m.reopenSettings()
 		m.settings.SaveStatus = "Theme: " + t.Name
 		return m, nil

@@ -1,6 +1,9 @@
 package ui
 
 import (
+	"os"
+
+	"lts-revamp/internal/agentskills"
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/version"
 	"strings"
@@ -30,8 +33,10 @@ type SetupModel struct {
 	custom    bool // typing custom value
 	input     textinput.Model
 	config    config.GlobalConfig
-	width     int
-	height    int
+	// skillsChoice: "" (step not shown), "hooks", "skills", "none"
+	skillsChoice string
+	width        int
+	height       int
 }
 
 func NewSetup() SetupModel {
@@ -40,75 +45,88 @@ func NewSetup() SetupModel {
 	ti.Width = 40
 	ti.Placeholder = "type your command..."
 
-	return SetupModel{
-		steps: []setupStep{
-			{
-				Question:  "What IDE do you use?",
-				ConfigKey: "IDE_COMMAND",
-				Options: []setupOption{
-					{Label: "Windsurf", Value: "windsurf"},
-					{Label: "VS Code", Value: "code"},
-					{Label: "Cursor", Value: "cursor"},
-					{Label: "Zed", Value: "zed"},
-					{Label: "Other (type command)", Value: "", IsCustom: true},
-				},
-			},
-			{
-				Question:  "What terminal do you use?",
-				ConfigKey: "TERMINAL",
-				Options: []setupOption{
-					{Label: "Default (system)", Value: "terminal"},
-					{Label: "Ghostty", Value: "ghostty"},
-					{Label: "iTerm2", Value: "iterm"},
-					{Label: "WezTerm", Value: "wezterm"},
-					{Label: "Alacritty", Value: "alacritty"},
-					{Label: "Kitty", Value: "kitty"},
-					{Label: "Other (type command)", Value: "", IsCustom: true},
-				},
-			},
-			{
-				Question:  "What AI code assistant do you use?",
-				ConfigKey: "AI_CLI_COMMAND",
-				Options: []setupOption{
-					{Label: "Claude", Value: "claude"},
-					{Label: "Claude (skip permissions)", Value: "claude --dangerously-skip-permissions"},
-					{Label: "OpenCode", Value: "opencode"},
-					{Label: "None", Value: ""},
-					{Label: "Other (type command)", Value: "", IsCustom: true},
-				},
-			},
-			{
-				Question:  "What package manager do you prefer?",
-				ConfigKey: "PACKAGE_MANAGER",
-				Options: []setupOption{
-					{Label: "pnpm", Value: "pnpm"},
-					{Label: "npm", Value: "npm"},
-					{Label: "yarn", Value: "yarn"},
-					{Label: "bun", Value: "bun"},
-				},
-			},
-			{
-				Question:  "Auto-refresh interval for repos?",
-				ConfigKey: "AUTO_REFRESH",
-				Options: []setupOption{
-					{Label: "Off (manual only)", Value: "OFF"},
-					{Label: "Every 15 minutes", Value: "15M"},
-					{Label: "Every 30 minutes", Value: "30M"},
-					{Label: "Every hour", Value: "1H"},
-					{Label: "Every 6 hours", Value: "6H"},
-					{Label: "Every 24 hours", Value: "24H"},
-				},
-			},
-			{
-				Question:  "Automatically check for LTS updates? (daily)",
-				ConfigKey: "DAILY_CHECK_FOR_UPDATES",
-				Options: []setupOption{
-					{Label: "Yes — check daily and auto-update", Value: "both"},
-					{Label: "Yes — check daily and notify me", Value: "check_only"},
-					{Label: "No — I'll update manually", Value: "none"},
-				},
+	steps := []setupStep{
+		{
+			Question:  "What IDE do you use?",
+			ConfigKey: "IDE_COMMAND",
+			Options: []setupOption{
+				{Label: "Windsurf", Value: "windsurf"},
+				{Label: "VS Code", Value: "code"},
+				{Label: "Cursor", Value: "cursor"},
+				{Label: "Zed", Value: "zed"},
+				{Label: "Other (type command)", Value: "", IsCustom: true},
 			},
 		},
+		{
+			Question:  "What terminal do you use?",
+			ConfigKey: "TERMINAL",
+			Options: []setupOption{
+				{Label: "Default (system)", Value: "terminal"},
+				{Label: "Ghostty", Value: "ghostty"},
+				{Label: "iTerm2", Value: "iterm"},
+				{Label: "WezTerm", Value: "wezterm"},
+				{Label: "Alacritty", Value: "alacritty"},
+				{Label: "Kitty", Value: "kitty"},
+				{Label: "Other (type command)", Value: "", IsCustom: true},
+			},
+		},
+		{
+			Question:  "What AI code assistant do you use?",
+			ConfigKey: "AI_CLI_COMMAND",
+			Options: []setupOption{
+				{Label: "Claude", Value: "claude"},
+				{Label: "Claude (skip permissions)", Value: "claude --dangerously-skip-permissions"},
+				{Label: "OpenCode", Value: "opencode"},
+				{Label: "None", Value: ""},
+				{Label: "Other (type command)", Value: "", IsCustom: true},
+			},
+		},
+		{
+			Question:  "What package manager do you prefer?",
+			ConfigKey: "PACKAGE_MANAGER",
+			Options: []setupOption{
+				{Label: "pnpm", Value: "pnpm"},
+				{Label: "npm", Value: "npm"},
+				{Label: "yarn", Value: "yarn"},
+				{Label: "bun", Value: "bun"},
+			},
+		},
+		{
+			Question:  "Auto-refresh interval for repos?",
+			ConfigKey: "AUTO_REFRESH",
+			Options: []setupOption{
+				{Label: "Off (manual only)", Value: "OFF"},
+				{Label: "Every 15 minutes", Value: "15M"},
+				{Label: "Every 30 minutes", Value: "30M"},
+				{Label: "Every hour", Value: "1H"},
+				{Label: "Every 6 hours", Value: "6H"},
+				{Label: "Every 24 hours", Value: "24H"},
+			},
+		},
+		{
+			Question:  "Automatically check for LTS updates? (daily)",
+			ConfigKey: "DAILY_CHECK_FOR_UPDATES",
+			Options: []setupOption{
+				{Label: "Yes — check daily and auto-update", Value: "both"},
+				{Label: "Yes — check daily and notify me", Value: "check_only"},
+				{Label: "No — I'll update manually", Value: "none"},
+			},
+		},
+	}
+	// Offer the agent skills only to Claude Code users
+	if _, err := os.Stat(agentskills.ClaudeDir()); err == nil {
+		steps = append(steps, setupStep{
+			Question:  "Install LTS skills for Claude Code? (teaches agents to use LTS safely)",
+			ConfigKey: "AGENT_SKILLS",
+			Options: []setupOption{
+				{Label: "Yes — skills + session context hook", Value: "hooks"},
+				{Label: "Skills only", Value: "skills"},
+				{Label: "No (later: lts skill install)", Value: "none"},
+			},
+		})
+	}
+	return SetupModel{
+		steps:  steps,
 		config: config.DefaultGlobal(),
 		input:  ti,
 	}
@@ -201,6 +219,8 @@ func (s *SetupModel) applyOption(value string) {
 		s.config.PackageManager = value
 	case "AUTO_REFRESH":
 		s.config.AutoRefresh = value
+	case "AGENT_SKILLS":
+		s.skillsChoice = value
 	case "DAILY_CHECK_FOR_UPDATES":
 		switch value {
 		case "both":
@@ -228,6 +248,10 @@ func (s SetupModel) advance() (tea.Model, tea.Cmd) {
 			Local:  make(map[string]config.RepoLocalConfig),
 		}
 		cfg.SaveGlobal()
+		if s.skillsChoice == "hooks" || s.skillsChoice == "skills" {
+			// Best effort: a failure here must not block first run
+			agentskills.Install(agentskills.Options{Hooks: s.skillsChoice == "hooks"})
+		}
 		return s, tea.Quit
 	}
 	return s, nil

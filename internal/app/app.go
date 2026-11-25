@@ -1,17 +1,17 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+	"lts-revamp/internal/core"
+	"lts-revamp/internal/lock"
 	"math/rand/v2"
 	"os"
-	"sort"
-	"strconv"
 
 	"lts-revamp/internal/config"
 	"lts-revamp/internal/gh"
 	"lts-revamp/internal/git"
 	"lts-revamp/internal/opener"
-	"lts-revamp/internal/tools"
 	"lts-revamp/internal/ui"
 	"lts-revamp/internal/update"
 	"lts-revamp/internal/version"
@@ -111,6 +111,13 @@ type Model struct {
 	// thread touches this map.
 	busy map[string]string
 
+	// Cross-process locks (internal/lock) this TUI holds, and repos locked
+	// by another lts process (repo → owner, polled every lockPollInterval).
+	// The CLI and other TUIs see heldLocks; extBusy makes this TUI treat
+	// their repos as busy.
+	heldLocks map[string]*lock.Held
+	extBusy   map[string]string
+
 	// Live LTS tmux sessions (session name → alive), for the ● indicators
 	tmuxLive map[string]bool
 
@@ -178,6 +185,7 @@ type Model struct {
 }
 
 func NewModel(cfg config.Config) Model {
+	core.ApplyLTSRoots(&cfg)
 	ti := textinput.New()
 	ti.Placeholder = "new-branch-name"
 	ti.CharLimit = 100
@@ -215,6 +223,8 @@ func NewModel(cfg config.Config) Model {
 		greeting:          launchGreeting(cfg),
 		ghState:           ghAvailability(cfg.Global.GithubIntegration),
 		busy:              make(map[string]string),
+		heldLocks:         make(map[string]*lock.Held),
+		extBusy:           make(map[string]string),
 		sizeCache:         make(map[string]sizeEntry),
 		logPanel:          ui.NewLogPanel(),
 		logChan:           make(chan LogEntryMsg, 64),
@@ -441,84 +451,11 @@ func (m *Model) ensureExplorerRepoVisible() {
 	}
 }
 
-// repoActivity returns a repo's newest worktree activity (for sorting).
-func repoActivity(r git.Repo) int64 {
-	var newest int64
-	for _, wt := range r.Worktrees {
-		if wt.LastActivity > newest {
-			newest = wt.LastActivity
-		}
-	}
-	return newest
-}
-
-// repoCreated returns a repo's newest worktree creation time (for sorting).
-func repoCreated(r git.Repo) int64 {
-	var newest int64
-	for _, wt := range r.Worktrees {
-		if wt.CreatedAt > newest {
-			newest = wt.CreatedAt
-		}
-	}
-	return newest
-}
-
-// sortRepos orders repos (Board cards / Explorer sidebar) and each repo's
-// worktrees by the configured sort: newest activity first (default), newest
-// created first, or alphabetical. Name breaks ties so ordering is stable;
-// unknown timestamps sink to the bottom.
-func sortRepos(repos []git.Repo, order string) {
-	repoKey := repoActivity
-	wtKey := func(wt git.Worktree) int64 { return wt.LastActivity }
-	switch order {
-	case "name":
-		repoKey = nil
-	case "created":
-		repoKey = repoCreated
-		wtKey = func(wt git.Worktree) int64 { return wt.CreatedAt }
-	}
-
-	sort.SliceStable(repos, func(i, j int) bool {
-		if repoKey != nil {
-			ki, kj := repoKey(repos[i]), repoKey(repos[j])
-			if ki != kj {
-				return ki > kj
-			}
-		}
-		return repos[i].Name < repos[j].Name
-	})
-	for ri := range repos {
-		wts := repos[ri].Worktrees
-		sort.SliceStable(wts, func(i, j int) bool {
-			if repoKey != nil {
-				ki, kj := wtKey(wts[i]), wtKey(wts[j])
-				if ki != kj {
-					return ki > kj
-				}
-			}
-			return wts[i].Branch < wts[j].Branch
-		})
-	}
-}
+// Repo ordering is shared with the CLI (internal/core).
+var sortRepos = core.SortRepos
 
 // ageDuration parses maintenance age options ("8H", "1D"); "OFF"/"" = 0.
-func ageDuration(v string) time.Duration {
-	v = strings.ToUpper(strings.TrimSpace(v))
-	if v == "" || v == "OFF" || len(v) < 2 {
-		return 0
-	}
-	n, err := strconv.Atoi(v[:len(v)-1])
-	if err != nil || n <= 0 {
-		return 0
-	}
-	switch v[len(v)-1] {
-	case 'H':
-		return time.Duration(n) * time.Hour
-	case 'D':
-		return time.Duration(n) * 24 * time.Hour
-	}
-	return 0
-}
+func ageDuration(v string) time.Duration { return config.ParseAge(v) }
 
 // maintenanceCandidates returns the worktree paths idle for longer than
 // maxAge (by LastActivity) plus the repo locks cleaning them requires.
@@ -562,6 +499,10 @@ func (m *Model) startAutoMaintenance() tea.Cmd {
 		paths, locks = m.maintenanceCandidates(modAge)
 	}
 	if len(paths) == 0 && tmuxAge == 0 {
+		return nil
+	}
+	if !m.lockOrRefuse("Auto-maintenance...", locks...) {
+		m.statusMsg = "" // background sweep: just retry next hour
 		return nil
 	}
 	logFn, startCmd := m.beginOp("Auto-maintenance...", locks...)
@@ -815,21 +756,20 @@ func clickUsageString(u opener.ClickUsage) string {
 // it's "where I left off" state restored on the next launch.
 func (m *Model) setClickUsage(u opener.ClickUsage) {
 	m.clickUsage = u
-	m.config.Global.ClickUsage = clickUsageString(u)
-	m.config.SaveGlobal()
+	v := clickUsageString(u)
+	m.config.UpdateGlobal(func(g *config.GlobalConfig) error { g.ClickUsage = v; return nil })
 }
 
 // toggleLayout switches Board ↔ Explorer and persists the choice.
 func (m *Model) toggleLayout() {
+	next := "explorer"
 	if m.config.Global.Layout == "explorer" {
-		m.config.Global.Layout = "board"
-	} else {
-		m.config.Global.Layout = "explorer"
-		if m.explorer.SelectedWT < 0 && len(m.repos) > 0 && len(m.repos[0].Worktrees) > 0 {
-			m.explorer.SelectedWT = 0
-		}
+		next = "board"
+	} else if m.explorer.SelectedWT < 0 && len(m.repos) > 0 && len(m.repos[0].Worktrees) > 0 {
+		m.explorer.SelectedWT = 0
 	}
-	m.config.SaveGlobal()
+	m.config.Global.Layout = next
+	m.config.UpdateGlobal(func(g *config.GlobalConfig) error { g.Layout = next; return nil })
 	m.statusMsg = "Layout: " + m.config.Global.Layout
 }
 
@@ -856,7 +796,7 @@ func (m *Model) recomputeLayout() {
 
 	// Header (includes status line) — fixed, not scrollable
 	m.headerView = ui.RenderHeader(m.width, m.clickUsage, m.usageLabels(), ui.HeaderOpts{
-		Loading:            m.anyBusy(),
+		Loading:            m.ownBusy(),
 		Frame:              m.loaderFrame,
 		StatusMsg:          m.statusMsg,
 		VersionHovered:     m.versionHovered,
@@ -968,6 +908,8 @@ func (m Model) Init() tea.Cmd {
 		loaderTickCmd(),
 		listenForLogs(m.logChan), // persistent listener for all operations
 		maintenanceTickCmd(),     // hourly auto-maintenance re-check
+		lockPollTickCmd(),        // notice repos locked by other lts processes
+		autoRefreshTickCmd(),     // AUTO_REFRESH: refresh repos past their interval
 	}
 	if m.config.Global.GithubIntegration && gh.Available() {
 		cmds = append(cmds, ghUserCmd())
@@ -1009,7 +951,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 
 	case LoaderTickMsg:
-		if m.initialLoad || m.anyBusy() {
+		if m.initialLoad || m.ownBusy() {
 			m.loaderFrame++
 			m.recomputeLayout()
 			return m, loaderTickCmd()
@@ -1041,7 +983,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "RESET_SETUP_ACTION":
 			// Resetting exec-relaunches the process — it would kill
 			// running operations mid-flight
-			if m.anyBusy() {
+			if m.ownBusy() {
 				m.settings.SaveError = "Wait for running operations to finish"
 				return m, nil
 			}
@@ -1229,6 +1171,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recomputeLayout()
 		return m, loadReposCmd(&m.config)
 
+	case AutoRefreshTickMsg:
+		return m.autoRefresh()
+
+	case AutoRefreshDoneMsg:
+		m.clearBusy(msg.Locked...)
+		now := time.Now().Unix()
+		for _, name := range msg.Refreshed {
+			m.config.SetRepoLastRefresh(name, now)
+		}
+		if len(msg.Failed) > 0 {
+			m.statusMsg = fmt.Sprintf("Auto-refresh: %d repo(s) refreshed, failed: %s", len(msg.Refreshed), strings.Join(msg.Failed, ", "))
+		} else {
+			m.statusMsg = fmt.Sprintf("Auto-refreshed %s", strings.Join(msg.Refreshed, ", "))
+		}
+		m.recomputeLayout()
+		return m, tea.Batch(loadReposCmd(&m.config), clearStatusCmd(), autoRefreshTickCmd())
+
+	case LockPollMsg:
+		if m.pollExternalLocks() {
+			m.recomputeLayout()
+		}
+		return m, lockPollTickCmd()
+
 	case MaintenanceTickMsg:
 		// Re-evaluate hourly so instances left running still sweep items
 		// that cross their age threshold after launch
@@ -1342,7 +1307,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case StatusClearMsg:
 		// Gen 0 = legacy (always clear). Gen > 0 = only clear if matching current gen.
-		if !m.anyBusy() && (msg.Gen == 0 || msg.Gen == m.statusGen) {
+		if !m.ownBusy() && (msg.Gen == 0 || msg.Gen == m.statusGen) {
 			m.statusMsg = ""
 			m.recomputeLayout()
 		}
@@ -1428,6 +1393,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, clearStatusCmd()
 		}
 		lock := []string{dirName}
+		if !m.lockOrRefuse("Cloning "+name+"...", lock...) {
+			return m, clearStatusCmd()
+		}
 		logFn, startCmd := m.beginOp("Cloning "+name+"...", lock...)
 		return m, tea.Batch(startCmd, cloneRepoCmd(logFn, name, m.config.WorkDir, lock))
 
@@ -1521,6 +1489,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.recomputeLayout()
 					return m, clearStatusCmd()
 				}
+			}
+			if !m.lockOrRefuse("Creating "+msg.Branch+"...", msg.RepoNames...) {
+				return m, clearStatusCmd()
 			}
 			logFn, startCmd := m.beginOp("Creating "+msg.Branch+"...", msg.RepoNames...)
 			return m, tea.Batch(startCmd, createWorktreeCmd(logFn, msg.RepoNames, msg.Branch, msg.InstallDeps, &m.config))
@@ -2254,6 +2225,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if !m.anyBusy() {
 			if m.hoveredBtn == ui.BtnRefreshAll && len(m.repos) > 0 {
 				lock := m.allRepoNames()
+				if !m.lockOrRefuse("Refreshing all repos...", lock...) {
+					return m, clearStatusCmd()
+				}
 				logFn, startCmd := m.beginOp("Refreshing all repos...", lock...)
 				return m, tea.Batch(startCmd, refreshAllCmd(logFn, &m.config, lock))
 			}
@@ -2305,6 +2279,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			repo := m.repos[m.focusedCard]
 			if repo.NeedsMigration && repo.Path != "" && !m.repoBusy(repo) {
 				lock := lockSet(repo)
+				if !m.lockOrRefuse("Migrating "+repo.Name+"...", lock...) {
+					return m, clearStatusCmd()
+				}
 				logFn, startCmd := m.beginOp("Migrating "+repo.Name+"...", lock...)
 				return m, tea.Batch(startCmd, migrateCmd(logFn, repo.Path, &m.config, lock))
 			}
@@ -2640,36 +2617,11 @@ func (m Model) renderOpenPromptDialog() string {
 }
 
 // deleteWarning returns a warning message and whether the status is dangerous (requires typing DELETE).
-func deleteWarning(status git.WTStatus) (warning string, dangerous bool) {
-	switch status {
-	case git.StatusChanged:
-		return "Uncommitted changes will be LOST", true
-	case git.StatusDiverged:
-		return "CRITICAL: Unpushed commits will be permanently lost", true
-	case git.StatusToPush:
-		return "Unpushed commits will be LOST", true
-	case git.StatusNoRemote:
-		return "Branch was never pushed — ALL work will be LOST", true
-	case git.StatusMergedDirty:
-		return "Uncommitted changes will be LOST (branch is merged)", true
-	case git.StatusNewDirty:
-		return "Uncommitted changes will be LOST (new branch)", true
-	case git.StatusMissing:
-		return "Worktree directory is missing — will clean up git references", false
-	default:
-		return "", false
-	}
-}
-
-// deleteHasRemote returns true if the worktree status implies a remote branch exists.
-func deleteHasRemote(status git.WTStatus) bool {
-	switch status {
-	case git.StatusNew, git.StatusNewDirty, git.StatusNoRemote:
-		return false
-	default:
-		return true
-	}
-}
+// Delete-risk rules live in git (shared with the CLI's delete guards).
+var (
+	deleteWarning   = git.DeleteRisk
+	deleteHasRemote = git.HasRemoteBranch
+)
 
 func (m Model) renderDeleteConfirmDialog() string {
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ui.ColorRed).Background(ui.ColorBlack)
@@ -2813,68 +2765,15 @@ func paintBlack(content string, width, height int) string {
 
 // Commands
 
-// basisResolver creates a BasisBranchResolver over a snapshot of the per-repo
-// config, taken on the caller's (Update) thread. Command goroutines must never
-// read cfg.Local directly: settings can write that map while an operation
-// runs, and concurrent map access panics. Call this (and pkgResolver /
-// workspaceOpts) when constructing a command, not inside its goroutine.
-func basisResolver(cfg *config.Config) git.BasisBranchResolver {
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.BasisBranch
-	}
-	return func(repoName string) string {
-		if b, ok := snap[strings.ToUpper(repoName)]; ok && b != "" {
-			return b
-		}
-		return "main"
-	}
-}
-
-// hiddenResolver snapshots which repos are hidden (see basisResolver) —
-// all-repo operations must leave hidden repos untouched, network included.
-func hiddenResolver(cfg *config.Config) git.SkipResolver {
-	snap := make(map[string]bool, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.Hidden
-	}
-	return func(repoName string) bool {
-		return snap[strings.ToUpper(repoName)]
-	}
-}
-
-// pkgResolver snapshots the per-repo package-manager config (see
-// basisResolver). "auto" resolves per repo via lockfile/corepack detection
-// — inside the returned closure, so goroutines detect against the repo's
-// files without touching live config.
-func pkgResolver(cfg *config.Config) func(string) string {
-	def := cfg.Global.PackageManager
-	workDir := cfg.WorkDir
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.PackageManager
-	}
-	return func(repoName string) string {
-		pm, ok := snap[strings.ToUpper(repoName)]
-		if !ok || pm == "" {
-			pm = def
-		}
-		if pm == "auto" {
-			return tools.DetectPM(filepath.Join(workDir, repoName))
-		}
-		return pm
-	}
-}
-
-// resolvePM resolves a repo's package manager to a concrete tool on the
-// Update thread (rebase, rename, modal display) — never returns "auto".
-func resolvePMWith(cfg *config.Config, repoName string) string {
-	pm := cfg.GetRepoPackageManager(repoName)
-	if pm == "auto" {
-		return tools.DetectPM(filepath.Join(cfg.WorkDir, repoName))
-	}
-	return pm
-}
+// Shared resolvers live in internal/core (also used by the CLI).
+var (
+	basisResolver  = core.BasisResolver
+	hiddenResolver = core.HiddenResolver
+	pkgResolver    = core.PkgResolver
+	resolvePMWith  = core.ResolvePM
+	setupResolver  = core.SetupResolver
+	workspaceOpts  = core.WorkspaceOpts
+)
 
 func (m *Model) resolvePM(repoName string) string {
 	return resolvePMWith(&m.config, repoName)
@@ -2889,14 +2788,17 @@ func checkMigrationCmd(cfg *config.Config) tea.Cmd {
 
 func doMigrationCmd(cfg *config.Config) tea.Cmd {
 	return func() tea.Msg {
-		count := git.MigrateDirectoryStructure(cfg.WorkDir)
-		// Also repair workspace file contents that may have been left stale
-		count += git.RepairWorkspaceContents(cfg.WorkDir)
+		// Group renames (+ tmux sessions), worktree migrations, workspace repairs
+		count := core.MigrateLayout(cfg.WorkDir)
 		return MigrationDoneMsg{Count: count}
 	}
 }
 
 func loadReposCmd(cfg *config.Config) tea.Cmd {
+	// Pick up per-repo settings another lts process saved (e.g. a CLI
+	// LTS_ROOT), on the Update thread before the snapshot below
+	cfg.ReloadLocal()
+	core.ApplyLTSRoots(cfg)
 	workDir := cfg.WorkDir
 	resolve := basisResolver(cfg)
 	ghEnabled := cfg.Global.GithubIntegration
@@ -2927,8 +2829,14 @@ func (m *Model) headerGhUser() string {
 }
 
 // anyBusy reports whether any operation is running.
-func (m *Model) anyBusy() bool {
+// ownBusy: this TUI has an operation running (drives the loader and
+// status clearing; external locks only gate conflicting actions).
+func (m *Model) ownBusy() bool {
 	return len(m.busy) > 0
+}
+
+func (m *Model) anyBusy() bool {
+	return len(m.busy) > 0 || len(m.extBusy) > 0
 }
 
 // applyHiddenRepos annotates repos marked hidden in local config, dropping
@@ -3039,6 +2947,9 @@ func (m *Model) repoBusy(repo git.Repo) bool {
 		if _, ok := m.busy[n]; ok {
 			return true
 		}
+		if _, ok := m.extBusy[n]; ok {
+			return true
+		}
 	}
 	return false
 }
@@ -3047,7 +2958,148 @@ func (m *Model) repoBusy(repo git.Repo) bool {
 func (m *Model) clearBusy(names ...string) {
 	for _, n := range names {
 		delete(m.busy, n)
+		if h, ok := m.heldLocks[n]; ok {
+			h.Release()
+			delete(m.heldLocks, n)
+		}
 	}
+}
+
+// lockOrRefuse takes the cross-process locks for an operation BEFORE it
+// starts. If another lts process (an agent's CLI run, another TUI) holds
+// any of them, nothing is acquired, the status line names the holder, and
+// the caller must not start the operation — so the TUI and the CLI can
+// never mutate the same repo at once.
+func (m *Model) lockOrRefuse(label string, names ...string) bool {
+	if m.config.WorkDir == "" {
+		return true
+	}
+	if _, err := os.Stat(m.config.WorkDir); err != nil {
+		return true // no workspace on disk → nothing another process could touch
+	}
+	var need []string
+	for _, n := range names {
+		if _, held := m.heldLocks[n]; !held {
+			need = append(need, n)
+		}
+	}
+	if len(need) == 0 {
+		return true
+	}
+	h, err := lock.TryAcquire(m.config.WorkDir, need, "lts TUI: "+label)
+	if err != nil {
+		var be *lock.BusyError
+		if errors.As(err, &be) {
+			m.statusMsg = be.Error() + " — try again when it finishes"
+			m.extBusy[be.Repo] = be.Owner
+		} else {
+			m.statusMsg = "Could not lock " + strings.Join(need, ", ") + ": " + err.Error()
+		}
+		m.recomputeLayout()
+		return false
+	}
+	for _, n := range need {
+		m.heldLocks[n] = h // one Held for the set; Release is idempotent
+	}
+	return true
+}
+
+// autoRefreshCheck paces the AUTO_REFRESH due-check.
+const autoRefreshCheck = time.Minute
+
+func autoRefreshTickCmd() tea.Cmd {
+	return tea.Tick(autoRefreshCheck, func(time.Time) tea.Msg { return AutoRefreshTickMsg{} })
+}
+
+// autoRefreshDue lists repos whose last refresh is older than the
+// AUTO_REFRESH interval (hidden and busy repos excluded).
+func (m *Model) autoRefreshDue(now time.Time) []git.Repo {
+	interval := ageDuration(m.config.Global.AutoRefresh)
+	if interval <= 0 {
+		return nil
+	}
+	var due []git.Repo
+	for _, r := range m.repos {
+		if r.IsMonorepo || r.Hidden || r.Path == "" || m.config.IsRepoHidden(r.Name) || m.repoBusy(r) {
+			continue
+		}
+		if now.Sub(time.Unix(m.config.GetRepoLastRefresh(r.Name), 0)) >= interval {
+			due = append(due, r)
+		}
+	}
+	return due
+}
+
+// autoRefresh starts a background refresh (fetch + fast-forward the basis
+// branch) of every due repo it can lock; repos busy elsewhere wait for the
+// next check. It never interrupts the user: the status line only reports
+// the result.
+func (m Model) autoRefresh() (tea.Model, tea.Cmd) {
+	due := m.autoRefreshDue(time.Now())
+	if len(due) == 0 || m.initialLoad {
+		return m, autoRefreshTickCmd()
+	}
+	saved := m.statusMsg
+	var repos []git.Repo
+	var lockNames []string
+	for _, r := range due {
+		if m.lockOrRefuse("Auto-refreshing "+r.Name+"...", r.Name) {
+			repos = append(repos, r)
+			lockNames = append(lockNames, r.Name)
+		}
+	}
+	m.statusMsg = saved // a busy repo is simply retried next check
+	if len(repos) == 0 {
+		return m, autoRefreshTickCmd()
+	}
+	logFn, startCmd := m.beginOp("Auto-refreshing "+strings.Join(lockNames, ", ")+"...", lockNames...)
+	m.statusMsg = saved
+	basis := basisResolver(&m.config)
+	return m, tea.Batch(startCmd, func() tea.Msg {
+		var ok, failed []string
+		for _, r := range repos {
+			if err := git.RefreshRepo(r.Path, basis(r.Name), logFn); err != nil {
+				failed = append(failed, r.Name)
+			} else {
+				ok = append(ok, r.Name)
+			}
+		}
+		return AutoRefreshDoneMsg{Refreshed: ok, Failed: failed, Locked: lockNames}
+	})
+}
+
+// lockPollInterval paces the external-lock poll (see extBusy).
+const lockPollInterval = 2 * time.Second
+
+func lockPollTickCmd() tea.Cmd {
+	return tea.Tick(lockPollInterval, func(time.Time) tea.Msg { return LockPollMsg{} })
+}
+
+// pollExternalLocks refreshes extBusy; reports whether it changed.
+func (m *Model) pollExternalLocks() bool {
+	next := make(map[string]string)
+	for _, r := range m.repos {
+		if r.IsMonorepo {
+			continue
+		}
+		if _, mine := m.heldLocks[r.Name]; mine {
+			continue
+		}
+		if locked, owner := lock.Holder(m.config.WorkDir, r.Name); locked {
+			if owner == "" {
+				owner = "another lts process"
+			}
+			next[r.Name] = owner
+		}
+	}
+	changed := len(next) != len(m.extBusy)
+	for k, v := range next {
+		if m.extBusy[k] != v {
+			changed = true
+		}
+	}
+	m.extBusy = next
+	return changed
 }
 
 // allRepoNames returns every real repo name — the lock set for operations
@@ -3065,7 +3117,7 @@ func (m *Model) allRepoNames() []string {
 // busyCardNames returns the display names of cards with a running operation
 // (a monorepo card is busy when any constituent is).
 func (m *Model) busyCardNames() map[string]bool {
-	if len(m.busy) == 0 {
+	if len(m.busy) == 0 && len(m.extBusy) == 0 {
 		return nil
 	}
 	out := make(map[string]bool)
@@ -3093,11 +3145,25 @@ func listenForLogs(ch <-chan LogEntryMsg) tea.Cmd {
 // returns the log function (writing to the shared, persistent log channel)
 // plus the spinner command when this is the first running operation.
 // Callers gate on repoBusy/anyBusy before calling — locks must be disjoint.
-func (m *Model) beginOp(statusMsg string, lock ...string) (git.LogFunc, tea.Cmd) {
-	for _, n := range lock {
+func (m *Model) beginOp(statusMsg string, lockNames ...string) (git.LogFunc, tea.Cmd) {
+	var contended []string
+	for _, n := range lockNames {
 		m.busy[n] = statusMsg
+		if _, held := m.heldLocks[n]; held || m.config.WorkDir == "" {
+			continue
+		}
+		// Every entry point calls lockOrRefuse first, so the locks are
+		// normally held already; this is a fallback for direct callers.
+		if h, err := lock.TryAcquire(m.config.WorkDir, []string{n}, "lts TUI: "+statusMsg); err == nil {
+			m.heldLocks[n] = h
+		} else {
+			contended = append(contended, n)
+		}
 	}
 	m.statusMsg = statusMsg
+	if len(contended) > 0 {
+		m.statusMsg += " (warning: " + strings.Join(contended, ", ") + " is also in use by another lts process)"
+	}
 	ch := m.logChan
 	logFn := func(ctx, msg string, isError bool) {
 		ch <- LogEntryMsg{Context: ctx, Message: msg, IsError: isError}
@@ -3133,6 +3199,23 @@ func rebaseCmd(logFn git.LogFunc, wtPath, mainBranch, pkgManager, branch string,
 	}
 }
 
+// monoRebaseCmd rebases every member of a mono group (git.RebaseMonoGroup).
+func monoRebaseCmd(logFn git.LogFunc, branchSubdir, branch string, cfg *config.Config, locked []string) tea.Cmd {
+	basis := basisResolver(cfg)
+	pkg := pkgResolver(cfg)
+	return func() tea.Msg {
+		results, err := git.RebaseMonoGroup(branchSubdir, branch, basis, pkg, logFn)
+		if err == nil {
+			var parts []string
+			for _, r := range results {
+				parts = append(parts, r.Repo+" "+strings.ReplaceAll(r.Result, "_", " "))
+			}
+			logFn(branch, "Rebased group: "+strings.Join(parts, ", "), false)
+		}
+		return RebaseDoneMsg{Branch: branch, Locked: locked, Err: err}
+	}
+}
+
 func deleteCmd(logFn git.LogFunc, repoPath, wtPath, branch string, deleteLocal, deleteRemote bool, locked []string) tea.Cmd {
 	return func() tea.Msg {
 		err := git.DeleteWorktree(repoPath, wtPath, branch, deleteLocal, deleteRemote, logFn)
@@ -3150,31 +3233,6 @@ func deleteMonorepoCmd(logFn git.LogFunc, scriptDir, branchSubdir, branch string
 			opener.KillSession(branchSubdir) // best-effort tmux cleanup
 		}
 		return DeleteDoneMsg{Branch: branch, Locked: locked, Err: err}
-	}
-}
-
-// workspaceOpts assembles the create-time options from config, snapshotting
-// everything on the caller's (Update) thread — see basisResolver.
-// setupResolver snapshots per-repo setup scripts (see basisResolver).
-func setupResolver(cfg *config.Config) func(string) string {
-	snap := make(map[string]string, len(cfg.Local))
-	for key, rc := range cfg.Local {
-		snap[key] = rc.SetupScript
-	}
-	return func(repoName string) string {
-		return snap[strings.ToUpper(repoName)]
-	}
-}
-
-func workspaceOpts(cfg *config.Config) git.WorkspaceOptions {
-	return git.WorkspaceOptions{
-		PkgManager:   pkgResolver(cfg),
-		SetupScript:  setupResolver(cfg),
-		AICliCommand: cfg.Global.AICliCommand,
-		IDECommand:   cfg.Global.IDECommand,
-		OpenEnvInIDE: cfg.Global.OpenEnvInIDE,
-		CopyEnv:      cfg.Global.CopyEnvFiles,
-		CopyMCP:      cfg.Global.CopyMCPJson,
 	}
 }
 

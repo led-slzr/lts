@@ -2,53 +2,92 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 )
 
 // GetWorktreeStatus replicates the get_worktree_status() logic from lts.sh.
 func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
-	porcelain, err := RunGit(wtPath, "status", "--porcelain")
+	st, txt, _ := GetWorktreeDetail(wtPath, basisBranch)
+	return st, txt
+}
+
+// GetWorktreeDetail is GetWorktreeStatus plus the raw sync numbers, from a
+// single `git status --porcelain=v2 --branch` (the expensive call).
+func GetWorktreeDetail(wtPath, basisBranch string) (WTStatus, string, SyncInfo) {
+	var si SyncInfo
+	st, txt := worktreeStatus(wtPath, basisBranch, &si)
+	return st, txt, si
+}
+
+func worktreeStatus(wtPath, basisBranch string, si *SyncInfo) (WTStatus, string) {
+	porcelain, err := RunGit(wtPath, "status", "--porcelain=v2", "--branch")
 	if err != nil {
-		return StatusMissing, "missing"
+		// Only a directory that is really gone is "missing" (safe to prune)
+		if _, serr := os.Stat(wtPath); os.IsNotExist(serr) {
+			return StatusMissing, "missing"
+		}
+		return StatusUnknown, "unreadable by git"
 	}
 
-	// Check uncommitted changes
-	var localStatus string
-	var changedCount int
-	porcelain = strings.TrimSpace(porcelain)
-	if porcelain != "" {
-		changedCount = len(strings.Split(porcelain, "\n"))
-		localStatus = fmt.Sprintf("%d changed", changedCount)
-	}
-
-	// Check ahead/behind
-	currentBranch, _ := RunGit(wtPath, "branch", "--show-current")
-
-	var syncStatus string
-	var ahead, behind int
-
-	// Try upstream first, then origin/<branch>
-	hasUpstream := false
-	if _, err := RunGit(wtPath, "rev-parse", "--verify", "@{upstream}"); err == nil {
-		hasUpstream = true
-	}
-
-	var remoteRef string
-	if hasUpstream {
-		remoteRef = "@{upstream}"
-	} else if currentBranch != "" {
-		if _, err := RunGit(wtPath, "rev-parse", "--verify", "origin/"+currentBranch); err == nil {
-			remoteRef = "origin/" + currentBranch
+	// One pass over the v2 output: branch headers + one line per change
+	var currentBranch, upstream string
+	abKnown := false
+	var ahead, behind, changedCount int
+	for _, line := range strings.Split(porcelain, "\n") {
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "# branch.head "):
+			if h := strings.TrimPrefix(line, "# branch.head "); h != "(detached)" {
+				currentBranch = h
+			}
+		case strings.HasPrefix(line, "# branch.upstream "):
+			upstream = strings.TrimPrefix(line, "# branch.upstream ")
+		case strings.HasPrefix(line, "# branch.ab "):
+			if _, err := fmt.Sscanf(strings.TrimPrefix(line, "# branch.ab "), "+%d -%d", &ahead, &behind); err == nil {
+				abKnown = true
+			}
+		case strings.HasPrefix(line, "#"):
+		default:
+			changedCount++
 		}
 	}
+	var localStatus string
+	if changedCount > 0 {
+		localStatus = fmt.Sprintf("%d changed", changedCount)
+	}
+	si.Branch, si.ChangedFiles = currentBranch, changedCount
 
-	if remoteRef != "" {
+	// Detached HEAD: no branch to sync or merge. What matters is whether
+	// HEAD's commits are reachable from any branch; if not, deleting the
+	// worktree orphans them.
+	if currentBranch == "" {
+		if refs, _ := RunGit(wtPath, "for-each-ref", "--contains", "HEAD", "--count=1", "refs/heads", "refs/remotes"); strings.TrimSpace(refs) == "" {
+			return StatusUnknown, "detached HEAD with commits on no branch"
+		}
+		if localStatus != "" {
+			return StatusChanged, localStatus + " | detached"
+		}
+		return StatusClean, "detached"
+	}
+
+	var syncStatus string
+
+	// Upstream first (ahead/behind straight from status), then origin/<branch>
+	var remoteRef string
+	if upstream != "" && abKnown {
+		remoteRef = upstream
+	} else if refExists(wtPath, "refs/remotes/origin/"+currentBranch) {
+		remoteRef = "origin/" + currentBranch
 		aheadStr, _ := RunGit(wtPath, "rev-list", "--count", remoteRef+"..HEAD")
 		behindStr, _ := RunGit(wtPath, "rev-list", "--count", "HEAD.."+remoteRef)
 		ahead, _ = strconv.Atoi(aheadStr)
 		behind, _ = strconv.Atoi(behindStr)
+	}
 
+	if remoteRef != "" {
+		si.Upstream, si.Ahead, si.Behind = remoteRef, ahead, behind
 		if ahead > 0 && behind > 0 {
 			syncStatus = "diverged"
 		} else if ahead > 0 {
@@ -72,7 +111,7 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 		candidates = append(candidates, "master")
 	}
 	for _, c := range candidates {
-		if _, err := RunGit(wtPath, "show-ref", "--verify", "--quiet", "refs/heads/"+c); err == nil {
+		if refExists(wtPath, "refs/heads/"+c) {
 			mainBranch = c
 			break
 		}
@@ -103,6 +142,14 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 			}
 			if unmergedCount == 0 {
 				isMerged = true
+			}
+		}
+		// Merged locally isn't enough: commits that exist only on the
+		// branch's remote (pushed by someone else, not pulled) are work a
+		// cleanup with --remote would destroy.
+		if isMerged && remoteRef != "" && behind > 0 {
+			if n, _ := strconv.Atoi(strings.TrimSpace(mustGit(wtPath, "rev-list", "--count", remoteRef, "^HEAD", "^"+mainBranch))); n > 0 {
+				isMerged = false
 			}
 		}
 	}
@@ -140,4 +187,179 @@ func GetWorktreeStatus(wtPath, basisBranch string) (WTStatus, string) {
 	}
 
 	return StatusClean, syncStatus
+}
+
+// DeleteRisk describes what deleting a worktree in this status would lose.
+// dangerous = true means the deletion destroys work that exists nowhere
+// else, so callers must demand an explicit, typed / forced confirmation.
+func DeleteRisk(status WTStatus) (warning string, dangerous bool) {
+	switch status {
+	case StatusChanged:
+		return "Uncommitted changes will be LOST", true
+	case StatusDiverged:
+		return "CRITICAL: Unpushed commits will be permanently lost", true
+	case StatusToPush:
+		return "Unpushed commits will be LOST", true
+	case StatusNoRemote:
+		return "Branch was never pushed — ALL work will be LOST", true
+	case StatusMergedDirty:
+		return "Uncommitted changes will be LOST (branch is merged)", true
+	case StatusNewDirty:
+		return "Uncommitted changes will be LOST (new branch)", true
+	case StatusMissing:
+		return "Worktree directory is missing — will clean up git references", false
+	case StatusUnknown:
+		return "Git can't read this worktree, so its contents can't be checked — everything in the folder will be LOST", true
+	default:
+		return "", false
+	}
+}
+
+// HasRemoteBranch reports whether a worktree status implies its branch
+// exists on the remote (so deleting / renaming the remote is meaningful).
+func HasRemoteBranch(status WTStatus) bool {
+	switch status {
+	case StatusNew, StatusNewDirty, StatusNoRemote:
+		return false
+	default:
+		return true
+	}
+}
+
+// Slug returns the stable machine name of a status (CLI JSON output).
+func (s WTStatus) Slug() string {
+	switch s {
+	case StatusClean:
+		return "clean"
+	case StatusChanged:
+		return "changed"
+	case StatusMergedCleanable:
+		return "merged_cleanable"
+	case StatusDiverged:
+		return "diverged"
+	case StatusToPush:
+		return "to_push"
+	case StatusToPull:
+		return "to_pull"
+	case StatusNew:
+		return "new"
+	case StatusNoRemote:
+		return "no_remote"
+	case StatusMissing:
+		return "missing"
+	case StatusMergedDirty:
+		return "merged_dirty"
+	case StatusNewDirty:
+		return "new_dirty"
+	case StatusUnknown:
+		return "unknown"
+	}
+	return "unknown"
+}
+
+// SyncInfo is the raw sync state of a worktree checkout.
+type SyncInfo struct {
+	Branch       string `json:"branch"`
+	ChangedFiles int    `json:"changed_files"`
+	Upstream     string `json:"upstream,omitempty"` // "" = no remote branch
+	Ahead        int    `json:"ahead"`
+	Behind       int    `json:"behind"`
+}
+
+// GetSyncInfo reports changed-file count and ahead/behind against the
+// upstream (or origin/<branch>), mirroring GetWorktreeStatus's rules.
+func GetSyncInfo(wtPath string) SyncInfo {
+	var si SyncInfo
+	if out, err := RunGit(wtPath, "status", "--porcelain"); err == nil {
+		if out = strings.TrimSpace(out); out != "" {
+			si.ChangedFiles = len(strings.Split(out, "\n"))
+		}
+	}
+	si.Branch, _ = RunGit(wtPath, "branch", "--show-current")
+	if up, err := RunGit(wtPath, "rev-parse", "--abbrev-ref", "@{upstream}"); err == nil && up != "" {
+		si.Upstream = up
+	} else if si.Branch != "" {
+		if _, err := RunGit(wtPath, "rev-parse", "--verify", "origin/"+si.Branch); err == nil {
+			si.Upstream = "origin/" + si.Branch
+		}
+	}
+	if si.Upstream != "" {
+		a, _ := RunGit(wtPath, "rev-list", "--count", si.Upstream+"..HEAD")
+		b, _ := RunGit(wtPath, "rev-list", "--count", "HEAD.."+si.Upstream)
+		si.Ahead, _ = strconv.Atoi(a)
+		si.Behind, _ = strconv.Atoi(b)
+	}
+	return si
+}
+
+// StatusSeverity orders statuses by how much unrecoverable work they hold.
+func StatusSeverity(s WTStatus) int {
+	switch s {
+	case StatusMergedCleanable, StatusClean:
+		return 0
+	case StatusNew, StatusToPull, StatusMissing:
+		return 1
+	case StatusMergedDirty, StatusNewDirty, StatusChanged:
+		return 3
+	case StatusToPush, StatusNoRemote:
+		return 4
+	case StatusDiverged:
+		return 5
+	case StatusUnknown:
+		return 6
+	}
+	return 2
+}
+
+// AggregateStatus combines member statuses of a mono group: merged ·
+// cleanable only when every member is; otherwise the most severe member
+// (so one member with unpushed work protects the whole group).
+func AggregateStatus(statuses []WTStatus, texts []string) (WTStatus, string) {
+	if len(statuses) == 0 {
+		return StatusMissing, "missing"
+	}
+	allCleanable := true
+	worst, worstText := -1, ""
+	var worstSt WTStatus
+	for i, st := range statuses {
+		if st != StatusMergedCleanable {
+			allCleanable = false
+		}
+		sev := StatusSeverity(st)
+		if st == StatusMergedCleanable {
+			sev = -1 // never the representative unless all members are
+		}
+		if sev > worst {
+			worst, worstSt = sev, st
+			if i < len(texts) {
+				worstText = texts[i]
+			}
+		}
+	}
+	if allCleanable {
+		return StatusMergedCleanable, "merged · cleanable"
+	}
+	return worstSt, worstText
+}
+
+func mustGit(dir string, args ...string) string {
+	out, _ := RunGit(dir, args...)
+	return out
+}
+
+// RemoteOnlyCommits counts commits on origin/<branch> that are neither in
+// localRef nor in the repo's main branch — work that exists only on the
+// remote. Deleting or replacing origin/<branch> would destroy it. Returns
+// 0 when the remote branch doesn't exist.
+func RemoteOnlyCommits(repoPath, branch, localRef string) int {
+	remote := "refs/remotes/origin/" + branch
+	if _, err := RunGit(repoPath, "show-ref", "--verify", "--quiet", remote); err != nil {
+		return 0
+	}
+	args := []string{"rev-list", "--count", remote, "^" + localRef}
+	if main := detectMainBranch(repoPath, "main"); main != "" {
+		args = append(args, "^"+main)
+	}
+	n, _ := strconv.Atoi(strings.TrimSpace(mustGit(repoPath, args...)))
+	return n
 }

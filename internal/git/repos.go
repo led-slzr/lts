@@ -22,6 +22,10 @@ const (
 	StatusMissing
 	StatusMergedDirty
 	StatusNewDirty
+	// StatusUnknown: the directory exists but git can't read it (broken
+	// worktree admin dir, git missing, safe.directory...). Its contents
+	// can't be verified, so it must never be treated as safe to delete.
+	StatusUnknown
 )
 
 type Worktree struct {
@@ -41,10 +45,14 @@ type Repo struct {
 	Path       string // empty for monorepo cards
 	MainBranch string
 	LTSDir     string   // e.g. "repo-lts" or "core-erp-ui-lts"
+	LTSPath    string   // absolute path of LTSDir ("" when it doesn't exist)
 	LTSType    string   // "single", "erp", "monorepo"
 	IsMonorepo bool     // true for multi-repo LTS cards
 	RepoNames  []string // for monorepo: the constituent repo names
 	Worktrees  []Worktree
+
+	// Stale: registered worktrees whose folder is gone (see StaleWorktrees)
+	Stale []StaleWorktree
 
 	// Hidden: marked in local config (grayed out when Show Hidden Repos is on)
 	Hidden bool
@@ -62,6 +70,21 @@ type Repo struct {
 type BasisBranchResolver func(repoName string) string
 
 func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo {
+	return DiscoverReposWith(scriptDir, getBasisBranch, DiscoverOptions{})
+}
+
+// DiscoverOptions tunes discovery cost.
+type DiscoverOptions struct {
+	// SkipStatus leaves Worktree.Status/StatusText unset (StatusText "")
+	// — a fast inventory with no per-worktree status git calls.
+	SkipStatus bool
+	// SkipMigrationCheck skips the per-repo main-checkout scan (a git
+	// status on every main checkout) — Repo.NeedsMigration stays false.
+	SkipMigrationCheck bool
+}
+
+// DiscoverReposWith is DiscoverRepos with options.
+func DiscoverReposWith(scriptDir string, getBasisBranch BasisBranchResolver, opts DiscoverOptions) []Repo {
 	entries, err := os.ReadDir(scriptDir)
 	if err != nil {
 		return nil
@@ -93,12 +116,14 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		mainBranch := detectMainBranch(dirPath, repoBasis)
 		ltsDir := name + "-lts"
 		ltsType := "single"
-		ltsPath := filepath.Join(scriptDir, ltsDir)
+		ltsPath := SingleLTSPath(scriptDir, name)
+		ltsRoot := filepath.Dir(ltsPath)
 
 		if _, err := os.Stat(ltsPath); os.IsNotExist(err) {
 			ltsDir = ""
+			ltsPath = ""
 		} else {
-			ltsType = getLTSType(scriptDir, ltsDir)
+			ltsType = getLTSType(ltsRoot, ltsDir)
 		}
 
 		repo := Repo{
@@ -106,22 +131,30 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 			Path:       dirPath,
 			MainBranch: mainBranch,
 			LTSDir:     ltsDir,
+			LTSPath:    ltsPath,
 			LTSType:    ltsType,
 		}
 
 		// Only collect worktrees from the repo's own single-repo LTS dir
 		if ltsDir != "" && ltsType == "single" {
-			wts := listWorktrees(scriptDir, ltsDir, name, repoBasis)
+			wts := listWorktrees(ltsRoot, ltsDir, name, repoBasis, opts)
 			repo.Worktrees = append(repo.Worktrees, wts...)
 		}
 
-		// Check if main repo needs migration to LTS worktree
-		needsMigration, migBranch, migReason := checkMigrationNeeded(dirPath, mainBranch)
-		repo.NeedsMigration = needsMigration
-		repo.MigrationBranch = migBranch
-		repo.MigrationReason = migReason
-
 		repos = append(repos, repo)
+	}
+
+	for i := range repos {
+		repos[i].Stale = StaleWorktrees(scriptDir, repos[i].Path)
+	}
+
+	// Main-checkout scans (a git status per repo) are independent — run
+	// them in parallel
+	if !opts.SkipMigrationCheck {
+		parallelEach(len(repos), func(i int) {
+			r := &repos[i]
+			r.NeedsMigration, r.MigrationBranch, r.MigrationReason = checkMigrationNeeded(r.Path, r.MainBranch)
+		})
 	}
 
 	// Phase 2: Discover multi-repo LTS directories and create monorepo cards
@@ -144,11 +177,12 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		sorted := make([]string, len(repoNames))
 		copy(sorted, repoNames)
 		sort.Strings(sorted)
-		cardName := strings.Join(sorted, "-")
+		cardName := MonoGroupName(sorted)
 
 		monoRepo := Repo{
 			Name:       cardName,
 			LTSDir:     ltsDir,
+			LTSPath:    filepath.Join(scriptDir, ltsDir),
 			LTSType:    ltsType,
 			IsMonorepo: true,
 			RepoNames:  sorted,
@@ -157,7 +191,7 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 		// Collect all worktrees from this LTS dir, grouped by branch
 		// Use first repo's basis branch for status checking
 		monoBasis := getBasisBranch(sorted[0])
-		allWTs := listAllMonorepoWorktrees(scriptDir, ltsDir, sorted, monoBasis)
+		allWTs := listAllMonorepoWorktrees(scriptDir, ltsDir, sorted, monoBasis, opts)
 		monoRepo.Worktrees = allWTs
 
 		repos = append(repos, monoRepo)
@@ -169,76 +203,123 @@ func DiscoverRepos(scriptDir string, getBasisBranch BasisBranchResolver) []Repo 
 // listAllMonorepoWorktrees collects worktrees from a monorepo LTS dir.
 // For display, we show branch names (not per-repo worktree names).
 // A branch like feat/login that exists across core and erp-ui shows as one entry.
-func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basisBranch string) []Worktree {
+func listAllMonorepoWorktrees(scriptDir, ltsDir string, repoNames []string, basisBranch string, opts DiscoverOptions) []Worktree {
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 	entries, err := os.ReadDir(ltsPath)
 	if err != nil {
 		return nil
 	}
 
-	var wts []Worktree
-	seen := make(map[string]bool)
-
+	var subdirs []os.DirEntry
 	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		// Each subdirectory is a branch group (e.g. core-erp-ui-login)
-		branchSubdir := filepath.Join(ltsPath, e.Name())
-		subEntries, err := os.ReadDir(branchSubdir)
-		if err != nil {
-			continue
-		}
-
-		// Find worktrees inside the branch subdir
-		for _, se := range subEntries {
-			if !se.IsDir() {
-				continue
-			}
-			wtPath := filepath.Join(branchSubdir, se.Name())
-			if !isWorktreeDir(wtPath) {
-				continue
-			}
-
-			// Get the branch name from git
-			branch, _ := RunGit(wtPath, "branch", "--show-current")
-			if branch == "" {
-				continue
-			}
-
-			// Deduplicate: show each branch once (not once per repo)
-			if seen[branch] {
-				continue
-			}
-			seen[branch] = true
-
-			status, statusText := GetWorktreeStatus(wtPath, basisBranch)
-
-			// Last activity: newest across the branch's per-repo worktrees
-			var activity int64
-			for _, se2 := range subEntries {
-				p := filepath.Join(branchSubdir, se2.Name())
-				if se2.IsDir() && isWorktreeDir(p) {
-					if a := worktreeLastActivity(p); a > activity {
-						activity = a
-					}
-				}
-			}
-
-			wts = append(wts, Worktree{
-				Name:         branch,
-				Branch:       branch,
-				Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
-				Status:       status,
-				StatusText:   statusText,
-				LTSDir:       ltsDir,
-				LastActivity: activity,
-				CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
-			})
+		if e.IsDir() {
+			subdirs = append(subdirs, e)
 		}
 	}
-
+	// One entry per branch subdir, built in parallel. The group's branch
+	// is the one most members are on; a member on another branch (or
+	// detached) makes the whole group "unknown" — deleting the group
+	// force-deletes the group branch in every repo, so it must never look
+	// safe.
+	built := make([]*Worktree, len(subdirs))
+	parallelEach(len(subdirs), func(i int) {
+		e := subdirs[i]
+		branchSubdir := filepath.Join(ltsPath, e.Name())
+		members := MonoMembers(branchSubdir)
+		if len(members) == 0 {
+			return
+		}
+		branch := monoGroupBranch(members)
+		if branch == "" {
+			return
+		}
+		var status WTStatus
+		var statusText string
+		if !opts.SkipStatus {
+			status, statusText, _ = MonoGroupStatus(members, branch, func(string) string { return basisBranch })
+		}
+		// Last activity: newest across the branch's per-repo worktrees
+		var activity int64
+		for _, m := range members {
+			if a := worktreeLastActivity(m.Path); a > activity {
+				activity = a
+			}
+		}
+		built[i] = &Worktree{
+			Name:         branch,
+			Branch:       branch,
+			Path:         branchSubdir, // point to the branch subdir (contains all repo worktrees)
+			Status:       status,
+			StatusText:   statusText,
+			LTSDir:       ltsDir,
+			LastActivity: activity,
+			CreatedAt:    worktreeCreatedAt(ltsPath, e.Name()),
+		}
+	})
+	var wts []Worktree
+	seen := make(map[string]bool)
+	for _, w := range built {
+		if w == nil || seen[w.Branch] {
+			continue
+		}
+		seen[w.Branch] = true
+		wts = append(wts, *w)
+	}
 	return wts
+}
+
+// MemberStatus is one mono-group member's status.
+type MemberStatus struct {
+	Repo   string
+	Path   string
+	Branch string
+	Status WTStatus
+	Text   string
+	Sync   SyncInfo // zero for a member off the group branch
+}
+
+// monoGroupBranch picks the branch most members have checked out.
+func monoGroupBranch(members []MonoMember) string {
+	counts := map[string]int{}
+	best, bestN := "", 0
+	for _, m := range members {
+		b := currentBranch(m.Path)
+		if b == "" {
+			continue
+		}
+		counts[b]++
+		if counts[b] > bestN {
+			best, bestN = b, counts[b]
+		}
+	}
+	return best
+}
+
+// MonoGroupStatus aggregates member statuses for a group on branch. A
+// member that isn't on branch is StatusUnknown (dangerous).
+func MonoGroupStatus(members []MonoMember, branch string, basisFor func(repo string) string) (WTStatus, string, []MemberStatus) {
+	var sts []WTStatus
+	var txts []string
+	var out []MemberStatus
+	for _, m := range members {
+		cur := currentBranch(m.Path)
+		var st WTStatus
+		var txt string
+		var si SyncInfo
+		if cur != branch {
+			on := cur
+			if on == "" {
+				on = "a detached HEAD"
+			}
+			st, txt = StatusUnknown, m.Repo+" is on "+on+", not "+branch
+		} else {
+			st, txt, si = GetWorktreeDetail(m.Path, basisFor(m.Repo))
+		}
+		sts, txts = append(sts, st), append(txts, txt)
+		out = append(out, MemberStatus{Repo: m.Repo, Path: m.Path, Branch: cur, Status: st, Text: txt, Sync: si})
+	}
+	st, txt := AggregateStatus(sts, txts)
+	return st, txt, out
 }
 
 // checkMigrationNeeded checks if the main repo directory has work on a non-main
@@ -350,7 +431,7 @@ func detectMainBranch(repoPath, basisBranch string) string {
 	}
 
 	for _, c := range candidates {
-		if _, err := RunGit(repoPath, "show-ref", "--verify", "--quiet", "refs/heads/"+c); err == nil {
+		if refExists(repoPath, "refs/heads/"+c) {
 			return c
 		}
 	}
@@ -418,14 +499,15 @@ func getMultiRepoLTSDirs(scriptDir, repoName string) []string {
 	return results
 }
 
-func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
+func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string, opts DiscoverOptions) []Worktree {
 	ltsPath := filepath.Join(scriptDir, ltsDir)
 	entries, err := os.ReadDir(ltsPath)
 	if err != nil {
 		return nil
 	}
 
-	var wts []Worktree
+	type cand struct{ path, name string }
+	var cands []cand
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -433,8 +515,7 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
 		dirPath := filepath.Join(ltsPath, e.Name())
 
 		if isWorktreeDir(dirPath) {
-			wt := buildWorktree(dirPath, e.Name(), repoName, ltsDir, basisBranch)
-			wts = append(wts, wt)
+			cands = append(cands, cand{dirPath, e.Name()})
 			continue
 		}
 
@@ -449,16 +530,21 @@ func listWorktrees(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
 			}
 			subPath := filepath.Join(dirPath, se.Name())
 			if isWorktreeDir(subPath) {
-				wt := buildWorktree(subPath, se.Name(), repoName, ltsDir, basisBranch)
-				wts = append(wts, wt)
+				cands = append(cands, cand{subPath, se.Name()})
 			}
 		}
 	}
+	// Building a worktree (branch, activity, status) is independent per
+	// worktree — do them in parallel, keeping directory order
+	wts := make([]Worktree, len(cands))
+	parallelEach(len(cands), func(i int) {
+		wts[i] = buildWorktree(cands[i].path, cands[i].name, repoName, ltsDir, basisBranch, opts)
+	})
 	return wts
 }
 
 func listWorktreesForRepo(scriptDir, ltsDir, repoName, basisBranch string) []Worktree {
-	all := listWorktrees(scriptDir, ltsDir, repoName, basisBranch)
+	all := listWorktrees(scriptDir, ltsDir, repoName, basisBranch, DiscoverOptions{})
 	var filtered []Worktree
 	for _, wt := range all {
 		baseName := filepath.Base(wt.Path)
@@ -478,17 +564,23 @@ func isWorktreeDir(path string) bool {
 	return !info.IsDir()
 }
 
-func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string) Worktree {
-	branch, _ := RunGit(path, "branch", "--show-current")
-	if branch == "" {
-		branch = dirName
-	}
+func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string, opts DiscoverOptions) Worktree {
+	branch := currentBranch(path)
 
 	// Use actual git branch name for display (not folder name)
-	// This ensures rename is reflected immediately
+	// This ensures rename is reflected immediately. A detached HEAD has no
+	// branch: Branch stays "" (never the folder name — delete would then
+	// run `branch -D <folder>` on an unrelated branch of that name).
 	displayName := branch
+	if branch == "" {
+		displayName = "(detached) " + dirName
+	}
 
-	status, statusText := GetWorktreeStatus(path, basisBranch)
+	var status WTStatus
+	var statusText string
+	if !opts.SkipStatus {
+		status, statusText = GetWorktreeStatus(path, basisBranch)
+	}
 
 	return Worktree{
 		Name:         displayName,
@@ -506,6 +598,11 @@ func buildWorktree(path, dirName, repoName, ltsDir, basisBranch string) Worktree
 // newer of the branch tip's commit time and the worktree's git index mtime
 // (the index changes on add/checkout/etc, so uncommitted activity counts).
 func worktreeLastActivity(wtPath string) int64 {
+	// Fast path: git touches the index/reflog on every commit, checkout,
+	// reset and stage — no process needed
+	if ts, ok := headActivity(wtPath); ok && ts > 0 {
+		return ts
+	}
 	var ts int64
 	if out, err := RunGit(wtPath, "log", "-1", "--format=%ct"); err == nil {
 		var n int64
@@ -539,3 +636,40 @@ func lookupCreatedAt(wtPath string) int64 {
 	parent := filepath.Dir(dir)
 	return worktreeCreatedAt(parent, filepath.Base(dir))
 }
+
+// MainCheckoutMigration reports whether a repo's main checkout holds work
+// on a non-basis branch (the TUI's "Migrate to LTS" card).
+func MainCheckoutMigration(repoPath, mainBranch string) (needs bool, branch, reason string) {
+	return checkMigrationNeeded(repoPath, mainBranch)
+}
+
+// MonoMember is one repo's worktree inside a mono group branch subdir.
+type MonoMember struct {
+	Repo string `json:"repo"`
+	Path string `json:"path"`
+}
+
+// MonoMembers lists the per-repo worktrees inside a mono branch subdir.
+func MonoMembers(branchSubdir string) []MonoMember {
+	entries, err := os.ReadDir(branchSubdir)
+	if err != nil {
+		return nil
+	}
+	var out []MonoMember
+	for _, e := range entries {
+		p := filepath.Join(branchSubdir, e.Name())
+		if !e.IsDir() || !isWorktreeDir(p) {
+			continue
+		}
+		repo := filepath.Base(resolveWorktreeRepo(p))
+		if repo == "." || repo == "/" {
+			repo = ""
+		}
+		out = append(out, MonoMember{Repo: repo, Path: p})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Repo < out[j].Repo })
+	return out
+}
+
+// IsWorktreeDir reports whether path is a linked git worktree checkout.
+func IsWorktreeDir(path string) bool { return isWorktreeDir(path) }

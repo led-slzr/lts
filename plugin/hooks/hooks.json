@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v lts >/dev/null 2>&1 && lts hook session-start || true"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v lts >/dev/null 2>&1 && lts hook subagent-start || true"
+          }
+        ]
+      }
+    ]
+  }
+}

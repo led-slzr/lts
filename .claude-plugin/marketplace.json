@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "lts",
+  "description": "LTS (Led's Tree Script) — git worktree manager. Skills and hooks that teach AI agents to create, sync, ship and clean up worktrees safely.",
+  "owner": {
+    "name": "Led Salazar"
+  },
+  "plugins": [
+    {
+      "name": "lts",
+      "description": "Agent skills (context, start, finish, tidy, sync) and session context hooks for the LTS git worktree CLI. Requires the lts binary (v3.2+) on PATH.",
+      "source": "./plugin",
+      "category": "development"
+    }
+  ]
+}

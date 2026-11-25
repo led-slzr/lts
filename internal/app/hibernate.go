@@ -51,6 +51,10 @@ func envBackupRoot() string {
 // repo's lock for the whole dialog lifetime. Manual mode keeps the same
 // audit and env backup but treats failed checks as advisory.
 func startHibernate(m Model, repo git.Repo, manual bool) (Model, tea.Cmd) {
+	// Lock before opening the dialog; held through audit and hibernate
+	if !m.lockOrRefuse("Auditing "+repo.Name+" for hibernation...", lockSet(repo)...) {
+		return m, clearStatusCmd()
+	}
 	m.hibernateActive = true
 	m.hibernateManual = manual
 	m.hibernateRepo = repo
@@ -162,6 +166,9 @@ func confirmHibernate(m Model) (Model, tea.Cmd) {
 	m.hibernateAudit = nil
 	m.hibernateInput.Blur()
 	lock := lockSet(repo) // already held since the audit — beginOp refreshes the label
+	if !m.lockOrRefuse("Hibernating "+repo.Name+"...", lock...) {
+		return m, clearStatusCmd()
+	}
 	logFn, startCmd := m.beginOp("Hibernating "+repo.Name+"...", lock...)
 	return m, tea.Batch(startCmd, hibernateCmd(logFn, m.config.WorkDir, repo, audit, envBackupRoot(), lock))
 }
@@ -171,6 +178,9 @@ func reauditHibernate(m Model) (Model, tea.Cmd) {
 	m.hibernateAudit = nil
 	m.hibernateAuditPending = true
 	lock := lockSet(repo)
+	if !m.lockOrRefuse("Auditing "+repo.Name+" for hibernation...", lock...) {
+		return m, clearStatusCmd()
+	}
 	logFn, startCmd := m.beginOp("Auditing "+repo.Name+" for hibernation...", lock...)
 	return m, tea.Batch(startCmd, hibernateAuditCmd(logFn, m.config.WorkDir, repo, m.config.GetRepoBasisBranch(repo.Name), lock))
 }

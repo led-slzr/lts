@@ -1,0 +1,12 @@
+{
+  "name": "lts",
+  "version": "3.2.0",
+  "description": "Use LTS — a git worktree manager for multi-repo workspaces — from Claude Code: skills to start, sync, finish and tidy worktrees, plus SessionStart/SubagentStart hooks that tell every session (and subagent) which worktree it is in. Requires the lts CLI v3.2+ on PATH (curl -fsSL https://raw.githubusercontent.com/led-slzr/lts/main/install.sh | bash).",
+  "author": {
+    "name": "Led Salazar"
+  },
+  "homepage": "https://github.com/led-slzr/lts",
+  "repository": "https://github.com/led-slzr/lts",
+  "license": "MIT",
+  "keywords": ["git", "worktree", "monorepo", "multi-repo", "cli"]
+}
